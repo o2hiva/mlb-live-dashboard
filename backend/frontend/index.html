@@ -56,6 +56,7 @@
   .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
   .hits-side-label { font-size: 0.7rem; color: var(--muted); margin-top: 8px; margin-bottom: 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
   .hits-batter { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 2px 0; }
+  .hits-index { color: var(--muted); font-size: 0.7rem; }
   .hits-na { color: var(--muted); font-size: 0.75rem; }
   .hits-loading { font-size: 0.75rem; color: var(--muted); }
   .empty { color: var(--muted); }
@@ -234,20 +235,24 @@
   }
 
   function batterRowHtml(b, h) {
+    const hiStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
     if (b.n_ab == null || b.p == null) {
-      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-na">Not enough data</span></div>`;
+      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span class="hits-na">Not enough data</span></div>`;
     }
     const pct = Math.round(probAtLeastHits(b.n_ab, b.p, h) * 100);
-    return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span>${pct}%</span></div>`;
+    return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span>${pct}%</span></div>`;
   }
 
   function hitsSectionHtml(gamePk, data) {
     const h = hitsThresholdByGame[gamePk] || 1;
+    const awayPitcherHi = data.away_opp_pitcher_hit_index != null ? data.away_opp_pitcher_hit_index.toFixed(2) : "—";
+    const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
+
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Away — vs Opp Pitcher: ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Home — vs Opp Pitcher: ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `

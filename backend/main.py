@@ -202,11 +202,13 @@ def manual_refresh_inning_stats(db: Session = Depends(get_db)):
 def game_hits(game_pk: int, db: Session = Depends(get_db)):
     """
     Confirmed batters (if any) for both sides of a game, each with
-    (n_ab, p) - enough for the frontend to compute "at least H hits"
-    for any H instantly, client-side, without another request per
-    threshold change. A side with no confirmed lineup yet returns an
-    empty list for that side - the frontend shows "Not Confirmed"
-    rather than a batter list in that case.
+    (n_ab, p, hit_index) - enough for the frontend to compute "at least
+    H hits" for any H instantly, client-side, without another request
+    per threshold change. Also includes each side's opposing starting
+    pitcher's own hit index (their hits-allowed rate vs. league
+    average). A side with no confirmed lineup yet returns an empty list
+    for that side - the frontend shows "Not Confirmed" rather than a
+    batter list in that case.
     """
     from models_db import LineupBatter
     import hits_stats_sync
@@ -230,6 +232,7 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
                 "batting_order": r.batting_order,
                 "n_ab": inputs["n_ab"] if inputs else None,
                 "p": inputs["p"] if inputs else None,
+                "hit_index": inputs["hit_index"] if inputs else None,
             })
         return out
 
@@ -237,6 +240,11 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
         "game_pk": game_pk,
         "home_lineup_confirmed": game.home_lineup_confirmed,
         "away_lineup_confirmed": game.away_lineup_confirmed,
+        # Away batters face the HOME team's probable pitcher, and vice versa.
+        "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.home_probable_pitcher_id),
+        "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.away_probable_pitcher_id),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
     }

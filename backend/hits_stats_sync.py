@@ -183,47 +183,72 @@ def check_and_sync_lineups(db, game: Game, boxscore: dict):
             _sync_pitcher_hits_stat(db, opposing_pitcher_id, opposing_pitcher_name or "")
 
 
+def get_pitcher_hit_index(pitcher_id: int | None) -> float | None:
+    """
+    A pitcher's hits-allowed rate relative to league average - e.g. 1.10
+    means this pitcher allows hits 10% more often than a league-average
+    pitcher; 0.90 means 10% less often. Shown regardless of sample size
+    (purely informational), unlike the shrinkage-adjusted probability
+    which requires a minimum real sample before trusting it.
+    """
+    if not pitcher_id:
+        return None
+    db = SessionLocal()
+    try:
+        pitcher = db.get(PitcherHitsStat, pitcher_id)
+        if not pitcher or pitcher.outs <= 0:
+            return None
+        league_rate = get_league_average_hit_rate()
+        pitcher_batters_faced = pitcher.outs / 3 * 4.3
+        pitcher_rate = pitcher.hits_allowed / pitcher_batters_faced
+        return pitcher_rate / league_rate
+    finally:
+        db.close()
+
+
 def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: int | None) -> dict | None:
     """
-    Returns {"n_ab": <int>, "p": <float>} for one batter, or None if
-    there isn't enough real season data yet to trust a shrunk rate
-    (matches core.py's own minimum-sample gates: 20 AB / 30 outs).
+    Returns {"n_ab":, "p":, "hit_index":} for one batter:
 
-    n_ab: estimated at-bats for this game, from lineup position alone
-    (verbatim formula from core.py's load_hits_raw_inputs: batters
-    lower in the order get fewer expected at-bats).
+      - hit_index: this batter's own hit rate (hits/AB) relative to
+        league average - e.g. 1.15 means hitting 15% more often than a
+        league-average batter. Shown as soon as the batter has ANY
+        at-bats on file, independent of the shrinkage minimum-sample
+        gate below (it's just a descriptive stat, not a probability).
 
-    p: shrinkage-adjusted per-at-bat hit probability, verbatim math
-    from core.py's hits_probability_shrinkage_adjusted, using a live
-    computed league rate instead of the Excel LA_B9 cell.
+      - n_ab / p: shrinkage-adjusted inputs for "at least H hits", None
+        if there isn't yet enough real sample to trust them (verbatim
+        gates from core.py: 20 AB / 30 outs) OR the opposing pitcher's
+        stats haven't synced yet.
 
-    The final "at least H hits" probability (for any H) is left to the
-    caller/frontend - it's a simple binomial calc from (n_ab, p), cheap
-    enough to redo instantly client-side whenever the viewer changes H.
+    Returns None only if there's no batter data at all yet (stats
+    haven't synced for this player).
     """
     db = SessionLocal()
     try:
         batter = db.get(BatterSeasonStat, batter_id)
-        pitcher = db.get(PitcherHitsStat, pitcher_id) if pitcher_id else None
-        if not batter or not pitcher:
-            return None
-        if batter.ab < MIN_BATTER_AB or pitcher.outs < MIN_PITCHER_OUTS:
+        if not batter:
             return None
 
         league_rate = get_league_average_hit_rate()
+        hit_index = (batter.hits / batter.ab) / league_rate if batter.ab > 0 else None
 
-        n_ab = _excel_round(4.073 - 0.0897 * (batting_order - 1))
-        n_ab = max(1, int(n_ab))
+        pitcher = db.get(PitcherHitsStat, pitcher_id) if pitcher_id else None
 
-        shrunk_batter_rate = (batter.hits + DEFAULT_LIVE_SHRINKAGE_K * league_rate) / \
-            (batter.ab + DEFAULT_LIVE_SHRINKAGE_K)
-        pitcher_batters_faced = pitcher.outs / 3 * 4.3
-        shrunk_pitcher_rate = (pitcher.hits_allowed + DEFAULT_LIVE_SHRINKAGE_K * league_rate) / \
-            (pitcher_batters_faced + DEFAULT_LIVE_SHRINKAGE_K)
+        n_ab, p = None, None
+        if pitcher and batter.ab >= MIN_BATTER_AB and pitcher.outs >= MIN_PITCHER_OUTS:
+            pitcher_batters_faced = pitcher.outs / 3 * 4.3
+            n_ab = _excel_round(4.073 - 0.0897 * (batting_order - 1))
+            n_ab = max(1, int(n_ab))
 
-        p = league_rate * (shrunk_batter_rate / league_rate) * (shrunk_pitcher_rate / league_rate)
-        p = max(0.01, min(p, 0.7))  # same sanity clamp as core.py
+            shrunk_batter_rate = (batter.hits + DEFAULT_LIVE_SHRINKAGE_K * league_rate) / \
+                (batter.ab + DEFAULT_LIVE_SHRINKAGE_K)
+            shrunk_pitcher_rate = (pitcher.hits_allowed + DEFAULT_LIVE_SHRINKAGE_K * league_rate) / \
+                (pitcher_batters_faced + DEFAULT_LIVE_SHRINKAGE_K)
 
-        return {"n_ab": n_ab, "p": p}
+            p = league_rate * (shrunk_batter_rate / league_rate) * (shrunk_pitcher_rate / league_rate)
+            p = max(0.01, min(p, 0.7))  # same sanity clamp as core.py
+
+        return {"n_ab": n_ab, "p": p, "hit_index": hit_index}
     finally:
         db.close()
