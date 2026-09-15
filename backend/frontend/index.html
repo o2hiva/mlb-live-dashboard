@@ -55,8 +55,9 @@
   .hits-controls { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
   .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
   .hits-side-label { font-size: 0.7rem; color: var(--muted); margin-top: 8px; margin-bottom: 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-  .hits-batter { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 2px 0; }
-  .hits-index { color: var(--muted); font-size: 0.7rem; }
+  .hits-batter { display: grid; grid-template-columns: 1fr 48px 44px; align-items: center; font-size: 0.8rem; padding: 2px 0; }
+  .hits-index { color: var(--muted); font-size: 0.7rem; text-align: center; }
+  .hits-batter > span:last-child { text-align: right; }
   .hits-na { color: var(--muted); font-size: 0.75rem; }
   .hits-loading { font-size: 0.75rem; color: var(--muted); }
   .empty { color: var(--muted); }
@@ -249,10 +250,10 @@
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — vs Opp Pitcher: ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — vs Opp Pitcher: ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
