@@ -25,18 +25,24 @@
   #status-line { margin-bottom: 16px; font-size: 0.8rem; color: var(--muted); }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: 1fr; }
   }
   .card {
     background: var(--card);
     border-radius: 12px;
-    padding: 16px;
+    padding: 20px;
     border: 1px solid rgba(255,255,255,0.06);
   }
-  .teams { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
+  .teams { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
   .score { font-size: 1.3rem; }
-  .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
+  .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 14px; }
   .live-dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     background: var(--live); margin-right: 6px;
@@ -47,7 +53,7 @@
   .prob-bar-bg { background: rgba(255,255,255,0.08); border-radius: 6px; height: 10px; overflow: hidden; }
   .prob-bar-fill { background: var(--accent); height: 100%; }
   .prob-value { margin-top: 6px; font-size: 0.9rem; }
-  .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 10px; }
   .lineup-status { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
   .lineup-status.confirmed { color: var(--accent); }
   .hits-toggle { font-size: 0.75rem; color: var(--accent); cursor: pointer; text-decoration: underline; }
@@ -236,7 +242,7 @@
           ${g.away_probable_pitcher || "TBD"} vs ${g.home_probable_pitcher || "TBD"}
         </div>
         ${yesPct != null ? `
-          <div style="margin-top:12px;">
+          <div style="margin-top:16px;">
             <div class="prob-label">1st-inning run scored? (${g.model_version || "n/a"})</div>
             <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--muted); margin-bottom:2px;">
               <span>Yes</span><span>No</span>
@@ -250,7 +256,7 @@
             </div>
           </div>` : ""}
         ${showLineupStatus && (g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
-          <div style="margin-top:10px;">
+          <div style="margin-top:14px;">
             <span id="hits-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleHits(${g.game_pk})">Show Hits ▾</span>
             <div id="hits-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
           </div>` : ""}
