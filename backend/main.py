@@ -67,7 +67,8 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
             "away_score": g.away_score,
             "home_probable_pitcher": g.home_probable_pitcher,
             "away_probable_pitcher": g.away_probable_pitcher,
-            "first_inning_run_probability": latest_pred.probability if latest_pred else None,
+                        "first_inning_run_yes_probability": latest_pred.probability if latest_pred else None,
+            "first_inning_run_no_probability": (1 - latest_pred.probability) if latest_pred else None,
             "model_version": latest_pred.model_version if latest_pred else None,
         })
     return out

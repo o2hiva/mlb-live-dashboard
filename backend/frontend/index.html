@@ -100,10 +100,12 @@
     grid.innerHTML = games.map(cardHtml).join("");
   }
 
-  function cardHtml(g) {
+    function cardHtml(g) {
     const isLive = g.status === "In Progress";
-    const prob = g.first_inning_run_probability;
-    const probPct = prob != null ? Math.round(prob * 100) : null;
+    const yesProb = g.first_inning_run_yes_probability;
+    const noProb = g.first_inning_run_no_probability;
+    const yesPct = yesProb != null ? Math.round(yesProb * 100) : null;
+    const noPct = noProb != null ? Math.round(noProb * 100) : null;
 
     return `
       <div class="card">
@@ -122,18 +124,20 @@
         <div class="pitchers">
           ${g.away_probable_pitcher || "TBD"} vs ${g.home_probable_pitcher || "TBD"}
         </div>
-        ${probPct != null ? `
+        ${yesPct != null ? `
           <div style="margin-top:12px;">
-            <div class="prob-label">1st-inning run probability (${g.model_version || "n/a"})</div>
-            <div class="prob-bar-bg"><div class="prob-bar-fill" style="width:${probPct}%;"></div></div>
-            <div class="prob-value">${probPct}%</div>
+            <div class="prob-label">1st-inning run scored? (${g.model_version || "n/a"})</div>
+            <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--muted); margin-bottom:2px;">
+              <span>Yes</span><span>No</span>
+            </div>
+            <div class="prob-bar-bg" style="display:flex;">
+              <div style="background:var(--accent); height:100%; width:${yesPct}%;"></div>
+              <div style="background:var(--live); height:100%; width:${noPct}%;"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.9rem;">
+              <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
+            </div>
           </div>` : ""}
       </div>
     `;
   }
-
-  fetchGames();
-  setInterval(fetchGames, REFRESH_MS);
-</script>
-</body>
-</html>
