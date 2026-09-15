@@ -155,13 +155,22 @@ def check_and_sync_lineups(db, game: Game, boxscore: dict):
         ("away", game.home_probable_pitcher_id, game.home_probable_pitcher, "away_lineup_confirmed"),
     ):
         confirmed, batters = mlb_client.extract_boxscore_lineup(boxscore, side)
-        was_confirmed = getattr(game, confirmed_flag_attr)
         setattr(game, confirmed_flag_attr, confirmed)
 
         if not confirmed:
             continue
-        if was_confirmed:
-            continue  # already recorded this lineup, nothing new to sync
+
+        # Skip based on whether batters are ACTUALLY STORED, not just the
+        # confirmed flag - a game confirmed under an earlier, buggy
+        # extraction could have the flag set to True with zero batters
+        # ever recorded. Checking the flag alone would permanently skip
+        # re-syncing those games after a parsing fix; checking real
+        # stored rows self-heals them on the very next cycle instead.
+        already_has_batters = db.query(LineupBatter).filter_by(
+            game_pk=game.game_pk, team_side=side
+        ).count() > 0
+        if already_has_batters:
+            continue
 
         db.query(LineupBatter).filter_by(game_pk=game.game_pk, team_side=side).delete()
         for b in batters:
