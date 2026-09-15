@@ -97,14 +97,20 @@ class SyncState(Base):
 
 class BetTrackerSettings(Base):
     """Single-row table (id always 1) for the Bet Tracker tab's
-    persistent settings - bankroll and the Kelly Criterion fraction to
-    size bets with. Stored server-side (not localStorage) so it's the
-    same value whether you check from your laptop or your phone."""
+    persistent settings. Bankroll is the SUM of the five platform
+    balances below, not entered separately - kept as its own column
+    for convenience/history, but always recomputed from the platform
+    values on save (see main.py's update endpoint)."""
     __tablename__ = "bet_tracker_settings"
 
     id = Column(Integer, primary_key=True)
     bankroll = Column(Float, default=0.0)
     kelly_percent = Column(Float, default=25.0)  # quarter-Kelly is a common conservative default
+    kalshi_balance = Column(Float, default=0.0)
+    polymarket_balance = Column(Float, default=0.0)
+    novig_balance = Column(Float, default=0.0)
+    fanduel_balance = Column(Float, default=0.0)
+    draftkings_balance = Column(Float, default=0.0)
 
 
 class LineupBatter(Base):

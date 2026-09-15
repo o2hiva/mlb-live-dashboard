@@ -46,6 +46,11 @@ def _ensure_column(table: str, column: str, sql_type: str):
 _ensure_column("games", "game_datetime_utc", "VARCHAR")
 _ensure_column("games", "home_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
 _ensure_column("games", "away_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
+_ensure_column("bet_tracker_settings", "kalshi_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "polymarket_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "novig_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "fanduel_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "draftkings_balance", "FLOAT DEFAULT 0.0")
 
 _scheduler = None
 
@@ -293,35 +298,76 @@ def debug_boxscore(game_pk: int):
 
 @app.get("/api/bet-tracker/settings")
 def get_bet_tracker_settings(db: Session = Depends(get_db)):
-    """Bankroll + Kelly % for the Bet Tracker tab - a single persistent
-    row, same value from any device."""
+    """Bankroll (sum of platform balances) + Kelly % for the Bet Tracker
+    tab - a single persistent row, same value from any device."""
     from models_db import BetTrackerSettings
     settings = db.get(BetTrackerSettings, 1)
     if settings is None:
-        settings = BetTrackerSettings(id=1, bankroll=0.0, kelly_percent=25.0)
+        settings = BetTrackerSettings(id=1)
         db.add(settings)
         db.commit()
-    return {"bankroll": settings.bankroll, "kelly_percent": settings.kelly_percent}
+    return {
+        "bankroll": settings.bankroll,
+        "kelly_percent": settings.kelly_percent,
+        "kalshi_balance": settings.kalshi_balance,
+        "polymarket_balance": settings.polymarket_balance,
+        "novig_balance": settings.novig_balance,
+        "fanduel_balance": settings.fanduel_balance,
+        "draftkings_balance": settings.draftkings_balance,
+    }
 
 
 class BetTrackerSettingsUpdate(BaseModel):
-    bankroll: float | None = None
     kelly_percent: float | None = None
+    kalshi_balance: float | None = None
+    polymarket_balance: float | None = None
+    novig_balance: float | None = None
+    fanduel_balance: float | None = None
+    draftkings_balance: float | None = None
 
 
 @app.post("/api/bet-tracker/settings")
 def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = Depends(get_db)):
+    """
+    Bankroll is never accepted directly from the client - it's always
+    recomputed here as the sum of the five platform balances, so it
+    can't drift out of sync with them (e.g. from a stale cached value
+    on one device while another device updates a platform balance).
+    """
     from models_db import BetTrackerSettings
     settings = db.get(BetTrackerSettings, 1)
     if settings is None:
-        settings = BetTrackerSettings(id=1, bankroll=0.0, kelly_percent=25.0)
+        settings = BetTrackerSettings(id=1)
         db.add(settings)
-    if update.bankroll is not None:
-        settings.bankroll = update.bankroll
+
     if update.kelly_percent is not None:
         settings.kelly_percent = update.kelly_percent
+    if update.kalshi_balance is not None:
+        settings.kalshi_balance = update.kalshi_balance
+    if update.polymarket_balance is not None:
+        settings.polymarket_balance = update.polymarket_balance
+    if update.novig_balance is not None:
+        settings.novig_balance = update.novig_balance
+    if update.fanduel_balance is not None:
+        settings.fanduel_balance = update.fanduel_balance
+    if update.draftkings_balance is not None:
+        settings.draftkings_balance = update.draftkings_balance
+
+    settings.bankroll = (
+        settings.kalshi_balance + settings.polymarket_balance + settings.novig_balance +
+        settings.fanduel_balance + settings.draftkings_balance
+    )
     db.commit()
-    return {"bankroll": settings.bankroll, "kelly_percent": settings.kelly_percent}
+
+    return {
+        "bankroll": settings.bankroll,
+        "kelly_percent": settings.kelly_percent,
+        "kalshi_balance": settings.kalshi_balance,
+        "polymarket_balance": settings.polymarket_balance,
+        "novig_balance": settings.novig_balance,
+        "fanduel_balance": settings.fanduel_balance,
+        "draftkings_balance": settings.draftkings_balance,
+    }
 
 
 @app.get("/")
