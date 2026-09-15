@@ -239,6 +239,7 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
         for r in rows:
             inputs = hits_stats_sync.compute_batter_hits_inputs(r.batter_id, r.batting_order, opposing_pitcher_id)
             out.append({
+                "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
                 "batting_order": r.batting_order,
                 "n_ab": inputs["n_ab"] if inputs else None,

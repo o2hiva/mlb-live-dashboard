@@ -51,11 +51,21 @@
   .lineup-status { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
   .lineup-status.confirmed { color: var(--accent); }
   .hits-toggle { font-size: 0.75rem; color: var(--accent); cursor: pointer; text-decoration: underline; }
-  .hits-container { margin-top: 8px; }
+  .hits-container { margin-top: 8px; overflow-x: auto; }
   .hits-controls { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
   .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
   .hits-side-label { font-size: 0.7rem; color: var(--muted); margin-top: 8px; margin-bottom: 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-  .hits-batter { display: grid; grid-template-columns: 1fr 48px 44px; align-items: center; font-size: 0.8rem; padding: 2px 0; }
+  .hits-batter {
+    display: grid;
+    grid-template-columns: 1.3fr 36px 34px 34px 46px 52px 30px 60px 60px;
+    align-items: center; gap: 4px; font-size: 0.72rem; padding: 3px 0;
+  }
+  .hits-batter-header { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px; margin-top: 6px; }
+  .hits-batter select, .hits-batter input {
+    background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px; padding: 1px 2px; font-size: 0.7rem; width: 100%;
+  }
+  .hits-batter input[type="checkbox"] { width: auto; justify-self: center; }
   .hits-index { color: var(--muted); font-size: 0.7rem; text-align: center; }
   .hits-batter > span:last-child { text-align: right; }
   .hits-na { color: var(--muted); font-size: 0.75rem; }
@@ -290,14 +300,129 @@
     renderHitsSection(gamePk); // instant re-render from cache, no fetch
   }
 
-  function batterRowHtml(b, h) {
-    const hiStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
-    if (b.n_ab == null || b.p == null) {
-      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span class="hits-na">N/A</span></div>`;
+  // ---- Bet sizing (Kelly Criterion) ----
+  // Bankroll/Kelly% are fetched once at page load and refreshed whenever
+  // saved on the Bet Tracker tab, so the Hits section can size wagers
+  // without an extra round-trip on every row.
+  let currentBankroll = 0;
+  let currentKellyPercent = 25;
+
+  async function refreshGlobalBankrollSettings() {
+    try {
+      const res = await fetch(`${API_BASE}/api/bet-tracker/settings`);
+      const data = await res.json();
+      currentBankroll = data.bankroll || 0;
+      currentKellyPercent = data.kelly_percent || 0;
+    } catch (e) {
+      // Keep whatever we had before - Hits wagers just won't reflect
+      // a change made on another device until this succeeds.
     }
-    const pct = Math.round(probAtLeastHits(b.n_ab, b.p, h) * 100);
-    return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span>${pct}%</span></div>`;
   }
+
+  // Per-batter bet state (Y/N side, market %, Kelly on/off, manual wager),
+  // keyed by game+side+batter so it survives re-renders within a session.
+  // NOT persisted to the backend - resets on page reload, same as the
+  // Hits toggle/threshold state above.
+  const hitsBetState = {};
+
+  function getBetState(gamePk, side, batterId) {
+    if (!hitsBetState[gamePk]) hitsBetState[gamePk] = {};
+    const key = `${side}_${batterId}`;
+    if (!hitsBetState[gamePk][key]) {
+      hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0 };
+    }
+    return hitsBetState[gamePk][key];
+  }
+
+  function updateBetField(gamePk, side, batterId, field, value) {
+    const state = getBetState(gamePk, side, batterId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderHits(gamePk);
+  }
+
+  function rerenderHits(gamePk) {
+    const container = document.getElementById(`hits-container-${gamePk}`);
+    if (container && hitsDataCache[gamePk]) {
+      container.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
+    }
+  }
+
+  function kellyWagerAmount(modelProb, marketPct) {
+    // f* = (p - m) / (1 - m) - the standard Kelly fraction for a fair
+    // binary market priced at probability m (as opposed to decimal
+    // betting odds), which is how Kalshi/Polymarket/NoVig quote prices.
+    if (modelProb == null || marketPct == null || isNaN(marketPct)) return 0;
+    const m = marketPct / 100;
+    if (m <= 0 || m >= 1) return 0;
+    const edge = (modelProb - m) / (1 - m);
+    const fraction = Math.max(0, edge) * (currentKellyPercent / 100);
+    return fraction * currentBankroll;
+  }
+
+  function profitIfWon(wager, marketPct) {
+    // At a fair price of m, winning pays (1-m)/m per dollar wagered.
+    if (!wager || marketPct == null || isNaN(marketPct) || marketPct <= 0) return null;
+    const m = marketPct / 100;
+    return wager * (1 - m) / m;
+  }
+
+  function betRowCellsHtml(gamePk, side, b, yesPct, noPct) {
+    const state = getBetState(gamePk, side, b.batter_id);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `${gamePk}-${side}-${b.batter_id}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
+           onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)" />`;
+
+    return `
+      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
+        onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'market',this.value)" />
+      <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
+        onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+    `;
+  }
+
+  function batterRowHtml(gamePk, side, b, h) {
+    const hiStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
+    const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, h) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+
+    return `
+      <div class="hits-batter">
+        <span>${b.batting_order}. ${b.batter_name}</span>
+        <span class="hits-index">HI ${hiStr}</span>
+        <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${betRowCellsHtml(gamePk, side, b, yesPct, noPct)}
+      </div>
+    `;
+  }
+
+  const HITS_TABLE_HEADER = `
+    <div class="hits-batter hits-batter-header">
+      <span>Batter</span><span>HI</span><span>Yes</span><span>No</span>
+      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span>
+    </div>`;
 
   function hitsSectionHtml(gamePk, data) {
     const h = hitsThresholdByGame[gamePk] || 1;
@@ -305,10 +430,10 @@
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(gamePk, "away", b, h)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(gamePk, "home", b, h)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
@@ -319,6 +444,7 @@
         </select>
         <span>hit(s)</span>
       </div>
+      ${HITS_TABLE_HEADER}
       ${awayHtml}
       ${homeHtml}
     `;
@@ -368,6 +494,7 @@
 
   fetchGames();
   setInterval(fetchGames, REFRESH_MS);
+  refreshGlobalBankrollSettings();
 
   // ---- Bet Tracker tab ----
   const PLATFORM_FIELDS = ["kalshi", "polymarket", "novig", "fanduel", "draftkings"];
@@ -423,6 +550,10 @@
       // in case it differs from our instant local sum for any reason.
       document.getElementById("bankroll-total").textContent =
         "$" + data.bankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      // Keep the Hits tab's wager sizing in sync with whatever was just saved.
+      currentBankroll = data.bankroll || 0;
+      currentKellyPercent = data.kelly_percent || 0;
+      Object.keys(hitsDataCache).forEach(gamePk => rerenderHits(Number(gamePk)));
     } catch (e) {
       // Best-effort - next load will just show the last saved values.
     }
