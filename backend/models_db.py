@@ -95,6 +95,18 @@ class SyncState(Base):
     value = Column(String)
 
 
+class BetTrackerSettings(Base):
+    """Single-row table (id always 1) for the Bet Tracker tab's
+    persistent settings - bankroll and the Kelly Criterion fraction to
+    size bets with. Stored server-side (not localStorage) so it's the
+    same value whether you check from your laptop or your phone."""
+    __tablename__ = "bet_tracker_settings"
+
+    id = Column(Integer, primary_key=True)
+    bankroll = Column(Float, default=0.0)
+    kelly_percent = Column(Float, default=25.0)  # quarter-Kelly is a common conservative default
+
+
 class LineupBatter(Base):
     """One confirmed starting batter for one game/side, in real batting
     order. Populated once MLB posts the official lineup (see

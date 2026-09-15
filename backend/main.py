@@ -5,6 +5,7 @@ from datetime import date
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 
@@ -78,7 +79,12 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
     by the poller or by load_game_day.py).
     """
     target_date = game_date or date.today().isoformat()
-    games = db.query(Game).filter(Game.game_date == target_date).all()
+    games = (
+        db.query(Game)
+        .filter(Game.game_date == target_date)
+        .order_by(Game.game_datetime_utc)
+        .all()
+    )
     out = []
     for g in games:
         latest_pred = (
@@ -283,6 +289,39 @@ def debug_boxscore(game_pk: int):
         "home": summarize_side("home"),
         "away": summarize_side("away"),
     }
+
+
+@app.get("/api/bet-tracker/settings")
+def get_bet_tracker_settings(db: Session = Depends(get_db)):
+    """Bankroll + Kelly % for the Bet Tracker tab - a single persistent
+    row, same value from any device."""
+    from models_db import BetTrackerSettings
+    settings = db.get(BetTrackerSettings, 1)
+    if settings is None:
+        settings = BetTrackerSettings(id=1, bankroll=0.0, kelly_percent=25.0)
+        db.add(settings)
+        db.commit()
+    return {"bankroll": settings.bankroll, "kelly_percent": settings.kelly_percent}
+
+
+class BetTrackerSettingsUpdate(BaseModel):
+    bankroll: float | None = None
+    kelly_percent: float | None = None
+
+
+@app.post("/api/bet-tracker/settings")
+def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = Depends(get_db)):
+    from models_db import BetTrackerSettings
+    settings = db.get(BetTrackerSettings, 1)
+    if settings is None:
+        settings = BetTrackerSettings(id=1, bankroll=0.0, kelly_percent=25.0)
+        db.add(settings)
+    if update.bankroll is not None:
+        settings.bankroll = update.bankroll
+    if update.kelly_percent is not None:
+        settings.kelly_percent = update.kelly_percent
+    db.commit()
+    return {"bankroll": settings.bankroll, "kelly_percent": settings.kelly_percent}
 
 
 @app.get("/")
