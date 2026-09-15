@@ -100,17 +100,40 @@
     grid.innerHTML = games.map(cardHtml).join("");
   }
 
-    function cardHtml(g) {
+  function formatLocalStartTime(isoUtc) {
+    // Browsers always render Date objects in the DEVICE'S OWN timezone
+    // unless told otherwise - so this automatically shows Pacific time
+    // for a Pacific-based viewer, Japan time for a viewer in Japan, etc.
+    // No location detection needed on our end; the browser already knows.
+    if (!isoUtc) return null;
+    const d = new Date(isoUtc);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+  }
+
+  function cardHtml(g) {
     const isLive = g.status === "In Progress";
+    const isFinal = g.status === "Final" || g.status === "Game Over";
+    const startTime = formatLocalStartTime(g.game_datetime_utc);
     const yesProb = g.first_inning_run_yes_probability;
     const noProb = g.first_inning_run_no_probability;
     const yesPct = yesProb != null ? Math.round(yesProb * 100) : null;
     const noPct = noProb != null ? Math.round(noProb * 100) : null;
 
+    let statusLabel;
+    if (isLive) {
+      statusLabel = '<span class="live-dot"></span>LIVE';
+    } else if (isFinal) {
+      statusLabel = g.status;
+    } else if (startTime) {
+      statusLabel = startTime;
+    } else {
+      statusLabel = g.status;
+    }
+
     return `
       <div class="card">
         <div class="meta">
-          ${isLive ? '<span class="live-dot"></span>LIVE' : g.status}
+          ${statusLabel}
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
         <div class="teams">
@@ -141,6 +164,7 @@
       </div>
     `;
   }
+
   fetchGames();
   setInterval(fetchGames, REFRESH_MS);
 </script>
