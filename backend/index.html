@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>MLB Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --card: #131c2e;
+    --text: #e8ecf4;
+    --muted: #8b96ab;
+    --accent: #4fd1c5;
+    --live: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 20px; font-size: 0.85rem; }
+  #status-line { margin-bottom: 16px; font-size: 0.8rem; color: var(--muted); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .teams { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
+  .score { font-size: 1.3rem; }
+  .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--live); margin-right: 6px;
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .prob-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+  .prob-bar-bg { background: rgba(255,255,255,0.08); border-radius: 6px; height: 10px; overflow: hidden; }
+  .prob-bar-fill { background: var(--accent); height: 100%; }
+  .prob-value { margin-top: 6px; font-size: 0.9rem; }
+  .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>MLB Live Dashboard</h1>
+  <div class="sub">First-inning run probability, updated live during games.</div>
+  <div style="margin-bottom:16px;">
+    <label for="date-picker" style="font-size:0.8rem; color:var(--muted); margin-right:8px;">Date:</label>
+    <input id="date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" />
+  </div>
+  <div id="status-line">Loading...</div>
+  <div id="grid" class="grid"></div>
+
+<script>
+  // Same-origin: the backend now serves this page directly, so no
+  // separate URL is needed, whether running locally or deployed.
+  const API_BASE = "";
+
+  const REFRESH_MS = 10000;
+
+  function todayIso() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  const datePicker = document.getElementById("date-picker");
+  datePicker.value = todayIso();
+  datePicker.addEventListener("change", fetchGames);
+
+  async function fetchGames() {
+    const selectedDate = datePicker.value || todayIso();
+    try {
+      const res = await fetch(`${API_BASE}/api/games/today?game_date=${selectedDate}`);
+      const games = await res.json();
+      render(games);
+      document.getElementById("status-line").textContent =
+        `Showing ${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
+    } catch (e) {
+      document.getElementById("status-line").textContent =
+        "Couldn't reach backend — is it running at " + API_BASE + " ?";
+    }
+  }
+
+  function render(games) {
+    const grid = document.getElementById("grid");
+    if (!games || games.length === 0) {
+      grid.innerHTML = `<div class="empty">No games found for this date.</div>`;
+      return;
+    }
+    grid.innerHTML = games.map(cardHtml).join("");
+  }
+
+  function formatLocalStartTime(isoUtc) {
+    // Browsers always render Date objects in the DEVICE'S OWN timezone
+    // unless told otherwise - so this automatically shows Pacific time
+    // for a Pacific-based viewer, Japan time for a viewer in Japan, etc.
+    // No location detection needed on our end; the browser already knows.
+    if (!isoUtc) return null;
+    const d = new Date(isoUtc);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+  }
+
+  function cardHtml(g) {
+    const isLive = g.status === "In Progress";
+    const isFinal = g.status === "Final" || g.status === "Game Over";
+    const startTime = formatLocalStartTime(g.game_datetime_utc);
+    const yesProb = g.first_inning_run_yes_probability;
+    const noProb = g.first_inning_run_no_probability;
+    const yesPct = yesProb != null ? Math.round(yesProb * 100) : null;
+    const noPct = noProb != null ? Math.round(noProb * 100) : null;
+
+    let statusLabel;
+    if (isLive) {
+      statusLabel = '<span class="live-dot"></span>LIVE';
+    } else if (isFinal) {
+      statusLabel = g.status;
+    } else if (startTime) {
+      statusLabel = startTime;
+    } else {
+      statusLabel = g.status;
+    }
+
+    return `
+      <div class="card">
+        <div class="meta">
+          ${statusLabel}
+          ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
+        </div>
+        <div class="teams">
+          <span>${g.away_team}</span>
+          <span class="score">${g.away_score ?? "-"}</span>
+        </div>
+        <div class="teams">
+          <span>${g.home_team}</span>
+          <span class="score">${g.home_score ?? "-"}</span>
+        </div>
+        <div class="pitchers">
+          ${g.away_probable_pitcher || "TBD"} vs ${g.home_probable_pitcher || "TBD"}
+        </div>
+        ${yesPct != null ? `
+          <div style="margin-top:12px;">
+            <div class="prob-label">1st-inning run scored? (${g.model_version || "n/a"})</div>
+            <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--muted); margin-bottom:2px;">
+              <span>Yes</span><span>No</span>
+            </div>
+            <div class="prob-bar-bg" style="display:flex;">
+              <div style="background:var(--accent); height:100%; width:${yesPct}%;"></div>
+              <div style="background:var(--live); height:100%; width:${noPct}%;"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.9rem;">
+              <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
+            </div>
+          </div>` : ""}
+      </div>
+    `;
+  }
+
+  fetchGames();
+  setInterval(fetchGames, REFRESH_MS);
+</script>
+</body>
+</html>

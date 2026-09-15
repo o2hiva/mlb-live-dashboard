@@ -84,6 +84,7 @@ def _sync_one_date(db, date_str: str):
             existing = Game(game_pk=g["game_pk"])
             db.add(existing)
         existing.game_date = g["game_date"]
+        existing.game_datetime_utc = g["game_datetime_utc"]
         existing.home_team = g["home_team"]
         existing.away_team = g["away_team"]
         existing.home_team_id = g["home_team_id"]

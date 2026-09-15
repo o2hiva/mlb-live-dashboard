@@ -9,6 +9,7 @@ class Game(Base):
 
     game_pk = Column(Integer, primary_key=True)  # MLB's own game id
     game_date = Column(String, index=True)        # "YYYY-MM-DD"
+    game_datetime_utc = Column(String, nullable=True)  # ISO 8601 UTC, e.g. "2026-09-15T02:10:00Z" - frontend converts to viewer's local time
     home_team = Column(String)
     away_team = Column(String)
     home_team_id = Column(Integer, nullable=True)

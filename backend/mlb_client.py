@@ -40,6 +40,7 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
             games.append({
                 "game_pk": g["gamePk"],
                 "game_date": game_date,
+                "game_datetime_utc": g.get("gameDate"),  # ISO 8601 UTC, e.g. "2026-09-15T02:10:00Z"
                 "status": g.get("status", {}).get("detailedState", "Unknown"),
                 "venue_id": g.get("venue", {}).get("id"),
                 "venue_name": g.get("venue", {}).get("name"),

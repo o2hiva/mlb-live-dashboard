@@ -58,6 +58,7 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
         out.append({
             "game_pk": g.game_pk,
             "game_date": g.game_date,
+            "game_datetime_utc": g.game_datetime_utc,
             "home_team": g.home_team,
             "away_team": g.away_team,
             "status": g.status,
