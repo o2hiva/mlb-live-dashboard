@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -38,8 +39,14 @@ app.add_middleware(
 
 
 @app.get("/api/games/today")
-def games_today(db: Session = Depends(get_db)):
-    games = db.query(Game).all()
+def games_today(game_date: str = None, db: Session = Depends(get_db)):
+    """
+    Games for one date - defaults to today. Pass ?game_date=2026-09-15
+    to preview another day (e.g. tomorrow's slate, loaded ahead of time
+    by the poller or by load_game_day.py).
+    """
+    target_date = game_date or date.today().isoformat()
+    games = db.query(Game).filter(Game.game_date == target_date).all()
     out = []
     for g in games:
         latest_pred = (
@@ -50,6 +57,7 @@ def games_today(db: Session = Depends(get_db)):
         )
         out.append({
             "game_pk": g.game_pk,
+            "game_date": g.game_date,
             "home_team": g.home_team,
             "away_team": g.away_team,
             "status": g.status,
@@ -91,6 +99,37 @@ def game_detail(game_pk: int, db: Session = Depends(get_db)):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/debug/inning-stats")
+def debug_inning_stats(db: Session = Depends(get_db)):
+    """
+    Diagnostic: shows whether the background inning-stats backfill
+    (inning_stats_sync.py) has actually populated real data yet. If
+    team_inning_stat_rows/pitcher_inning_stat_rows are 0 or low, and/or
+    last_synced_date is missing or way behind, that's why predictions
+    are still falling back to the 47% placeholder.
+    """
+    from models_db import TeamInningStat, PitcherInningStat, SyncState
+
+    team_row_count = db.query(TeamInningStat).filter_by(inning=1).count()
+    pitcher_row_count = db.query(PitcherInningStat).filter_by(inning=1).count()
+    sync_row = db.get(SyncState, "inning_stats_last_synced_date")
+
+    sample_teams = db.query(TeamInningStat).filter_by(inning=1).limit(5).all()
+    sample_pitchers = db.query(PitcherInningStat).filter_by(inning=1).limit(5).all()
+
+    return {
+        "team_inning_stat_rows": team_row_count,
+        "pitcher_inning_stat_rows": pitcher_row_count,
+        "last_synced_date": sync_row.value if sync_row else None,
+        "sample_teams": [
+            {"team": t.team_name, "games": t.games, "scored": t.scored} for t in sample_teams
+        ],
+        "sample_pitchers": [
+            {"pitcher": p.pitcher_name, "starts": p.starts, "allowed": p.allowed} for p in sample_pitchers
+        ],
+    }
 
 
 @app.get("/")

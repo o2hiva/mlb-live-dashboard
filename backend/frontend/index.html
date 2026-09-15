@@ -54,22 +54,37 @@
 <body>
   <h1>MLB Live Dashboard</h1>
   <div class="sub">First-inning run probability, updated live during games.</div>
+  <div style="margin-bottom:16px;">
+    <label for="date-picker" style="font-size:0.8rem; color:var(--muted); margin-right:8px;">Date:</label>
+    <input id="date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" />
+  </div>
   <div id="status-line">Loading...</div>
   <div id="grid" class="grid"></div>
 
 <script>
-  // Point this at your deployed backend URL.
-    const API_BASE = "";
+  // Same-origin: the backend now serves this page directly, so no
+  // separate URL is needed, whether running locally or deployed.
+  const API_BASE = "";
 
   const REFRESH_MS = 10000;
 
+  function todayIso() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  const datePicker = document.getElementById("date-picker");
+  datePicker.value = todayIso();
+  datePicker.addEventListener("change", fetchGames);
+
   async function fetchGames() {
+    const selectedDate = datePicker.value || todayIso();
     try {
-      const res = await fetch(`${API_BASE}/api/games/today`);
+      const res = await fetch(`${API_BASE}/api/games/today?game_date=${selectedDate}`);
       const games = await res.json();
       render(games);
       document.getElementById("status-line").textContent =
-        `Last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
+        `Showing ${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
     } catch (e) {
       document.getElementById("status-line").textContent =
         "Couldn't reach backend — is it running at " + API_BASE + " ?";
@@ -79,7 +94,7 @@
   function render(games) {
     const grid = document.getElementById("grid");
     if (!games || games.length === 0) {
-      grid.innerHTML = `<div class="empty">No games found for today.</div>`;
+      grid.innerHTML = `<div class="empty">No games found for this date.</div>`;
       return;
     }
     grid.innerHTML = games.map(cardHtml).join("");

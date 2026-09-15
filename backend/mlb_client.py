@@ -26,7 +26,7 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
     """Return today's (or a given date's) MLB games with basic status info."""
     game_date = game_date or date.today().isoformat()
     url = f"{BASE}/v1/schedule"
-    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher"}
+    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team"}
     resp = requests.get(url, params=params, timeout=TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
@@ -35,16 +35,65 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
     for day in data.get("dates", []):
         for g in day.get("games", []):
             teams = g.get("teams", {})
+            home = teams.get("home", {})
+            away = teams.get("away", {})
             games.append({
                 "game_pk": g["gamePk"],
                 "game_date": game_date,
                 "status": g.get("status", {}).get("detailedState", "Unknown"),
-                "home_team": teams.get("home", {}).get("team", {}).get("name"),
-                "away_team": teams.get("away", {}).get("team", {}).get("name"),
-                "home_probable_pitcher": teams.get("home", {}).get("probablePitcher", {}).get("fullName"),
-                "away_probable_pitcher": teams.get("away", {}).get("probablePitcher", {}).get("fullName"),
+                "venue_id": g.get("venue", {}).get("id"),
+                "venue_name": g.get("venue", {}).get("name"),
+                "home_team": home.get("team", {}).get("name"),
+                "away_team": away.get("team", {}).get("name"),
+                "home_team_id": home.get("team", {}).get("id"),
+                "away_team_id": away.get("team", {}).get("id"),
+                "home_probable_pitcher": home.get("probablePitcher", {}).get("fullName"),
+                "away_probable_pitcher": away.get("probablePitcher", {}).get("fullName"),
+                "home_probable_pitcher_id": home.get("probablePitcher", {}).get("id"),
+                "away_probable_pitcher_id": away.get("probablePitcher", {}).get("id"),
             })
     return games
+
+
+def get_final_games_with_linescore(date_str: str) -> list[dict]:
+    """
+    All FINAL games on a given date, with per-inning linescore and
+    probable pitchers - same field mapping as
+    fetch_inning_scoring_stats.py's get_days_games_with_linescore(),
+    confirmed working there against real results.
+    """
+    url = f"{BASE}/v1/schedule"
+    params = {"sportId": 1, "date": date_str, "hydrate": "linescore,team,probablePitcher"}
+    resp = requests.get(url, params=params, timeout=30)
+    resp.raise_for_status()
+    games = []
+    for date_block in resp.json().get("dates", []):
+        for game in date_block.get("games", []):
+            if game.get("status", {}).get("abstractGameState") == "Final":
+                games.append(game)
+    return games
+
+
+def get_inning_runs_from_raw_game(game: dict, inning_num: int) -> tuple:
+    """Runs scored by (away, home) in a specific inning, from a raw game
+    dict as returned by get_final_games_with_linescore(). Returns
+    (None, None) if that inning wasn't played (e.g. home team didn't
+    need to bat in the 9th)."""
+    innings = game.get("linescore", {}).get("innings", [])
+    for inn in innings:
+        if inn.get("num") == inning_num:
+            return inn.get("away", {}).get("runs"), inn.get("home", {}).get("runs")
+    return None, None
+
+
+def get_game_starting_pitcher(game: dict, side: str) -> tuple:
+    """(pitcher_id, pitcher_name) for the probable/starting pitcher on
+    one side ('home' or 'away') of a raw game dict."""
+    team_data = game.get("teams", {}).get(side, {})
+    pitcher = team_data.get("probablePitcher")
+    if not pitcher:
+        return None, None
+    return pitcher.get("id"), pitcher.get("fullName", "")
 
 
 def get_live_feed(game_pk: int) -> dict:
