@@ -18,6 +18,7 @@ gentle as you like on MLB's public endpoint.
 import logging
 from datetime import datetime, date, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 import mlb_client
 import predictor
@@ -30,7 +31,12 @@ log = logging.getLogger("poller")
 
 POLL_INTERVAL_LIVE_SECONDS = 15
 POLL_INTERVAL_IDLE_SECONDS = 60
-INNING_STATS_REFRESH_SECONDS = 6 * 60 * 60  # games finalize once/day; 6h just catches stragglers sooner
+
+# End-of-day inning-stats refresh time, in UTC. 09:00 UTC is 4-5am
+# Eastern (depending on daylight saving) - safely after even a late
+# West Coast game (including extra innings) has been marked Final.
+INNING_STATS_REFRESH_HOUR_UTC = 9
+INNING_STATS_REFRESH_MINUTE_UTC = 0
 
 # How many days ahead to keep loaded/refreshed, so tomorrow's (and the
 # day after's) games + probable pitchers show up before game day, not
@@ -139,17 +145,9 @@ def poll_live_games():
 
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
-    scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
-    scheduler.add_job(poll_live_games, "interval", seconds=POLL_INTERVAL_LIVE_SECONDS, id="poll_live_games")
-    # next_run_time=now fires this almost immediately, IN THE SCHEDULER'S
-    # OWN BACKGROUND THREAD - unlike sync_schedule()/poll_live_games() below,
-    # this is NOT called synchronously here, because the first-ever run
-    # backfills ~2 months of season data (one API call per day) and would
-    # otherwise block app startup for a noticeable stretch.
-    scheduler.add_job(
+        scheduler.add_job(
         inning_stats_sync.refresh_inning_stats,
-        "interval",
-        seconds=INNING_STATS_REFRESH_SECONDS,
+        CronTrigger(hour=INNING_STATS_REFRESH_HOUR_UTC, minute=INNING_STATS_REFRESH_MINUTE_UTC),
         id="refresh_inning_stats",
         next_run_time=datetime.utcnow(),
     )

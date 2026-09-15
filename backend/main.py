@@ -133,6 +133,26 @@ def debug_inning_stats(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/admin/refresh-inning-stats")
+def manual_refresh_inning_stats(db: Session = Depends(get_db)):
+    """Manually triggers the end-of-day inning-stats sync right now."""
+    import inning_stats_sync
+    from models_db import TeamInningStat, PitcherInningStat, SyncState
+
+    inning_stats_sync.refresh_inning_stats()
+
+    team_row_count = db.query(TeamInningStat).filter_by(inning=1).count()
+    pitcher_row_count = db.query(PitcherInningStat).filter_by(inning=1).count()
+    sync_row = db.get(SyncState, "inning_stats_last_synced_date")
+
+    return {
+        "status": "refresh complete",
+        "team_inning_stat_rows": team_row_count,
+        "pitcher_inning_stat_rows": pitcher_row_count,
+        "last_synced_date": sync_row.value if sync_row else None,
+    }
+
+
 @app.get("/")
 def serve_dashboard():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
