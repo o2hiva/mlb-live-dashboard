@@ -1,11 +1,15 @@
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models_db import Game, Prediction
 import poller
+
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
 
 Base.metadata.create_all(bind=engine)
 
@@ -87,3 +91,8 @@ def game_detail(game_pk: int, db: Session = Depends(get_db)):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/")
+def serve_dashboard():
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
