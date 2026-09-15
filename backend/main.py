@@ -87,7 +87,7 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
     games = (
         db.query(Game)
         .filter(Game.game_date == target_date)
-        .order_by(Game.game_datetime_utc)
+        .order_by(Game.game_datetime_utc, Game.game_pk)
         .all()
     )
     out = []
