@@ -266,7 +266,7 @@
               <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
             </div>
           </div>` : ""}
-        ${showLineupStatus && (g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
+        ${(g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
           <div style="margin-top:14px;">
             <span id="hits-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleHits(${g.game_pk})">Show Hits ▾</span>
             <div id="hits-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
