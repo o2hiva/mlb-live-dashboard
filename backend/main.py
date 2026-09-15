@@ -1,9 +1,11 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from datetime import date
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
@@ -12,7 +14,35 @@ import poller
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
 
+log = logging.getLogger("main")
+
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_column(table: str, column: str, sql_type: str):
+    """
+    create_all() only creates brand-new tables - it never adds columns
+    to a table that already exists. Since this app's schema keeps
+    growing (game_datetime_utc, home_team_id, etc. were all added after
+    the "games" table already existed on a live deploy), this checks
+    for a missing column and adds it if needed. Safe to call every
+    startup: does nothing once the column is already there.
+    """
+    try:
+        inspector = inspect(engine)
+        if table not in inspector.get_table_names():
+            return  # create_all() will make the whole table fresh, column included
+        existing_columns = {c["name"] for c in inspector.get_columns(table)}
+        if column in existing_columns:
+            return
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+        log.info("Added missing column %s.%s", table, column)
+    except Exception:
+        log.exception("Failed to ensure column %s.%s exists", table, column)
+
+
+_ensure_column("games", "game_datetime_utc", "VARCHAR")
 
 _scheduler = None
 
