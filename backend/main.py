@@ -67,7 +67,7 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
             "away_score": g.away_score,
             "home_probable_pitcher": g.home_probable_pitcher,
             "away_probable_pitcher": g.away_probable_pitcher,
-                        "first_inning_run_yes_probability": latest_pred.probability if latest_pred else None,
+            "first_inning_run_yes_probability": latest_pred.probability if latest_pred else None,
             "first_inning_run_no_probability": (1 - latest_pred.probability) if latest_pred else None,
             "model_version": latest_pred.model_version if latest_pred else None,
         })
@@ -135,7 +135,17 @@ def debug_inning_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/admin/refresh-inning-stats")
 def manual_refresh_inning_stats(db: Session = Depends(get_db)):
-    """Manually triggers the end-of-day inning-stats sync right now."""
+    """
+    Manually triggers the end-of-day inning-stats sync right now, instead
+    of waiting for its scheduled 09:00 UTC run. Safe to hit any time -
+    it only processes days it hasn't already synced, so running this
+    right after the automatic daily run (or repeatedly) just confirms
+    you're already up to date rather than double-counting anything.
+
+    Runs synchronously and returns the resulting counts, so visiting
+    this URL in a browser both triggers the refresh AND shows you the
+    result in one step.
+    """
     import inning_stats_sync
     from models_db import TeamInningStat, PitcherInningStat, SyncState
 

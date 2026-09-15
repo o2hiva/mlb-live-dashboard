@@ -11,6 +11,11 @@ Background job: keeps the database in sync with upcoming MLB games.
   would otherwise go unnoticed.
 - For any game currently "In Progress": pull the live feed every ~15s
   and update score/inning/inning-lines.
+- Once daily (end of day, see INNING_STATS_REFRESH_HOUR_UTC): log the
+  previous day's final scores into the season-to-date team/pitcher
+  inning-stat tables the log5 model reads from. Also runs once
+  immediately on every app startup/redeploy. Can also be triggered
+  manually any time via GET /api/admin/refresh-inning-stats.
 
 Tune POLL_INTERVAL_LIVE / POLL_INTERVAL_IDLE / SYNC_DAYS_AHEAD to be as
 gentle as you like on MLB's public endpoint.
@@ -34,7 +39,8 @@ POLL_INTERVAL_IDLE_SECONDS = 60
 
 # End-of-day inning-stats refresh time, in UTC. 09:00 UTC is 4-5am
 # Eastern (depending on daylight saving) - safely after even a late
-# West Coast game (including extra innings) has been marked Final.
+# West Coast game (including extra innings) has been marked Final by
+# MLB's API, so "yesterday" is guaranteed complete by the time this runs.
 INNING_STATS_REFRESH_HOUR_UTC = 9
 INNING_STATS_REFRESH_MINUTE_UTC = 0
 
@@ -145,7 +151,17 @@ def poll_live_games():
 
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
-        scheduler.add_job(
+    scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
+    scheduler.add_job(poll_live_games, "interval", seconds=POLL_INTERVAL_LIVE_SECONDS, id="poll_live_games")
+    # Runs once daily at a fixed end-of-day time (see
+    # INNING_STATS_REFRESH_HOUR_UTC above) - this is the "log yesterday's
+    # final scores into their season-stat tables" job. next_run_time=now
+    # ALSO fires it once immediately on every app startup/redeploy, in
+    # the scheduler's own background thread so it never blocks startup -
+    # useful since a fresh deploy (or the very first run ever) means the
+    # season-to-date counts aren't just "yesterday", they're the whole
+    # backfill, and you shouldn't have to wait until 4am for that.
+    scheduler.add_job(
         inning_stats_sync.refresh_inning_stats,
         CronTrigger(hour=INNING_STATS_REFRESH_HOUR_UTC, minute=INNING_STATS_REFRESH_MINUTE_UTC),
         id="refresh_inning_stats",
