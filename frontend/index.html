@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>MLB Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --card: #131c2e;
+    --text: #e8ecf4;
+    --muted: #8b96ab;
+    --accent: #4fd1c5;
+    --live: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 20px; font-size: 0.85rem; }
+  #status-line { margin-bottom: 16px; font-size: 0.8rem; color: var(--muted); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .teams { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
+  .score { font-size: 1.3rem; }
+  .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--live); margin-right: 6px;
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .prob-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+  .prob-bar-bg { background: rgba(255,255,255,0.08); border-radius: 6px; height: 10px; overflow: hidden; }
+  .prob-bar-fill { background: var(--accent); height: 100%; }
+  .prob-value { margin-top: 6px; font-size: 0.9rem; }
+  .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>MLB Live Dashboard</h1>
+  <div class="sub">First-inning run probability, updated live during games.</div>
+  <div id="status-line">Loading...</div>
+  <div id="grid" class="grid"></div>
+
+<script>
+  // Point this at your deployed backend URL.
+    const API_BASE = "http://localhost:8000";
+
+  const REFRESH_MS = 10000;
+
+  async function fetchGames() {
+    try {
+      const res = await fetch(`${API_BASE}/api/games/today`);
+      const games = await res.json();
+      render(games);
+      document.getElementById("status-line").textContent =
+        `Last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
+    } catch (e) {
+      document.getElementById("status-line").textContent =
+        "Couldn't reach backend — is it running at " + API_BASE + " ?";
+    }
+  }
+
+  function render(games) {
+    const grid = document.getElementById("grid");
+    if (!games || games.length === 0) {
+      grid.innerHTML = `<div class="empty">No games found for today.</div>`;
+      return;
+    }
+    grid.innerHTML = games.map(cardHtml).join("");
+  }
+
+  function cardHtml(g) {
+    const isLive = g.status === "In Progress";
+    const prob = g.first_inning_run_probability;
+    const probPct = prob != null ? Math.round(prob * 100) : null;
+
+    return `
+      <div class="card">
+        <div class="meta">
+          ${isLive ? '<span class="live-dot"></span>LIVE' : g.status}
+          ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
+        </div>
+        <div class="teams">
+          <span>${g.away_team}</span>
+          <span class="score">${g.away_score ?? "-"}</span>
+        </div>
+        <div class="teams">
+          <span>${g.home_team}</span>
+          <span class="score">${g.home_score ?? "-"}</span>
+        </div>
+        <div class="pitchers">
+          ${g.away_probable_pitcher || "TBD"} vs ${g.home_probable_pitcher || "TBD"}
+        </div>
+        ${probPct != null ? `
+          <div style="margin-top:12px;">
+            <div class="prob-label">1st-inning run probability (${g.model_version || "n/a"})</div>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" style="width:${probPct}%;"></div></div>
+            <div class="prob-value">${probPct}%</div>
+          </div>` : ""}
+      </div>
+    `;
+  }
+
+  fetchGames();
+  setInterval(fetchGames, REFRESH_MS);
+</script>
+</body>
+</html>
