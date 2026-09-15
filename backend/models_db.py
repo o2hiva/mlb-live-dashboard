@@ -113,6 +113,36 @@ class BetTrackerSettings(Base):
     draftkings_balance = Column(Float, default=0.0)
 
 
+class TrackedBet(Base):
+    """A Hits bet you've flagged with the 'Track' checkbox - a snapshot
+    of the bet as it looked at the moment you checked it (market %,
+    wager, potential profit, model probability), so it can later be
+    graded against what actually happened. Grading itself (comparing
+    actual_hits to hits_threshold, filling in result) is a planned
+    end-of-day job, not implemented yet - this table is just the record
+    that job will eventually read and update."""
+    __tablename__ = "tracked_bets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    game_pk = Column(Integer, ForeignKey("games.game_pk"), index=True)
+    batter_id = Column(Integer)
+    batter_name = Column(String)
+    team_side = Column(String)  # "home" / "away"
+    batting_order = Column(Integer)
+    hits_threshold = Column(Integer)  # the "at least H hits" selected when tracked
+    yn = Column(String)  # "yes" / "no"
+    model_probability = Column(Float)
+    market_probability = Column(Float)  # stored as a percent (0-100), matching what's typed into the Market box
+    wager = Column(Float)
+    potential_profit = Column(Float)
+    placed_at = Column(DateTime, default=datetime.utcnow)
+
+    # Filled in later by the (not-yet-built) end-of-day grading job.
+    resolved = Column(Boolean, default=False)
+    actual_hits = Column(Integer, nullable=True)
+    result = Column(String, nullable=True)  # "win" / "loss" / "push"
+
+
 class LineupBatter(Base):
     """One confirmed starting batter for one game/side, in real batting
     order. Populated once MLB posts the official lineup (see

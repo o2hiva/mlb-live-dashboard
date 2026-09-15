@@ -371,6 +371,82 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
     }
 
 
+class TrackedBetCreate(BaseModel):
+    game_pk: int
+    batter_id: int
+    batter_name: str
+    team_side: str
+    batting_order: int
+    hits_threshold: int
+    yn: str
+    model_probability: float | None = None
+    market_probability: float | None = None
+    wager: float | None = None
+    potential_profit: float | None = None
+
+
+@app.post("/api/bet-tracker/track")
+def track_bet(bet: TrackedBetCreate, db: Session = Depends(get_db)):
+    """
+    Records a Hits bet snapshot when the 'Track' checkbox is checked -
+    exactly what's on the row at that moment (market %, wager, potential
+    profit, model probability), for a future end-of-day job to grade
+    against what actually happened. Returns the new row's id, which the
+    frontend holds onto so unchecking the box can delete the right row.
+    """
+    from models_db import TrackedBet
+    row = TrackedBet(**bet.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id}
+
+
+@app.delete("/api/bet-tracker/track/{tracked_bet_id}")
+def untrack_bet(tracked_bet_id: int, db: Session = Depends(get_db)):
+    """Removes a tracked bet - called when the 'Track' checkbox is
+    unchecked, or from the Remove button in the Bet Tracker tab's list."""
+    from models_db import TrackedBet
+    row = db.get(TrackedBet, tracked_bet_id)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return {"status": "removed"}
+
+
+@app.get("/api/bet-tracker/tracked")
+def list_tracked_bets(db: Session = Depends(get_db)):
+    """
+    All currently-tracked, not-yet-resolved bets, with just enough game
+    context (matchup, date) to identify them at a glance in the Bet
+    Tracker tab. Ordered most-recently-tracked first.
+    """
+    from models_db import TrackedBet
+    rows = (
+        db.query(TrackedBet)
+        .filter_by(resolved=False)
+        .order_by(TrackedBet.placed_at.desc())
+        .all()
+    )
+    out = []
+    for r in rows:
+        game = db.get(Game, r.game_pk)
+        out.append({
+            "id": r.id,
+            "batter_name": r.batter_name,
+            "team_side": r.team_side,
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else "Unknown matchup",
+            "game_date": game.game_date if game else None,
+            "hits_threshold": r.hits_threshold,
+            "yn": r.yn,
+            "market_probability": r.market_probability,
+            "wager": r.wager,
+            "potential_profit": r.potential_profit,
+            "placed_at": r.placed_at.isoformat(),
+        })
+    return out
+
+
 @app.get("/")
 def serve_dashboard():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))

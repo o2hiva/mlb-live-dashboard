@@ -65,7 +65,7 @@
   .hits-controls { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
   .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
   .hits-side-label { font-size: 0.7rem; color: var(--muted); margin-top: 8px; margin-bottom: 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-  .hits-batter { display: grid; grid-template-columns: 1.3fr 36px 34px 34px 46px 52px 30px 60px 60px; align-items: center; gap: 4px; font-size: 0.72rem; padding: 3px 0; }
+  .hits-batter { display: grid; grid-template-columns: 1.3fr 36px 34px 34px 46px 52px 30px 60px 60px 40px; align-items: center; gap: 4px; font-size: 0.72rem; padding: 3px 0; }
   .hits-batter > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hits-batter-header { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px; margin-top: 6px; }
   .hits-batter select, .hits-batter input {
@@ -92,6 +92,13 @@
   .settings-hint { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
   .platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px; margin-top: 16px; }
   .bankroll-total { font-size: 1.8rem; font-weight: 600; margin-top: 4px; }
+  .tracked-bets-list { font-size: 0.85rem; }
+  .tracked-bet-row {
+    display: grid; grid-template-columns: 1.5fr 1fr 0.7fr 0.6fr 0.7fr 0.7fr 0.6fr;
+    gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .tracked-bet-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+  .tracked-bet-remove { color: var(--live); cursor: pointer; font-size: 0.75rem; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -143,6 +150,9 @@
       </div>
     </div>
     <div class="settings-hint">e.g. 25% runs quarter-Kelly - sizes each bet at 25% of what full Kelly would suggest, a common way to reduce swings from model error.</div>
+
+    <h2 style="margin-top:32px;">Tracked Bets</h2>
+    <div id="tracked-bets-list" class="tracked-bets-list">Loading...</div>
   </div>
 
 <script>
@@ -336,7 +346,7 @@
     if (!hitsBetState[gamePk]) hitsBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
     if (!hitsBetState[gamePk][key]) {
-      hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0 };
+      hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
     }
     return hitsBetState[gamePk][key];
   }
@@ -379,7 +389,40 @@
     return wager * (1 - m) / m;
   }
 
-  function betRowCellsHtml(gamePk, side, b, yesPct, noPct) {
+  async function toggleTrack(gamePk, side, batterId, checked, batterName, battingOrder, h, modelProb, marketPct, wager, profit) {
+    const state = getBetState(gamePk, side, batterId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, batter_id: batterId, batter_name: batterName,
+            team_side: side, batting_order: battingOrder, hits_threshold: h,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false; // failed to save - don't show it as tracked
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - if this fails the row just lingers server-side;
+        // the Bet Tracker tab's own Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderHits(gamePk);
+  }
+
+  function betRowCellsHtml(gamePk, side, b, yesPct, noPct, h) {
     const state = getBetState(gamePk, side, b.batter_id);
     const modelPct = state.yn === "yes" ? yesPct : noPct;
     const modelProb = modelPct != null ? modelPct / 100 : null;
@@ -395,6 +438,8 @@
       : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
            onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)" />`;
 
+    const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${h},${modelProb},${state.market},${wager},${profit}`;
+
     return `
       <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
       <select id="yn-${idBase}" onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
@@ -407,6 +452,7 @@
         onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)" />
       ${wagerCell}
       <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleTrack(${trackArgs})" />
     `;
   }
 
@@ -420,7 +466,7 @@
         <span>${b.batting_order}. ${b.batter_name}</span>
         <span class="hits-index">HI ${hiStr}</span>
         <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
-        ${betRowCellsHtml(gamePk, side, b, yesPct, noPct)}
+        ${betRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
       </div>
     `;
   }
@@ -428,7 +474,7 @@
   const HITS_TABLE_HEADER = `
     <div class="hits-batter hits-batter-header">
       <span>Batter</span><span>HI</span><span>Yes</span><span>No</span>
-      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span>
+      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
     </div>`;
 
   function hitsSectionHtml(gamePk, data) {
@@ -512,7 +558,49 @@
     document.getElementById("tab-content-bettracker").style.display = isLive ? "none" : "block";
     document.getElementById("tab-btn-live").classList.toggle("active", isLive);
     document.getElementById("tab-btn-bettracker").classList.toggle("active", !isLive);
-    if (!isLive) loadBetTrackerSettings();
+    if (!isLive) {
+      loadBetTrackerSettings();
+      loadTrackedBets();
+    }
+  }
+
+  async function loadTrackedBets() {
+    const container = document.getElementById("tracked-bets-list");
+    try {
+      const res = await fetch(`${API_BASE}/api/bet-tracker/tracked`);
+      const bets = await res.json();
+      if (!bets.length) {
+        container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
+        return;
+      }
+      const header = `
+        <div class="tracked-bet-row tracked-bet-header">
+          <span>Batter</span><span>Matchup</span><span>Y/N</span><span>Line</span>
+          <span>Market</span><span>Wager</span><span></span>
+        </div>`;
+      const rows = bets.map(b => `
+        <div class="tracked-bet-row">
+          <span>${b.batter_name}</span>
+          <span>${b.matchup}</span>
+          <span>${b.yn}</span>
+          <span>${b.hits_threshold}+</span>
+          <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
+          <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
+          <span class="tracked-bet-remove" onclick="removeTrackedBet(${b.id})">Remove</span>
+        </div>`).join("");
+      container.innerHTML = header + rows;
+    } catch (e) {
+      container.innerHTML = `<div class="settings-hint">Couldn't load tracked bets.</div>`;
+    }
+  }
+
+  async function removeTrackedBet(id) {
+    try {
+      await fetch(`${API_BASE}/api/bet-tracker/track/${id}`, { method: "DELETE" });
+    } catch (e) {
+      // Best-effort - reloading the list will show the true current state either way.
+    }
+    loadTrackedBets();
   }
 
   function updateBankrollTotalDisplay() {
