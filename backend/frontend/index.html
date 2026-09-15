@@ -50,6 +50,14 @@
   .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
   .lineup-status { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
   .lineup-status.confirmed { color: var(--accent); }
+  .hits-toggle { font-size: 0.75rem; color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .hits-container { margin-top: 8px; }
+  .hits-controls { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
+  .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
+  .hits-side-label { font-size: 0.7rem; color: var(--muted); margin-top: 8px; margin-bottom: 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .hits-batter { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 2px 0; }
+  .hits-na { color: var(--muted); font-size: 0.75rem; }
+  .hits-loading { font-size: 0.75rem; color: var(--muted); }
   .empty { color: var(--muted); }
 </style>
 </head>
@@ -100,6 +108,7 @@
       return;
     }
     grid.innerHTML = games.map(cardHtml).join("");
+    reapplyExpandedHits();
   }
 
   function formatLocalStartTime(isoUtc) {
@@ -173,8 +182,127 @@
               <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
             </div>
           </div>` : ""}
+        ${showLineupStatus && (g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
+          <div style="margin-top:10px;">
+            <span id="hits-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleHits(${g.game_pk})">Show Hits ▾</span>
+            <div id="hits-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
+          </div>` : ""}
       </div>
     `;
+  }
+
+  // ---- Hits prop: confirmed batters, adjustable "at least H hits" ----
+  // State lives outside cardHtml/render so it survives the 10s poll
+  // refresh, which otherwise rebuilds the whole grid (and would
+  // collapse/re-fetch everything on every cycle without this).
+  const expandedHitsGames = new Set();
+  const hitsThresholdByGame = {};
+  const hitsDataCache = {};
+
+  function combination(n, k) {
+    if (k < 0 || k > n) return 0;
+    let result = 1;
+    for (let i = 0; i < k; i++) result = (result * (n - i)) / (i + 1);
+    return result;
+  }
+
+  function probAtLeastHits(n, p, h) {
+    // P(X >= h) for X ~ Binomial(n, p). n is small (~2-4, from lineup
+    // position), so direct summation is exact and instant - no need
+    // for a library. This is what recomputes instantly in the browser
+    // whenever the "at least __ hit(s)" selector changes.
+    let cumulative = 0;
+    for (let i = 0; i < h; i++) {
+      cumulative += combination(n, i) * Math.pow(p, i) * Math.pow(1 - p, n - i);
+    }
+    return Math.max(0, Math.min(1, 1 - cumulative));
+  }
+
+  function toggleHits(gamePk) {
+    if (expandedHitsGames.has(gamePk)) {
+      expandedHitsGames.delete(gamePk);
+    } else {
+      expandedHitsGames.add(gamePk);
+      if (!hitsThresholdByGame[gamePk]) hitsThresholdByGame[gamePk] = 1;
+    }
+    renderHitsSection(gamePk);
+  }
+
+  function setHitsThreshold(gamePk, value) {
+    hitsThresholdByGame[gamePk] = parseInt(value, 10);
+    renderHitsSection(gamePk); // instant re-render from cache, no fetch
+  }
+
+  function batterRowHtml(b, h) {
+    if (b.n_ab == null || b.p == null) {
+      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-na">Not enough data</span></div>`;
+    }
+    const pct = Math.round(probAtLeastHits(b.n_ab, b.p, h) * 100);
+    return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span>${pct}%</span></div>`;
+  }
+
+  function hitsSectionHtml(gamePk, data) {
+    const h = hitsThresholdByGame[gamePk] || 1;
+    const awayHtml = data.away_lineup_confirmed
+      ? `<div class="hits-side-label">Away</div>${data.away_batters.map(b => batterRowHtml(b, h)).join("")}`
+      : `<div class="hits-side-label">Away — Not Confirmed</div>`;
+    const homeHtml = data.home_lineup_confirmed
+      ? `<div class="hits-side-label">Home</div>${data.home_batters.map(b => batterRowHtml(b, h)).join("")}`
+      : `<div class="hits-side-label">Home — Not Confirmed</div>`;
+
+    return `
+      <div class="hits-controls">
+        <span>At least</span>
+        <select onchange="setHitsThreshold(${gamePk}, this.value)">
+          ${[1, 2, 3, 4].map(n => `<option value="${n}" ${n === h ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+        <span>hit(s)</span>
+      </div>
+      ${awayHtml}
+      ${homeHtml}
+    `;
+  }
+
+  function renderHitsSection(gamePk) {
+    const container = document.getElementById(`hits-container-${gamePk}`);
+    const toggle = document.getElementById(`hits-toggle-${gamePk}`);
+    if (!container) return;
+
+    if (!expandedHitsGames.has(gamePk)) {
+      container.style.display = "none";
+      container.innerHTML = "";
+      if (toggle) toggle.textContent = "Show Hits ▾";
+      return;
+    }
+
+    if (toggle) toggle.textContent = "Hide Hits ▴";
+    container.style.display = "block";
+
+    if (hitsDataCache[gamePk]) {
+      container.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
+      return;
+    }
+
+    container.innerHTML = `<div class="hits-loading">Loading batters...</div>`;
+    fetch(`${API_BASE}/api/games/${gamePk}/hits`)
+      .then(res => res.json())
+      .then(data => {
+        hitsDataCache[gamePk] = data;
+        if (expandedHitsGames.has(gamePk)) {
+          container.innerHTML = hitsSectionHtml(gamePk, data);
+        }
+      })
+      .catch(() => {
+        container.innerHTML = `<div class="hits-loading">Couldn't load batters.</div>`;
+      });
+  }
+
+  function reapplyExpandedHits() {
+    // The 10s poll refresh rebuilds the whole grid from scratch, so any
+    // previously-expanded Hits section needs to be restored afterward -
+    // from cache (instant) rather than re-fetched, since batter season
+    // stats don't change within a browsing session.
+    expandedHitsGames.forEach(renderHitsSection);
   }
 
   fetchGames();

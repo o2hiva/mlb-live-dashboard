@@ -8,6 +8,9 @@ citizen: don't poll faster than every ~10-15 seconds per live game.
 Endpoints used:
   - Schedule:  https://statsapi.mlb.com/api/v1/schedule
   - Live feed: https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live
+    (also carries the boxscore, including confirmed starting lineups)
+  - Person stats: https://statsapi.mlb.com/api/v1/people/{id}/stats
+  - Team stats:   https://statsapi.mlb.com/api/v1/teams/{id}/stats
 
 NOTE: this sandbox's outbound network is restricted to package registries
 (pypi/npm/github etc.) and cannot reach statsapi.mlb.com, so these calls
@@ -26,13 +29,7 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
     """Return today's (or a given date's) MLB games with basic status info."""
     game_date = game_date or date.today().isoformat()
     url = f"{BASE}/v1/schedule"
-    # "lineups" hydration returns the OFFICIAL starting lineup once MLB
-    # has posted it (usually shortly before first pitch) - present as
-    # game["lineups"]["homePlayers"]/["awayPlayers"] when confirmed,
-    # absent/empty before that. NOTE: unverified against a live response
-    # from this sandbox (see module docstring) - confirm the field shape
-    # once running somewhere with real internet access.
-    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team,lineups"}
+    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team"}
     resp = requests.get(url, params=params, timeout=TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
@@ -43,7 +40,6 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
             teams = g.get("teams", {})
             home = teams.get("home", {})
             away = teams.get("away", {})
-            lineups = g.get("lineups", {})
             games.append({
                 "game_pk": g["gamePk"],
                 "game_date": game_date,
@@ -59,8 +55,6 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
                 "away_probable_pitcher": away.get("probablePitcher", {}).get("fullName"),
                 "home_probable_pitcher_id": home.get("probablePitcher", {}).get("id"),
                 "away_probable_pitcher_id": away.get("probablePitcher", {}).get("id"),
-                "home_lineup_confirmed": bool(lineups.get("homePlayers")),
-                "away_lineup_confirmed": bool(lineups.get("awayPlayers")),
             })
     return games
 
@@ -136,3 +130,121 @@ def extract_linescore(feed: dict) -> dict:
         "away_score": linescore.get("teams", {}).get("away", {}).get("runs", 0),
         "inning_lines": inning_lines,
     }
+
+
+def extract_boxscore_lineup(feed: dict, side: str) -> tuple:
+    """
+    Confirmed starting lineup for one side ('home'/'away') from a
+    live-feed payload's boxscore, in real batting order. MLB posts this
+    (liveData.boxscore.teams.{side}.battingOrder - a list of person IDs
+    in batting order) once the lineup is official, usually shortly
+    before first pitch - empty/absent before that.
+
+    Returns (confirmed: bool, batters: list[dict]) where each batter is
+    {"id":, "name":, "batting_order":} (1-indexed). confirmed is False
+    with an empty list if MLB hasn't posted the lineup yet.
+
+    NOTE: unverified against a live response from this sandbox (no
+    internet access here) - the battingOrder/players field shape below
+    matches MLB's documented public schema and the pattern used by
+    several open-source MLB stats tools, but confirm once running
+    somewhere with real internet access.
+    """
+    boxscore = feed.get("liveData", {}).get("boxscore", {})
+    team_box = boxscore.get("teams", {}).get(side, {})
+    batting_order_ids = team_box.get("battingOrder", [])
+    if not batting_order_ids:
+        return False, []
+
+    players = team_box.get("players", {})
+    batters = []
+    for order_idx, pid in enumerate(batting_order_ids, start=1):
+        person = players.get(f"ID{pid}", {}).get("person", {})
+        name = person.get("fullName")
+        if name:
+            batters.append({"id": pid, "name": name, "batting_order": order_idx})
+    return True, batters
+
+
+def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
+    """Real season-to-date at-bats/hits for one batter. Same endpoint
+    and field mapping as fetch_raw_batting_stats.py's
+    get_season_hitting_totals(). Returns None if this player has no
+    hitting stats this season (e.g. a pure pitcher)."""
+    resp = requests.get(
+        f"{BASE}/v1/people/{person_id}/stats",
+        params={"stats": "season", "season": season, "group": "hitting"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    stats_list = resp.json().get("stats") or []
+    if not stats_list:
+        return None
+    splits = stats_list[0].get("splits") or []
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    ab = stat.get("atBats")
+    hits = stat.get("hits")
+    if ab is None or hits is None:
+        return None
+    return {"ab": ab, "hits": hits}
+
+
+def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
+    """Real season-to-date outs recorded/hits-allowed for one pitcher.
+    Same endpoint and field mapping as fetch_raw_batting_stats.py's
+    get_season_pitching_totals()."""
+    resp = requests.get(
+        f"{BASE}/v1/people/{person_id}/stats",
+        params={"stats": "season", "season": season, "group": "pitching"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    stats_list = resp.json().get("stats") or []
+    if not stats_list:
+        return None
+    splits = stats_list[0].get("splits") or []
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    outs = stat.get("outs")
+    if outs is None:
+        ip = stat.get("inningsPitched", "0.0")
+        whole, _, frac = str(ip).partition(".")
+        outs = int(whole or 0) * 3 + int(frac or 0)
+    hits_allowed = stat.get("hits")
+    if hits_allowed is None:
+        return None
+    return {"outs": outs, "hits_allowed": hits_allowed}
+
+
+ALL_TEAM_IDS = [
+    108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+    118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
+    139, 140, 141, 142, 143, 144, 145, 146, 147, 158,
+]
+
+
+def get_team_season_hitting_totals(team_id: int, season: int) -> dict | None:
+    """This team's own real season-to-date at-bats/hits - used to
+    compute a real live league-average hit rate by summing across all
+    30 teams, rather than relying on a static/manually-set constant."""
+    resp = requests.get(
+        f"{BASE}/v1/teams/{team_id}/stats",
+        params={"stats": "season", "season": season, "group": "hitting"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    stats_list = resp.json().get("stats") or []
+    if not stats_list:
+        return None
+    splits = stats_list[0].get("splits") or []
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    ab = stat.get("atBats")
+    hits = stat.get("hits")
+    if ab is None or hits is None:
+        return None
+    return {"ab": ab, "hits": hits}

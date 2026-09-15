@@ -8,7 +8,10 @@ Background job: keeps the database in sync with upcoming MLB games.
   EVERY cycle, not just once - if the probable pitcher changes, the
   next cycle picks it up automatically. This intentionally runs right
   up until first pitch, since that's exactly when a late scratch/swap
-  would otherwise go unnoticed.
+  would otherwise go unnoticed. Also checks that game's boxscore for a
+  newly-confirmed lineup on either side (see hits_stats_sync.py), which
+  is what drives the Hits prop and the "Confirmed"/"Not Confirmed"
+  label shown for each team.
 - For any game currently "In Progress": pull the live feed every ~15s
   and update score/inning/inning-lines.
 - Once daily (end of day, see INNING_STATS_REFRESH_HOUR_UTC): log the
@@ -28,6 +31,7 @@ from apscheduler.triggers.cron import CronTrigger
 import mlb_client
 import predictor
 import inning_stats_sync
+import hits_stats_sync
 from database import SessionLocal
 from models_db import Game, InningLine, Prediction
 
@@ -95,12 +99,27 @@ def _sync_one_date(db, date_str: str):
         existing.away_probable_pitcher = g["away_probable_pitcher"]
         existing.home_probable_pitcher_id = g["home_probable_pitcher_id"]
         existing.away_probable_pitcher_id = g["away_probable_pitcher_id"]
-        existing.home_lineup_confirmed = g["home_lineup_confirmed"]
-        existing.away_lineup_confirmed = g["away_lineup_confirmed"]
         existing.status = g["status"]
 
         if existing.status in NOT_STARTED_STATUSES:
             _upsert_first_inning_prediction(db, existing, g)
+            _check_lineup_for_game(db, existing)
+
+
+def _check_lineup_for_game(db, game: Game):
+    """
+    Fetches the live-feed boxscore for a not-yet-started game and hands
+    it to hits_stats_sync to check for a newly-confirmed lineup on
+    either side. The live feed works fine pre-game (just with an empty
+    boxscore until MLB posts the lineup) - same endpoint poll_live_games
+    uses for in-progress games, just called earlier too.
+    """
+    try:
+        feed = mlb_client.get_live_feed(game.game_pk)
+    except Exception:
+        log.warning("Failed to fetch live feed for lineup check on game %s", game.game_pk)
+        return
+    hits_stats_sync.check_and_sync_lineups(db, game, feed)
 
 
 def sync_schedule(days_ahead: int = SYNC_DAYS_AHEAD):

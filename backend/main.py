@@ -198,6 +198,50 @@ def manual_refresh_inning_stats(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/games/{game_pk}/hits")
+def game_hits(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Confirmed batters (if any) for both sides of a game, each with
+    (n_ab, p) - enough for the frontend to compute "at least H hits"
+    for any H instantly, client-side, without another request per
+    threshold change. A side with no confirmed lineup yet returns an
+    empty list for that side - the frontend shows "Not Confirmed"
+    rather than a batter list in that case.
+    """
+    from models_db import LineupBatter
+    import hits_stats_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    def batters_for_side(side: str, opposing_pitcher_id):
+        rows = (
+            db.query(LineupBatter)
+            .filter_by(game_pk=game_pk, team_side=side)
+            .order_by(LineupBatter.batting_order)
+            .all()
+        )
+        out = []
+        for r in rows:
+            inputs = hits_stats_sync.compute_batter_hits_inputs(r.batter_id, r.batting_order, opposing_pitcher_id)
+            out.append({
+                "batter_name": r.batter_name,
+                "batting_order": r.batting_order,
+                "n_ab": inputs["n_ab"] if inputs else None,
+                "p": inputs["p"] if inputs else None,
+            })
+        return out
+
+    return {
+        "game_pk": game_pk,
+        "home_lineup_confirmed": game.home_lineup_confirmed,
+        "away_lineup_confirmed": game.away_lineup_confirmed,
+        "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
+        "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
+    }
+
+
 @app.get("/")
 def serve_dashboard():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))

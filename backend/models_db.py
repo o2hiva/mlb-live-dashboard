@@ -87,8 +87,53 @@ class PitcherInningStat(Base):
 
 class SyncState(Base):
     """Simple key-value store for tracking sync progress, e.g. the last
-    date successfully processed by inning_stats_sync.py."""
+    date successfully processed by inning_stats_sync.py, or the last
+    time the live league-average hit rate was recomputed."""
     __tablename__ = "sync_state"
 
     key = Column(String, primary_key=True)
     value = Column(String)
+
+
+class LineupBatter(Base):
+    """One confirmed starting batter for one game/side, in real batting
+    order. Populated once MLB posts the official lineup (see
+    mlb_client.extract_boxscore_lineup) - rows for a game/side are
+    replaced wholesale each time that side's lineup is (re-)confirmed,
+    not accumulated, so this always reflects the latest known lineup."""
+    __tablename__ = "lineup_batters"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    game_pk = Column(Integer, ForeignKey("games.game_pk"), index=True)
+    team_side = Column(String)  # "home" / "away"
+    batter_id = Column(Integer, index=True)
+    batter_name = Column(String)
+    batting_order = Column(Integer)  # 1-9
+
+
+class BatterSeasonStat(Base):
+    """Real season-to-date at-bats/hits for one batter, keyed by MLB's
+    own person id (not name) - sidesteps the real name-collision cases
+    your own fetch script already had to handle (e.g. two different
+    "Max Muncy"s on two different teams)."""
+    __tablename__ = "batter_season_stats"
+
+    batter_id = Column(Integer, primary_key=True)
+    batter_name = Column(String)
+    ab = Column(Integer, default=0)
+    hits = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PitcherHitsStat(Base):
+    """Real season-to-date outs recorded/hits-allowed for one pitcher,
+    keyed by person id - used by the Hits model's pitcher-shrinkage
+    term. Separate from PitcherInningStat (different data, different
+    model) even though both describe the same pitcher."""
+    __tablename__ = "pitcher_hits_stats"
+
+    pitcher_id = Column(Integer, primary_key=True)
+    pitcher_name = Column(String)
+    outs = Column(Integer, default=0)
+    hits_allowed = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
