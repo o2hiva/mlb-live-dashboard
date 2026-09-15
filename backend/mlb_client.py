@@ -8,7 +8,8 @@ citizen: don't poll faster than every ~10-15 seconds per live game.
 Endpoints used:
   - Schedule:  https://statsapi.mlb.com/api/v1/schedule
   - Live feed: https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live
-    (also carries the boxscore, including confirmed starting lineups)
+  - Boxscore:  https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore
+    (confirmed starting lineups - see extract_boxscore_lineup)
   - Person stats: https://statsapi.mlb.com/api/v1/people/{id}/stats
   - Team stats:   https://statsapi.mlb.com/api/v1/teams/{id}/stats
 
@@ -132,38 +133,53 @@ def extract_linescore(feed: dict) -> dict:
     }
 
 
-def extract_boxscore_lineup(feed: dict, side: str) -> tuple:
+def get_boxscore(game_pk: int) -> dict:
     """
-    Confirmed starting lineup for one side ('home'/'away') from a
-    live-feed payload's boxscore, in real batting order. MLB posts this
-    (liveData.boxscore.teams.{side}.battingOrder - a list of person IDs
-    in batting order) once the lineup is official, usually shortly
-    before first pitch - empty/absent before that.
+    Dedicated boxscore endpoint - verified working shape/endpoint,
+    ported from a previously-working script (fill_lineups.py's own
+    get_confirmed_lineup()) rather than guessed at.
+    """
+    url = f"{BASE}/v1/game/{game_pk}/boxscore"
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def extract_boxscore_lineup(boxscore: dict, side: str) -> tuple:
+    """
+    Confirmed starting lineup for one side ('home'/'away'), ported
+    verbatim from fill_lineups.py's get_confirmed_lineup() - MLB marks
+    each player's spot with a "battingOrder" STRING like "100", "200",
+    ..., "900" (first digit = batting order 1-9; trailing "00" means
+    the ORIGINAL starter in that spot, as opposed to a mid-game
+    substitute who'd show "101", "102", etc.). Confirmed working
+    against real live data in that script - this is not a guess.
 
     Returns (confirmed: bool, batters: list[dict]) where each batter is
-    {"id":, "name":, "batting_order":} (1-indexed). confirmed is False
-    with an empty list if MLB hasn't posted the lineup yet.
-
-    NOTE: unverified against a live response from this sandbox (no
-    internet access here) - the battingOrder/players field shape below
-    matches MLB's documented public schema and the pattern used by
-    several open-source MLB stats tools, but confirm once running
-    somewhere with real internet access.
+    {"id":, "name":, "batting_order":} (1-indexed, sorted). confirmed
+    is False with an empty list if MLB hasn't posted the lineup yet
+    (no player in this boxscore has an "00" batting order yet).
     """
-    boxscore = feed.get("liveData", {}).get("boxscore", {})
     team_box = boxscore.get("teams", {}).get(side, {})
-    batting_order_ids = team_box.get("battingOrder", [])
-    if not batting_order_ids:
+    players = team_box.get("players", {})
+
+    starters = []
+    for pdata in players.values():
+        order = pdata.get("battingOrder")
+        if order and str(order).endswith("00"):
+            person = pdata.get("person", {})
+            starters.append((int(order), person.get("id"), person.get("fullName")))
+
+    if not starters:
         return False, []
 
-    players = team_box.get("players", {})
-    batters = []
-    for order_idx, pid in enumerate(batting_order_ids, start=1):
-        person = players.get(f"ID{pid}", {}).get("person", {})
-        name = person.get("fullName")
-        if name:
-            batters.append({"id": pid, "name": name, "batting_order": order_idx})
-    return True, batters
+    starters.sort(key=lambda x: x[0])
+    batters = [
+        {"id": pid, "name": name, "batting_order": order // 100}
+        for order, pid, name in starters
+        if pid and name
+    ]
+    return (True, batters) if batters else (False, [])
 
 
 def get_season_hitting_totals(person_id: int, season: int) -> dict | None:

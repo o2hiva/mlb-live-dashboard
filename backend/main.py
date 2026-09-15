@@ -242,6 +242,41 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/debug/boxscore/{game_pk}")
+def debug_boxscore(game_pk: int):
+    """
+    Diagnostic: shows the raw boxscore data for one game against the
+    now-corrected parsing logic (ported from a previously-working
+    script, fill_lineups.py, rather than guessed) - each player's
+    battingOrder string and whether it's read as a confirmed starter.
+    """
+    import mlb_client
+
+    boxscore = mlb_client.get_boxscore(game_pk)
+
+    def summarize_side(side: str):
+        team_box = boxscore.get("teams", {}).get(side, {})
+        players = team_box.get("players", {})
+        player_orders = [
+            {"key": k, "battingOrder": v.get("battingOrder"),
+             "name": v.get("person", {}).get("fullName")}
+            for k, v in players.items()
+        ]
+        confirmed, batters = mlb_client.extract_boxscore_lineup(boxscore, side)
+        return {
+            "players_dict_size": len(players),
+            "player_batting_orders": player_orders,
+            "extracted_confirmed": confirmed,
+            "extracted_batters": batters,
+        }
+
+    return {
+        "game_pk": game_pk,
+        "home": summarize_side("home"),
+        "away": summarize_side("away"),
+    }
+
+
 @app.get("/")
 def serve_dashboard():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))

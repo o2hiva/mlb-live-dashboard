@@ -108,18 +108,17 @@ def _sync_one_date(db, date_str: str):
 
 def _check_lineup_for_game(db, game: Game):
     """
-    Fetches the live-feed boxscore for a not-yet-started game and hands
-    it to hits_stats_sync to check for a newly-confirmed lineup on
-    either side. The live feed works fine pre-game (just with an empty
-    boxscore until MLB posts the lineup) - same endpoint poll_live_games
-    uses for in-progress games, just called earlier too.
+    Fetches the dedicated boxscore endpoint for a not-yet-started game
+    and hands it to hits_stats_sync to check for a newly-confirmed
+    lineup on either side. Cheap no-op before MLB posts the lineup
+    (boxscore comes back with no player marked as a starter yet).
     """
     try:
-        feed = mlb_client.get_live_feed(game.game_pk)
+        boxscore = mlb_client.get_boxscore(game.game_pk)
     except Exception:
-        log.warning("Failed to fetch live feed for lineup check on game %s", game.game_pk)
+        log.warning("Failed to fetch boxscore for lineup check on game %s", game.game_pk)
         return
-    hits_stats_sync.check_and_sync_lineups(db, game, feed)
+    hits_stats_sync.check_and_sync_lineups(db, game, boxscore)
 
 
 def sync_schedule(days_ahead: int = SYNC_DAYS_AHEAD):

@@ -5,7 +5,7 @@ hits_probability_shrinkage_adjusted.
 
 Three pieces:
   1. Lineup detection (check_and_sync_lineups) - once MLB posts a
-     game's official lineup (via the live-feed boxscore, see
+     game's official lineup (via the dedicated boxscore endpoint, see
      mlb_client.extract_boxscore_lineup), records the 9 confirmed
      batters and fetches each one's + the opposing pitcher's real
      season stats.
@@ -137,11 +137,11 @@ def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str):
         row.hits_allowed = totals["hits_allowed"]
 
 
-def check_and_sync_lineups(db, game: Game, feed: dict):
+def check_and_sync_lineups(db, game: Game, boxscore: dict):
     """
-    Checks one game's live-feed boxscore for a newly-confirmed lineup on
-    either side. If found: replaces that side's LineupBatter rows and
-    syncs real season stats for each of the 9 batters plus the opposing
+    Checks one game's boxscore for a newly-confirmed lineup on either
+    side. If found: replaces that side's LineupBatter rows and syncs
+    real season stats for each of the 9 batters plus the opposing
     starting pitcher. Call this once per not-yet-started game per sync
     cycle (see poller.py) - cheap no-op once a side is already confirmed
     and its stats are fresh (within STAT_STALE_AFTER).
@@ -154,7 +154,7 @@ def check_and_sync_lineups(db, game: Game, feed: dict):
         ("home", game.away_probable_pitcher_id, game.away_probable_pitcher, "home_lineup_confirmed"),
         ("away", game.home_probable_pitcher_id, game.home_probable_pitcher, "away_lineup_confirmed"),
     ):
-        confirmed, batters = mlb_client.extract_boxscore_lineup(feed, side)
+        confirmed, batters = mlb_client.extract_boxscore_lineup(boxscore, side)
         was_confirmed = getattr(game, confirmed_flag_attr)
         setattr(game, confirmed_flag_attr, confirmed)
 
