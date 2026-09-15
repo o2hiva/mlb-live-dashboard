@@ -1,0 +1,5 @@
+backend/venv/
+backend/mlb_dashboard.db
+backend/__pycache__/
+*.pyc
+venv/
