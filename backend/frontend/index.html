@@ -272,7 +272,7 @@
   function batterRowHtml(b, h) {
     const hiStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
     if (b.n_ab == null || b.p == null) {
-      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span class="hits-na">Not enough data</span></div>`;
+      return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span class="hits-na">N/A</span></div>`;
     }
     const pct = Math.round(probAtLeastHits(b.n_ab, b.p, h) * 100);
     return `<div class="hits-batter"><span>${b.batting_order}. ${b.batter_name}</span><span class="hits-index">HI ${hiStr}</span><span>${pct}%</span></div>`;
