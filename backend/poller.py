@@ -95,6 +95,8 @@ def _sync_one_date(db, date_str: str):
         existing.away_probable_pitcher = g["away_probable_pitcher"]
         existing.home_probable_pitcher_id = g["home_probable_pitcher_id"]
         existing.away_probable_pitcher_id = g["away_probable_pitcher_id"]
+        existing.home_lineup_confirmed = g["home_lineup_confirmed"]
+        existing.away_lineup_confirmed = g["away_lineup_confirmed"]
         existing.status = g["status"]
 
         if existing.status in NOT_STARTED_STATUSES:

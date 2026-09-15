@@ -48,6 +48,8 @@
   .prob-bar-fill { background: var(--accent); height: 100%; }
   .prob-value { margin-top: 6px; font-size: 0.9rem; }
   .pitchers { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .lineup-status { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+  .lineup-status.confirmed { color: var(--accent); }
   .empty { color: var(--muted); }
 </style>
 </head>
@@ -130,6 +132,16 @@
       statusLabel = g.status;
     }
 
+    // Lineup confirmation only means anything before the game starts -
+    // once it's live or final, the lineup was necessarily confirmed.
+    const showLineupStatus = !isLive && !isFinal;
+    function lineupLabel(confirmed) {
+      if (!showLineupStatus) return "";
+      return confirmed
+        ? '<span class="lineup-status confirmed">Confirmed</span>'
+        : '<span class="lineup-status">Not Confirmed</span>';
+    }
+
     return `
       <div class="card">
         <div class="meta">
@@ -137,11 +149,11 @@
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
         <div class="teams">
-          <span>${g.away_team}</span>
+          <span>${g.away_team} ${lineupLabel(g.away_lineup_confirmed)}</span>
           <span class="score">${g.away_score ?? "-"}</span>
         </div>
         <div class="teams">
-          <span>${g.home_team}</span>
+          <span>${g.home_team} ${lineupLabel(g.home_lineup_confirmed)}</span>
           <span class="score">${g.home_score ?? "-"}</span>
         </div>
         <div class="pitchers">

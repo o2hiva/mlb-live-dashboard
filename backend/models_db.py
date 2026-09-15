@@ -20,6 +20,8 @@ class Game(Base):
     away_probable_pitcher = Column(String, nullable=True)
     home_probable_pitcher_id = Column(Integer, nullable=True)
     away_probable_pitcher_id = Column(Integer, nullable=True)
+    home_lineup_confirmed = Column(Boolean, default=False)
+    away_lineup_confirmed = Column(Boolean, default=False)
     status = Column(String)  # Preview / Live / Final / etc.
     home_score = Column(Integer, default=0)
     away_score = Column(Integer, default=0)

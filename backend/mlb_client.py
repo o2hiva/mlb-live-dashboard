@@ -26,7 +26,13 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
     """Return today's (or a given date's) MLB games with basic status info."""
     game_date = game_date or date.today().isoformat()
     url = f"{BASE}/v1/schedule"
-    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team"}
+    # "lineups" hydration returns the OFFICIAL starting lineup once MLB
+    # has posted it (usually shortly before first pitch) - present as
+    # game["lineups"]["homePlayers"]/["awayPlayers"] when confirmed,
+    # absent/empty before that. NOTE: unverified against a live response
+    # from this sandbox (see module docstring) - confirm the field shape
+    # once running somewhere with real internet access.
+    params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team,lineups"}
     resp = requests.get(url, params=params, timeout=TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
@@ -37,6 +43,7 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
             teams = g.get("teams", {})
             home = teams.get("home", {})
             away = teams.get("away", {})
+            lineups = g.get("lineups", {})
             games.append({
                 "game_pk": g["gamePk"],
                 "game_date": game_date,
@@ -52,6 +59,8 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
                 "away_probable_pitcher": away.get("probablePitcher", {}).get("fullName"),
                 "home_probable_pitcher_id": home.get("probablePitcher", {}).get("id"),
                 "away_probable_pitcher_id": away.get("probablePitcher", {}).get("id"),
+                "home_lineup_confirmed": bool(lineups.get("homePlayers")),
+                "away_lineup_confirmed": bool(lineups.get("awayPlayers")),
             })
     return games
 
