@@ -161,6 +161,7 @@
   const API_BASE = "";
 
   const REFRESH_MS = 10000;
+  let lastFetchedGames = [];
 
   function todayIso() {
     const d = new Date();
@@ -176,6 +177,7 @@
     try {
       const res = await fetch(`${API_BASE}/api/games/today?game_date=${selectedDate}`);
       const games = await res.json();
+      lastFetchedGames = games;
       render(games);
       document.getElementById("status-line").textContent =
         `Showing ${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
@@ -264,6 +266,12 @@
             </div>
             <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.9rem;">
               <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
+            </div>
+            <div class="hits-batter hits-batter-header" style="grid-template-columns: 46px 52px 30px 60px 60px 40px; margin-top:10px;">
+              <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+            </div>
+            <div class="hits-batter" style="grid-template-columns: 46px 52px 30px 60px 60px 40px;">
+              ${firstInningBetRowCellsHtml(g.game_pk, yesPct, noPct)}
             </div>
           </div>` : ""}
         ${(g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
@@ -389,6 +397,93 @@
     return wager * (1 - m) / m;
   }
 
+  // ---- 1st-inning market: same betting mechanics as Hits, but one row
+  // per GAME (not per batter) since it's a single game-level probability. ----
+  const firstInningBetState = {};
+
+  function getFirstInningBetState(gamePk) {
+    if (!firstInningBetState[gamePk]) {
+      firstInningBetState[gamePk] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return firstInningBetState[gamePk];
+  }
+
+  function updateFirstInningBetField(gamePk, field, value) {
+    const state = getFirstInningBetState(gamePk);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    render(lastFetchedGames); // cheap - rebuilds from already-fetched data, no network call
+  }
+
+  async function toggleFirstInningTrack(gamePk, checked, modelProb, marketPct, wager, profit) {
+    const state = getFirstInningBetState(gamePk);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "first_inning_run", batter_name: "1st Inning Run",
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    render(lastFetchedGames);
+  }
+
+  function firstInningBetRowCellsHtml(gamePk, yesPct, noPct) {
+    const state = getFirstInningBetState(gamePk);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `fi-${gamePk}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
+           onchange="updateFirstInningBetField(${gamePk},'manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},this.checked,${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <select id="yn-${idBase}" onchange="updateFirstInningBetField(${gamePk},'yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
+        onchange="updateFirstInningBetField(${gamePk},'market',this.value)" />
+      <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
+        onchange="updateFirstInningBetField(${gamePk},'useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleFirstInningTrack(${trackArgs})" />
+    `;
+  }
+
   async function toggleTrack(gamePk, side, batterId, checked, batterName, battingOrder, h, modelProb, marketPct, wager, profit) {
     const state = getBetState(gamePk, side, batterId);
     if (checked) {
@@ -397,7 +492,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            game_pk: gamePk, batter_id: batterId, batter_name: batterName,
+            game_pk: gamePk, bet_type: "hits", batter_id: batterId, batter_name: batterName,
             team_side: side, batting_order: battingOrder, hits_threshold: h,
             yn: state.yn, model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
@@ -583,7 +678,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.hits_threshold}+</span>
+          <span>${b.bet_type === "hits" ? b.hits_threshold + "+" : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           <span class="tracked-bet-remove" onclick="removeTrackedBet(${b.id})">Remove</span>

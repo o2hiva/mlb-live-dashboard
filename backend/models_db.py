@@ -114,22 +114,29 @@ class BetTrackerSettings(Base):
 
 
 class TrackedBet(Base):
-    """A Hits bet you've flagged with the 'Track' checkbox - a snapshot
-    of the bet as it looked at the moment you checked it (market %,
-    wager, potential profit, model probability), so it can later be
-    graded against what actually happened. Grading itself (comparing
-    actual_hits to hits_threshold, filling in result) is a planned
+    """A bet you've flagged with a 'Track' checkbox (from the Hits table
+    or the 1st-inning market) - a snapshot of the bet as it looked at
+    the moment you checked it (market %, wager, potential profit, model
+    probability), for a future end-of-day job to grade against what
+    actually happened. Grading itself (comparing actual_hits/the actual
+    1st-inning result to what was bet, filling in result) is a planned
     end-of-day job, not implemented yet - this table is just the record
-    that job will eventually read and update."""
+    that job will eventually read and update.
+
+    bet_type distinguishes "hits" (batter-level, uses batter_id/
+    team_side/batting_order/hits_threshold) from "first_inning_run"
+    (game-level, those fields are null - batter_name holds a display
+    label like "1st Inning Run" instead of an actual player name)."""
     __tablename__ = "tracked_bets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     game_pk = Column(Integer, ForeignKey("games.game_pk"), index=True)
-    batter_id = Column(Integer)
-    batter_name = Column(String)
-    team_side = Column(String)  # "home" / "away"
-    batting_order = Column(Integer)
-    hits_threshold = Column(Integer)  # the "at least H hits" selected when tracked
+    bet_type = Column(String, default="hits")  # "hits" or "first_inning_run"
+    batter_id = Column(Integer, nullable=True)
+    batter_name = Column(String)  # batter's name for "hits" bets, a display label (e.g. "1st Inning Run") otherwise
+    team_side = Column(String, nullable=True)  # "home" / "away" - only meaningful for "hits" bets
+    batting_order = Column(Integer, nullable=True)
+    hits_threshold = Column(Integer, nullable=True)  # the "at least H hits" selected - only for "hits" bets
     yn = Column(String)  # "yes" / "no"
     model_probability = Column(Float)
     market_probability = Column(Float)  # stored as a percent (0-100), matching what's typed into the Market box

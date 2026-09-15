@@ -51,6 +51,7 @@ _ensure_column("bet_tracker_settings", "polymarket_balance", "FLOAT DEFAULT 0.0"
 _ensure_column("bet_tracker_settings", "novig_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "fanduel_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "draftkings_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("tracked_bets", "bet_type", "VARCHAR DEFAULT 'hits'")
 
 _scheduler = None
 
@@ -373,11 +374,12 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
 
 class TrackedBetCreate(BaseModel):
     game_pk: int
-    batter_id: int
+    bet_type: str = "hits"  # "hits" or "first_inning_run"
+    batter_id: int | None = None
     batter_name: str
-    team_side: str
-    batting_order: int
-    hits_threshold: int
+    team_side: str | None = None
+    batting_order: int | None = None
+    hits_threshold: int | None = None
     yn: str
     model_probability: float | None = None
     market_probability: float | None = None
@@ -433,6 +435,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
         game = db.get(Game, r.game_pk)
         out.append({
             "id": r.id,
+            "bet_type": r.bet_type,
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "matchup": f"{game.away_team} @ {game.home_team}" if game else "Unknown matchup",
