@@ -956,8 +956,8 @@
     outerContainer.innerHTML = `
       <div class="lineup-tabs">
         <span class="lineup-tab ${tab === "hits" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hits')">Hits</span>
-        <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
+        <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
     `;
