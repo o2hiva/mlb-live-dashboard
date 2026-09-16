@@ -1,22 +1,31 @@
 """
 HRR (Hits+Runs+RBI) prop - ported from core.py's
-hrr_probability_shrinkage_adjusted, using the SAME lineup/batter/pitcher
-data hits_stats_sync.py already keeps in sync (this file just reads it -
-no separate lineup-detection or fetch loop of its own).
+hrr_probability_shrinkage_adjusted + hrr_probability_negbinom_4term,
+using the SAME lineup/batter/pitcher data hits_stats_sync.py already
+keeps in sync (this file just reads it - no separate lineup-detection
+or fetch loop of its own).
 
-The model treats total HRR production as approximately Normal (not
-binomial like Hits), built from three components - see core.py's own
-hrr_probability() docstring for the full explanation:
+DISTRIBUTION: Negative Binomial, NOT Normal - confirmed against 497
+real tracked outcomes (25.6% were exactly zero; a Normal built from
+this formula's own mean/variance predicted only ~4.6% chance of zero,
+over 5x too low - backtested z=-5.18, severely miscalibrated). Negative
+Binomial with overdispersion=2.09 backtested at z=-0.07, the
+best-calibrated result in the whole system. Implemented here via
+math.lgamma (standard library) rather than scipy.stats.nbinom, to
+avoid a large/slow dependency for one function - mathematically
+identical.
+
+FOUR TERMS, not three:
   1. Your own hit production over your expected at-bats.
-  2. You reach base, then the next 3 lineup spots drive you in (a "run").
-  3. The previous 3 lineup spots reach base, you drive them in with a hit
-     (an "RBI").
+  2. You reach base, the next 3 lineup spots drive you in (a "run").
+  3. The previous 3 lineup spots reach base, you drive them in (an "RBI").
+  4. Your own guaranteed self-driven run via home run - the original
+     3-term model had NO mechanism for this at all.
 
 Needs three extra league-average rates beyond Hits' single LA_B9 (hit
-rate): on-base rate, HR rate, and walk rate - computed live the same
-way (summed real counts across all 30 teams), same as Hits did for its
-one rate. Also needs the ballpark RUN factor (W17) alongside the HIT
-factor (X17) Hits alone uses - see ballpark_factors.py.
+rate): on-base rate, HR rate, and a runs-allowed rate (for the real
+Pitcher HRR+ index) - all computed live the same way Hits' one rate is
+(summed real counts across all 30 teams).
 """
 import logging
 import math
@@ -42,6 +51,10 @@ HITS_SHRINKAGE_K = 1200
 HR_SHRINKAGE_K = 400
 WALKS_SHRINKAGE_K = 250
 
+# Validated overdispersion for the Negative Binomial fit - verbatim
+# from core.py's hrr_probability_negbinom_4term default.
+OVERDISPERSION = 2.09
+
 STAT_STALE_AFTER = timedelta(hours=24)
 LEAGUE_RATES_DATE_KEY = "hrr_league_rates_computed_at"
 
@@ -52,38 +65,45 @@ def _excel_round(x, digits=0):
     return math.floor(x * factor + 0.5) / factor if x >= 0 else math.ceil(x * factor - 0.5) / factor
 
 
-def _norm_cdf(x: float, mean: float, sd: float) -> float:
+def _nbinom_sf(threshold_int: int, r: float, p: float) -> float:
     """
-    Standard normal CDF via the math library's erf function - avoids
-    adding scipy (a large, slow-to-install dependency) just for this
-    one call. Mathematically identical to scipy.stats.norm.cdf.
+    1 - CDF(threshold_int) for a Negative Binomial(r, p) - r ("number of
+    successes") is continuous here, not integer, so the PMF uses the
+    Gamma function generalization of the binomial coefficient rather
+    than a factorial-based one. Verbatim math to scipy.stats.nbinom,
+    just computed via math.lgamma instead of importing scipy.
     """
-    if sd <= 0:
-        return 1.0 if x < mean else 0.0
-    z = (x - mean) / (sd * math.sqrt(2))
-    return 0.5 * (1 + math.erf(z))
+    if r <= 0 or p <= 0 or p >= 1:
+        return 0.0
+    log_p, log_1mp = math.log(p), math.log(1 - p)
+    cdf = 0.0
+    for k in range(threshold_int + 1):
+        log_pmf = math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1) + r * log_p + k * log_1mp
+        cdf += math.exp(log_pmf)
+    return max(0.0, min(1.0, 1 - cdf))
 
 
 def get_league_hrr_rates() -> dict:
     """
-    Returns {"obp":, "hr_rate":, "walk_rate":} - real, live-computed
-    league averages (summed across all 30 teams), recomputed at most
-    once every 24h. LA_B9 (hit rate) is intentionally NOT duplicated
-    here - reuses hits_stats_sync.get_league_average_hit_rate()'s own
-    cache instead of a second copy of the same number.
+    Returns {"obp":, "hr_rate":, "walk_rate":, "runs_allowed_rate":} -
+    real, live-computed league averages (summed across all 30 teams),
+    recomputed at most once every 24h. LA_B9 (hit rate) is intentionally
+    NOT duplicated here - reuses hits_stats_sync.get_league_average_hit_rate()'s
+    own cache instead of a second copy of the same number.
     """
     db = SessionLocal()
     try:
         date_row = db.get(SyncState, LEAGUE_RATES_DATE_KEY)
+        keys = ("obp", "hr_rate", "walk_rate", "runs_allowed_rate")
         if date_row:
             computed_at = datetime.fromisoformat(date_row.value)
             if datetime.utcnow() - computed_at < STAT_STALE_AFTER:
                 rates = {}
-                for key in ("obp", "hr_rate", "walk_rate"):
+                for key in keys:
                     row = db.get(SyncState, f"league_avg_{key}")
                     if row:
                         rates[key] = float(row.value)
-                if len(rates) == 3:
+                if len(rates) == len(keys):
                     return rates
 
         total_ab, total_hits, total_hr, total_bb = 0, 0, 0, 0
@@ -98,14 +118,26 @@ def get_league_hrr_rates() -> dict:
                 total_hr += totals["hr"]
                 total_bb += totals["bb"]
 
+        total_pitch_outs, total_runs_allowed = 0, 0
+        for team_id in mlb_client.ALL_TEAM_IDS:
+            try:
+                totals = mlb_client.get_team_season_pitching_totals(team_id, SEASON)
+            except Exception:
+                continue
+            if totals:
+                total_pitch_outs += totals["outs"]
+                total_runs_allowed += totals["runs_allowed"]
+
         if total_ab == 0:
-            return {"obp": 0.32, "hr_rate": 0.032, "walk_rate": 0.085}
+            return {"obp": 0.32, "hr_rate": 0.032, "walk_rate": 0.085, "runs_allowed_rate": 0.12}
 
         pa = total_ab + total_bb
+        total_batters_faced = total_pitch_outs / 3 * 4.3 if total_pitch_outs > 0 else 0
         rates = {
             "obp": (total_hits + total_bb) / pa if pa > 0 else 0.32,
             "hr_rate": total_hr / total_ab,
             "walk_rate": total_bb / pa if pa > 0 else 0.085,
+            "runs_allowed_rate": total_runs_allowed / total_batters_faced if total_batters_faced > 0 else 0.12,
         }
         for key, val in rates.items():
             row = db.get(SyncState, f"league_avg_{key}")
@@ -121,7 +153,7 @@ def get_league_hrr_rates() -> dict:
         return rates
     except Exception:
         log.exception("get_league_hrr_rates failed - using fallback")
-        return {"obp": 0.32, "hr_rate": 0.032, "walk_rate": 0.085}
+        return {"obp": 0.32, "hr_rate": 0.032, "walk_rate": 0.085, "runs_allowed_rate": 0.12}
     finally:
         db.close()
 
@@ -170,10 +202,11 @@ def _lineup_neighbors(db, game_pk: int, team_side: str, batting_order: int):
 
 def get_pitcher_hrr_index(pitcher_id: int | None) -> float | None:
     """
-    Standalone version of the pitcher-side HRR index (doesn't require a
-    batter) - used for the game-card header, same role as Hits'
-    get_pitcher_hit_index(). A blend of this pitcher's HR-allowed and
-    hits-allowed rates vs. league average, shown regardless of sample size.
+    The REAL "Pitcher HRR+" index from core.py: a weighted average of
+    the pitcher's four "allowed" factors - Walks, Hits, Runs, and HR -
+    with HR double-weighted (a HR always guarantees a hit, a run, AND
+    at least one RBI simultaneously). Divided by 5 (1+1+1+2 weight units).
+    Shown regardless of sample size (purely informational).
     """
     if not pitcher_id:
         return None
@@ -182,14 +215,46 @@ def get_pitcher_hrr_index(pitcher_id: int | None) -> float | None:
         pitcher = db.get(PitcherHitsStat, pitcher_id)
         if not pitcher or pitcher.outs <= 0:
             return None
+
+        la_b9 = hits_stats_sync.get_league_average_hit_rate()
+        hrr_rates = get_league_hrr_rates()
+        la_b11, la_b12 = hrr_rates["hr_rate"], hrr_rates["walk_rate"]
+        la_runs_allowed = hrr_rates["runs_allowed_rate"]
+
+        pbf = pitcher.outs / 3 * 4.3
+        walks_factor = (pitcher.bb_allowed / pbf) / la_b12 if la_b12 > 0 else None
+        hits_factor = (pitcher.hits_allowed / pbf) / la_b9 if la_b9 > 0 else None
+        hr_factor = (pitcher.hr_allowed / pbf) / la_b11 if la_b11 > 0 else None
+        runs_factor = (pitcher.runs_allowed / pbf) / la_runs_allowed if la_runs_allowed > 0 else None
+
+        if None in (walks_factor, hits_factor, hr_factor, runs_factor):
+            return None
+        return (walks_factor + hits_factor + runs_factor + 2 * hr_factor) / 5
+    finally:
+        db.close()
+
+
+def get_batter_hrr_index(batter_id: int) -> float | None:
+    """
+    core.py's own file only defines a composite "HRR+" index for
+    PITCHERS - there's no equivalent batter-side formula to port
+    faithfully. This is an analogous construction (Hits + 2x HR
+    factors, same HR-double-weighting logic), NOT something pulled
+    from your validated system - flagged here in case you want it
+    changed to match a specific intent.
+    """
+    db = SessionLocal()
+    try:
+        batter = db.get(BatterSeasonStat, batter_id)
+        if not batter or batter.ab <= 0:
+            return None
         la_b9 = hits_stats_sync.get_league_average_hit_rate()
         la_b11 = get_league_hrr_rates()["hr_rate"]
-        pbf = pitcher.outs / 3 * 4.3
-        pitcher_hr_rate = (pitcher.hr_allowed / pbf) / la_b11 if la_b11 > 0 else None
-        pitcher_hits_rate = (pitcher.hits_allowed / pbf) / la_b9 if la_b9 > 0 else None
-        if pitcher_hr_rate is None or pitcher_hits_rate is None:
+        if la_b11 <= 0:
             return None
-        return 0.5 * pitcher_hr_rate + 0.5 * pitcher_hits_rate
+        hits_factor = (batter.hits / batter.ab) / la_b9
+        hr_factor = (batter.hr / batter.ab) / la_b11
+        return (hits_factor + 2 * hr_factor) / 3
     finally:
         db.close()
 
@@ -197,17 +262,12 @@ def get_pitcher_hrr_index(pitcher_id: int | None) -> float | None:
 def compute_hrr_inputs(batter_id: int, batting_order: int, pitcher_id: int | None,
                         home_team: str | None, game_pk: int, team_side: str) -> dict | None:
     """
-    Returns {"mean":, "sd":, "batter_hrr_index":, "pitcher_hrr_index":}
-    for one batter. mean/sd are None if there isn't enough real sample
-    yet (same 20 AB / 30 outs gates as Hits) - the frontend computes
-    "P(HRR >= line)" for any line instantly from (mean, sd) via a normal
-    CDF, the same way Hits computes "at least H hits" from (n_ab, p) via
-    a binomial - no server round-trip needed when the line changes.
-
-    batter_hrr_index / pitcher_hrr_index are shown regardless of sample
-    size (purely informational, like Hits' own hit_index) - a blend of
-    HR rate and hit rate, matching the formula's own 0.5/0.5 weighting
-    for the HRR-specific factor (own_hrr_factor in core.py).
+    Returns {"r":, "p":, "batter_hrr_index":, "pitcher_hrr_index":} for
+    one batter - r/p are the Negative Binomial parameters, None if
+    there isn't enough real sample yet (same 20 AB / 30 outs gates as
+    Hits). The frontend computes "P(HRR >= line)" for any line
+    instantly from (r, p) via a Negative Binomial survival function -
+    same "compute once, adjust instantly client-side" pattern Hits uses.
 
     Returns None only if there's no batter data at all yet.
     """
@@ -217,33 +277,27 @@ def compute_hrr_inputs(batter_id: int, batting_order: int, pitcher_id: int | Non
         if not batter:
             return None
 
+        batter_hrr_index = get_batter_hrr_index(batter_id)
+        pitcher_hrr_index = get_pitcher_hrr_index(pitcher_id)
+
         la_b9 = hits_stats_sync.get_league_average_hit_rate()
         hrr_rates = get_league_hrr_rates()
-        la_b10, la_b11, la_b12 = hrr_rates["obp"], hrr_rates["hr_rate"], hrr_rates["walk_rate"]
-
-        batter_hr_rate = (batter.hr / batter.ab) / la_b11 if batter.ab > 0 and la_b11 > 0 else None
-        batter_hits_rate = (batter.hits / batter.ab) / la_b9 if batter.ab > 0 else None
-        batter_hrr_index = None
-        if batter_hr_rate is not None and batter_hits_rate is not None:
-            batter_hrr_index = 0.5 * batter_hr_rate + 0.5 * batter_hits_rate
+        la_b10, la_b11 = hrr_rates["obp"], hrr_rates["hr_rate"]
+        la_b12 = hrr_rates["walk_rate"]
 
         pitcher = db.get(PitcherHitsStat, pitcher_id) if pitcher_id else None
-        pitcher_hrr_index = None
-        if pitcher and pitcher.outs > 0:
-            pbf = pitcher.outs / 3 * 4.3
-            pitcher_hr_rate = (pitcher.hr_allowed / pbf) / la_b11 if la_b11 > 0 else None
-            pitcher_hits_rate = (pitcher.hits_allowed / pbf) / la_b9 if la_b9 > 0 else None
-            if pitcher_hr_rate is not None and pitcher_hits_rate is not None:
-                pitcher_hrr_index = 0.5 * pitcher_hr_rate + 0.5 * pitcher_hits_rate
 
-        mean, sd = None, None
-        if pitcher and batter.ab >= MIN_BATTER_AB and pitcher.outs >= MIN_PITCHER_OUTS and la_b9 > 0 and la_b10 > 0:
+        r, p = None, None
+        if pitcher and batter.ab >= MIN_BATTER_AB and pitcher.outs >= MIN_PITCHER_OUTS and la_b9 > 0 and la_b10 > 0 and la_b11 > 0:
             pitcher_batters_faced = pitcher.outs / 3 * 4.3
-            ballpark = ballpark_factors.get_ballpark_factors(home_team) if home_team else {"runs": 1.0, "hits": 1.0}
+            # Y17: real HR-specific ballpark factor, now available.
+            ballpark = ballpark_factors.get_ballpark_factors(home_team) if home_team else {"runs": 1.0, "hits": 1.0, "hr": 1.0}
+            y17 = ballpark.get("hr", 1.0)
 
             shrunk_F = _shrunk_factor(batter.hits, batter.ab, la_b9, HITS_SHRINKAGE_K)
             shrunk_H = _shrunk_factor(batter.hr, batter.ab, la_b11, HR_SHRINKAGE_K)
             shrunk_pitcher_factor = _shrunk_factor(pitcher.hits_allowed, pitcher_batters_faced, la_b9, HITS_SHRINKAGE_K)
+            shrunk_pitcher_hr = _shrunk_factor(pitcher.hr_allowed, pitcher_batters_faced, la_b11, HR_SHRINKAGE_K)
             shrunk_E = _shrunk_factor(batter.bb, batter.ab, la_b12, WALKS_SHRINKAGE_K)
             pitcher_walks_factor = _shrunk_factor(pitcher.bb_allowed, pitcher_batters_faced, la_b12, WALKS_SHRINKAGE_K)
 
@@ -252,39 +306,44 @@ def compute_hrr_inputs(batter_id: int, batting_order: int, pitcher_id: int | Non
             p_own_hit = la_b9 * shrunk_F * shrunk_pitcher_factor * ballpark["hits"]
             p_own_onbase = la_b10 * (0.5 * shrunk_F + 0.5 * shrunk_E * pitcher_walks_factor)
             own_hrr_factor = 0.5 * shrunk_H + 0.5 * shrunk_F
+            p_own_hr = la_b11 * shrunk_H * shrunk_pitcher_hr * y17
 
             next3_rows, prev3_rows = _lineup_neighbors(db, game_pk, team_side, batting_order)
             if next3_rows and prev3_rows:
                 avg_next3 = sum(
-                    0.5 * _neighbor_factor(db, r.batter_id, "hr", la_b11, HR_SHRINKAGE_K) +
-                    0.5 * _neighbor_factor(db, r.batter_id, "hits", la_b9, HITS_SHRINKAGE_K)
-                    for r in next3_rows
+                    0.5 * _neighbor_factor(db, r2.batter_id, "hr", la_b11, HR_SHRINKAGE_K) +
+                    0.5 * _neighbor_factor(db, r2.batter_id, "hits", la_b9, HITS_SHRINKAGE_K)
+                    for r2 in next3_rows
                 ) / 3
                 avg_prev3 = sum(
-                    0.5 * _neighbor_factor(db, r.batter_id, "hits", la_b9, HITS_SHRINKAGE_K) +
-                    0.5 * _neighbor_factor(db, r.batter_id, "bb", la_b12, WALKS_SHRINKAGE_K)
-                    for r in prev3_rows
+                    0.5 * _neighbor_factor(db, r2.batter_id, "hits", la_b9, HITS_SHRINKAGE_K) +
+                    0.5 * _neighbor_factor(db, r2.batter_id, "bb", la_b12, WALKS_SHRINKAGE_K)
+                    for r2 in prev3_rows
                 ) / 3
             else:
                 avg_next3, avg_prev3 = 1.0, 1.0  # lineup not fully recorded yet - neutral fallback
 
             term1_mean = n * p_own_hit
-
             p_reach = 1 - (1 - p_own_onbase) ** n
             p_next3_hit = 1 - (1 - la_b9 * avg_next3) ** 3
-            term2_mean = (p_reach * p_next3_hit) * ballpark["runs"]
-
+            term2_mean = p_reach * p_next3_hit * ballpark["runs"]
             p_prev3_reach = 1 - (1 - la_b10 * avg_prev3) ** 3
             p_own_hrr_hit = 1 - (1 - la_b9 * own_hrr_factor) ** n
             term3_mean = p_prev3_reach * p_own_hrr_hit
+            term4_mean = 1 - (1 - p_own_hr) ** n  # guaranteed self-driven run via HR
 
-            mean = term1_mean + term2_mean + term3_mean
+            mean = term1_mean + term2_mean + term3_mean + term4_mean
 
-            term1_var = n * p_own_hit * (1 - p_own_hit)
-            term2_var = term2_mean * (1 - term2_mean)
-            term3_var = term3_mean * (1 - term3_mean)
-            sd = (term1_var + term2_var + term3_var) ** 0.5
+            if OVERDISPERSION and OVERDISPERSION > 1:
+                p = 1 / OVERDISPERSION
+                r = mean / (OVERDISPERSION - 1)
+            else:
+                # Degenerate case (no overdispersion configured) - falls
+                # straight back to a plain Poisson-equivalent, expressed
+                # as a very large r with r*(1-p)/p == mean.
+                p = 0.999999
+                r = mean * p / (1 - p)
 
-        return {"mean": mean, "sd": sd, "batter_hrr_index": batter_hrr_index, "pitcher_hrr_index": pitcher_hrr_index}
+        return {"r": r, "p": p, "batter_hrr_index": batter_hrr_index, "pitcher_hrr_index": pitcher_hrr_index}
     finally:
         db.close()
