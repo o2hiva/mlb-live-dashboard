@@ -539,6 +539,61 @@ def list_tracked_bets(db: Session = Depends(get_db)):
     return out
 
 
+@app.get("/api/debug/hrr-inputs/{game_pk}")
+def debug_hrr_inputs(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Diagnostic: shows the RAW values feeding into compute_hrr_inputs'
+    gating condition for every confirmed batter in a game, plus the
+    three league rates - so an "N/A" can be traced to the exact failing
+    condition (insufficient batter AB, insufficient pitcher outs, a
+    zero league rate, or a missing pitcher row entirely) instead of
+    guessed at.
+    """
+    from models_db import LineupBatter, BatterSeasonStat, PitcherHitsStat
+    import hits_stats_sync
+    import hrr_stats_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    hrr_rates = hrr_stats_sync.get_league_hrr_rates()
+
+    def side_debug(side: str, opposing_pitcher_id):
+        pitcher = db.get(PitcherHitsStat, opposing_pitcher_id) if opposing_pitcher_id else None
+        rows = db.query(LineupBatter).filter_by(game_pk=game_pk, team_side=side).order_by(LineupBatter.batting_order).all()
+        batters_debug = []
+        for r in rows:
+            batter = db.get(BatterSeasonStat, r.batter_id)
+            batters_debug.append({
+                "batter_name": r.batter_name,
+                "batter_row_exists": batter is not None,
+                "batter_ab": batter.ab if batter else None,
+                "batter_ab_meets_min_20": (batter.ab >= 20) if batter else False,
+            })
+        return {
+            "opposing_pitcher_id": opposing_pitcher_id,
+            "pitcher_row_exists": pitcher is not None,
+            "pitcher_outs": pitcher.outs if pitcher else None,
+            "pitcher_outs_meets_min_30": (pitcher.outs >= 30) if pitcher else False,
+            "batters": batters_debug,
+        }
+
+    return {
+        "game_pk": game_pk,
+        "la_b9_hit_rate": la_b9,
+        "hrr_rates": hrr_rates,
+        "gate_requires_all_positive": {
+            "la_b9_positive": la_b9 > 0,
+            "obp_positive": hrr_rates["obp"] > 0,
+            "hr_rate_positive": hrr_rates["hr_rate"] > 0,
+        },
+        "home": side_debug("home", game.away_probable_pitcher_id),
+        "away": side_debug("away", game.home_probable_pitcher_id),
+    }
+
+
 @app.get("/")
 def serve_dashboard():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
