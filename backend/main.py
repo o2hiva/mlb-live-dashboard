@@ -350,6 +350,62 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/games/{game_pk}/hr")
+def game_hr(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Same shape as /api/games/{game_pk}/hits, but for HR ("at least 1
+    home run" - always a fixed threshold, no adjustable line, matching
+    core.py's own hr_probability_for_row: Player model's HR formulas
+    never read an adjustable threshold cell the way Hits does).
+    """
+    from models_db import LineupBatter
+    import hr_stats_sync
+    import hrr_stats_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    # Computed ONCE per request, not once per batter - see hrr_stats_sync's
+    # docstrings for why (a cold cache is otherwise a real timeout risk).
+    la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
+
+    def batters_for_side(side: str, opposing_pitcher_id):
+        rows = (
+            db.query(LineupBatter)
+            .filter_by(game_pk=game_pk, team_side=side)
+            .order_by(LineupBatter.batting_order)
+            .all()
+        )
+        out = []
+        for r in rows:
+            inputs = hr_stats_sync.compute_hr_inputs(
+                r.batter_id, r.batting_order, opposing_pitcher_id,
+                home_team=game.home_team, la_hr_rate=la_hr_rate,
+            )
+            out.append({
+                "batter_id": r.batter_id,
+                "batter_name": r.batter_name,
+                "batting_order": r.batting_order,
+                "n_ab": inputs["n_ab"] if inputs else None,
+                "p": inputs["p"] if inputs else None,
+                "hr_index": inputs["hr_index"] if inputs else None,
+            })
+        return out
+
+    return {
+        "game_pk": game_pk,
+        "home_lineup_confirmed": game.home_lineup_confirmed,
+        "away_lineup_confirmed": game.away_lineup_confirmed,
+        "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hr_index": hr_stats_sync.get_pitcher_hr_index(game.home_probable_pitcher_id, la_hr_rate=la_hr_rate),
+        "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hr_index": hr_stats_sync.get_pitcher_hr_index(game.away_probable_pitcher_id, la_hr_rate=la_hr_rate),
+        "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
+        "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
+    }
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """
@@ -591,6 +647,45 @@ def debug_hrr_inputs(game_pk: int, db: Session = Depends(get_db)):
         },
         "home": side_debug("home", game.away_probable_pitcher_id),
         "away": side_debug("away", game.home_probable_pitcher_id),
+    }
+
+
+@app.get("/api/debug/platoon-split/{batter_id}")
+def debug_platoon_split(batter_id: int):
+    """
+    Diagnostic: shows the RAW vs-L/vs-R split response MLB's API
+    actually returns for one batter, plus the computed factors - so
+    this untested-against-live-data endpoint (see platoon_stats_sync.py's
+    module docstring) can be verified before it's trusted in any
+    formula's actual math. Pass any batter_id already visible in a
+    /hits or /hrr response for this game.
+    """
+    import mlb_client
+    import hits_stats_sync
+    import hrr_stats_sync
+    from datetime import datetime
+
+    season = datetime.utcnow().year
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
+
+    vl = mlb_client.get_batter_platoon_split(batter_id, season, "vl")
+    vr = mlb_client.get_batter_platoon_split(batter_id, season, "vr")
+
+    import platoon_stats_sync
+    return {
+        "batter_id": batter_id,
+        "season": season,
+        "la_b9_hit_rate": la_b9,
+        "la_hr_rate": la_hr_rate,
+        "raw_vs_l": vl,
+        "raw_vs_r": vr,
+        "computed_factors": {
+            "hits_factor_vs_l": platoon_stats_sync._factor(vl, "hits", la_b9),
+            "hits_factor_vs_r": platoon_stats_sync._factor(vr, "hits", la_b9),
+            "hr_factor_vs_l": platoon_stats_sync._factor(vl, "homeRuns", la_hr_rate),
+            "hr_factor_vs_r": platoon_stats_sync._factor(vr, "homeRuns", la_hr_rate),
+        },
     }
 
 

@@ -613,6 +613,142 @@
     }
   }
 
+  // ---- HR prop: same structure/math as Hits (binomial), but always a
+  // fixed "at least 1 HR" - core.py's own formulas never read an
+  // adjustable threshold cell for HR, so no line selector here. ----
+  const hrDataCache = {};
+  const hrBetState = {};
+  const FIXED_HR_THRESHOLD = 1;
+
+  function getHrBetState(gamePk, side, batterId) {
+    if (!hrBetState[gamePk]) hrBetState[gamePk] = {};
+    const key = `${side}_${batterId}`;
+    if (!hrBetState[gamePk][key]) {
+      hrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return hrBetState[gamePk][key];
+  }
+
+  function updateHrBetField(gamePk, side, batterId, field, value) {
+    const state = getHrBetState(gamePk, side, batterId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderHr(gamePk);
+  }
+
+  function rerenderHr(gamePk) {
+    if (activeLineupTab[gamePk] !== "hr") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && hrDataCache[gamePk]) {
+      contentDiv.innerHTML = hrSectionHtml(gamePk, hrDataCache[gamePk]);
+    }
+  }
+
+  async function toggleHrTrack(gamePk, side, batterId, checked, batterName, battingOrder, modelProb, marketPct, wager, profit) {
+    const state = getHrBetState(gamePk, side, batterId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "hr", batter_id: batterId, batter_name: batterName,
+            team_side: side, batting_order: battingOrder, line: FIXED_HR_THRESHOLD,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderHr(gamePk);
+  }
+
+  function hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct) {
+    const state = getHrBetState(gamePk, side, b.batter_id);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `hr-${gamePk}-${side}-${b.batter_id}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
+           onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
+        onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'market',this.value)" />
+      <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
+        onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleHrTrack(${trackArgs})" />
+    `;
+  }
+
+  function hrBatterRowHtml(gamePk, side, b) {
+    const hiStr = b.hr_index != null ? b.hr_index.toFixed(2) : "—";
+    const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, FIXED_HR_THRESHOLD) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+
+    return `
+      <div class="hits-batter">
+        <span>${b.batting_order}. ${b.batter_name}</span>
+        <span class="hits-index">HI ${hiStr}</span>
+        <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct)}
+      </div>
+    `;
+  }
+
+  function hrSectionHtml(gamePk, data) {
+    const awayPitcherHi = data.away_opp_pitcher_hr_index != null ? data.away_opp_pitcher_hr_index.toFixed(2) : "—";
+    const homePitcherHi = data.home_opp_pitcher_hr_index != null ? data.home_opp_pitcher_hr_index.toFixed(2) : "—";
+
+    const awayHtml = data.away_lineup_confirmed
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrBatterRowHtml(gamePk, "away", b)).join("")}`
+      : `<div class="hits-side-label">Away — Not Confirmed</div>`;
+    const homeHtml = data.home_lineup_confirmed
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrBatterRowHtml(gamePk, "home", b)).join("")}`
+      : `<div class="hits-side-label">Home — Not Confirmed</div>`;
+
+    return `
+      <div class="hits-controls"><span>At least 1 home run</span></div>
+      ${HITS_TABLE_HEADER}
+      ${awayHtml}
+      ${homeHtml}
+    `;
+  }
+
   // ---- HRR prop: same structure as Hits, but a NORMAL distribution
   // (mean/sd) instead of binomial (n_ab/p), since HRR production is
   // modeled as continuous, not a count of discrete at-bats. ----
@@ -820,15 +956,19 @@
     outerContainer.innerHTML = `
       <div class="lineup-tabs">
         <span class="lineup-tab ${tab === "hits" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hits')">Hits</span>
+        <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
     `;
     const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
 
-    const dataCache = tab === "hits" ? hitsDataCache : hrrDataCache;
-    const sectionHtmlFn = tab === "hits" ? hitsSectionHtml : hrrSectionHtml;
-    const apiPath = tab === "hits" ? "hits" : "hrr";
+    const TAB_CONFIG = {
+      hits: { cache: hitsDataCache, render: hitsSectionHtml, path: "hits" },
+      hr: { cache: hrDataCache, render: hrSectionHtml, path: "hr" },
+      hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
+    };
+    const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];
 
     if (dataCache[gamePk]) {
       contentDiv.innerHTML = sectionHtmlFn(gamePk, dataCache[gamePk]);
