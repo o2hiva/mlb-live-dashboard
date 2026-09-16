@@ -361,6 +361,7 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
     from models_db import LineupBatter
     import hr_stats_sync
     import hrr_stats_sync
+    import platoon_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
@@ -371,6 +372,9 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
     la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
 
     def batters_for_side(side: str, opposing_pitcher_id):
+        # Same "once per side, not once per batter" reasoning - all 9
+        # batters on a side share the same opposing pitcher's hand.
+        pitcher_hand = platoon_stats_sync.get_pitcher_hand(opposing_pitcher_id, "") if opposing_pitcher_id else None
         rows = (
             db.query(LineupBatter)
             .filter_by(game_pk=game_pk, team_side=side)
@@ -381,7 +385,7 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
         for r in rows:
             inputs = hr_stats_sync.compute_hr_inputs(
                 r.batter_id, r.batting_order, opposing_pitcher_id,
-                home_team=game.home_team, la_hr_rate=la_hr_rate,
+                home_team=game.home_team, la_hr_rate=la_hr_rate, pitcher_hand=pitcher_hand,
             )
             out.append({
                 "batter_id": r.batter_id,
@@ -390,6 +394,7 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
                 "n_ab": inputs["n_ab"] if inputs else None,
                 "p": inputs["p"] if inputs else None,
                 "hr_index": inputs["hr_index"] if inputs else None,
+                "used_platoon": inputs["used_platoon"] if inputs else False,
             })
         return out
 

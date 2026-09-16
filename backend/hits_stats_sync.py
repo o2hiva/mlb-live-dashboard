@@ -162,11 +162,13 @@ def refresh_all_stats_for_game(db, game: Game, force: bool = False) -> int:
     batters = db.query(LineupBatter).filter_by(game_pk=game.game_pk).all()
     for b in batters:
         _sync_batter_stat(db, b.batter_id, b.batter_name, force=force)
+        _sync_batter_platoon(db, b.batter_id, b.batter_name)
         count += 1
     for pid, pname in ((game.home_probable_pitcher_id, game.home_probable_pitcher),
                         (game.away_probable_pitcher_id, game.away_probable_pitcher)):
         if pid:
             _sync_pitcher_hits_stat(db, pid, pname or "", force=force)
+            _sync_pitcher_hand(pid, pname or "")
             count += 1
     return count
 
@@ -212,9 +214,39 @@ def check_and_sync_lineups(db, game: Game, boxscore: dict):
                                  batter_id=b["id"], batter_name=b["name"],
                                  batting_order=b["batting_order"]))
             _sync_batter_stat(db, b["id"], b["name"])
+            _sync_batter_platoon(db, b["id"], b["name"])
 
         if opposing_pitcher_id:
             _sync_pitcher_hits_stat(db, opposing_pitcher_id, opposing_pitcher_name or "")
+            _sync_pitcher_hand(opposing_pitcher_id, opposing_pitcher_name or "")
+
+
+def _sync_batter_platoon(db, batter_id: int, batter_name: str):
+    """Syncs this batter's real vs-L/vs-R Hits/HR factors (see
+    platoon_stats_sync.py), used by compute_batter_hits_inputs and
+    hr_stats_sync.compute_hr_inputs to swap in a hand-specific rate
+    when available. Best-effort: a failure here doesn't block the
+    batter's own season-stat sync above. Local imports avoid a circular
+    import (hrr_stats_sync imports this module at its own top level)."""
+    try:
+        import platoon_stats_sync
+        import hrr_stats_sync
+        la_b9 = get_league_average_hit_rate()
+        la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
+        platoon_stats_sync.sync_batter_platoon_split(batter_id, batter_name, SEASON, la_b9, la_hr_rate)
+    except Exception:
+        log.exception("Failed to sync platoon split for %s (%s)", batter_name, batter_id)
+
+
+def _sync_pitcher_hand(pitcher_id: int, pitcher_name: str):
+    """Syncs this pitcher's throwing hand (see platoon_stats_sync.py) -
+    a one-time fetch per pitcher in practice, since it's cached
+    indefinitely (a hand never changes)."""
+    try:
+        import platoon_stats_sync
+        platoon_stats_sync.get_pitcher_hand(pitcher_id, pitcher_name)
+    except Exception:
+        log.exception("Failed to sync pitch hand for %s (%s)", pitcher_name, pitcher_id)
 
 
 def get_pitcher_hit_index(pitcher_id: int | None) -> float | None:

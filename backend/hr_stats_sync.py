@@ -17,18 +17,26 @@ separately for HR specifically, since HR's much lower base rate (~3% per
 AB vs ~24% for Hits) means the same 20 AB carries much less real
 information about a player's true HR rate.
 
-NOT IMPLEMENTED: platoon adjustment (swapping in a batter's HR rate
-specifically vs the actual opposing pitcher's throwing hand) - core.py's
-hr_probability_platoon_adjusted does this and is real/validated, but it
-needs pitcher-handedness and batter-platoon-split data this dashboard
-doesn't fetch yet. Worth adding later as its own data source; the
-shrinkage-adjusted version here uses real season totals only, no splits.
+PLATOON ADJUSTMENT: verified working against real live data (see
+/api/debug/platoon-split in main.py) and wired in below - when the
+opposing pitcher's throwing hand is known AND the batter has a real
+platoon split against that hand (15+ AB, matching
+fetch_batter_platoon_splits.py's own minimum), their hand-specific HR
+factor replaces the blended shrunk_batter_rate. Falls back to the
+existing shrunk (season-blended) rate whenever either piece is missing
+- exactly core.py's own hr_probability_platoon_adjusted behavior,
+ported onto this system's real-shrinkage infrastructure rather than
+Excel's precomputed blended factors (the pitcher side and ballpark
+factor still use the shrunk/real values already built here, which is
+an improvement over the original's raw pitcher factor, not a deviation
+from its intent).
 """
 import logging
 import math
 
 import ballpark_factors
 import hrr_stats_sync
+import platoon_stats_sync
 from database import SessionLocal
 from models_db import BatterSeasonStat, PitcherHitsStat
 
@@ -96,20 +104,25 @@ def _excel_round(x, digits=0):
 
 
 def compute_hr_inputs(batter_id: int, batting_order: int, pitcher_id: int | None, home_team: str | None,
-                       la_hr_rate: float | None = None) -> dict | None:
+                       la_hr_rate: float | None = None, pitcher_hand: str | None = "unset") -> dict | None:
     """
-    Returns {"n_ab":, "p":, "hr_index":} for one batter - n_ab/p feed a
-    binomial "at least 1 HR" probability (matching Hits' own pattern,
-    computed once and left to the frontend/caller to turn into a
-    percentage), None if there isn't enough real sample yet (45 AB / 45
-    outs - see module docstring). hr_index is shown regardless of
-    sample size (purely informational).
+    Returns {"n_ab":, "p":, "hr_index":, "used_platoon":} for one
+    batter - n_ab/p feed a binomial "at least 1 HR" probability
+    (matching Hits' own pattern, computed once and left to the
+    frontend/caller to turn into a percentage), None if there isn't
+    enough real sample yet (45 AB / 45 outs - see module docstring).
+    hr_index is shown regardless of sample size (purely informational).
+    used_platoon indicates whether the batter's hand-specific factor
+    was actually available and used (see module docstring) - False
+    means it fell back to the season-blended shrunk rate.
 
-    la_hr_rate: pass in the caller's already-computed league HR rate to
-    avoid a redundant lookup per batter - same reasoning as HRR's own
-    functions; see hrr_stats_sync's docstrings for the full explanation
-    of why this matters (a cold cache otherwise means dozens of MLB API
-    calls PER BATTER instead of once per request).
+    la_hr_rate/pitcher_hand: pass in the caller's already-computed
+    values to avoid a redundant lookup per batter - same reasoning as
+    HRR's own functions (a cold cache otherwise means real MLB API
+    calls PER BATTER instead of once per side/request). pitcher_hand
+    defaults to the sentinel "unset" (not None) so a caller can still
+    explicitly pass None to mean "look it up here" vs "known to have
+    no hand on file" - only look it up when the sentinel is untouched.
 
     Returns None only if there's no batter data at all yet.
     """
@@ -126,13 +139,23 @@ def compute_hr_inputs(batter_id: int, batting_order: int, pitcher_id: int | None
 
         pitcher = db.get(PitcherHitsStat, pitcher_id) if pitcher_id else None
 
-        n_ab, p = None, None
+        n_ab, p, used_platoon = None, None, False
         if pitcher and batter.ab >= MIN_BATTER_AB and pitcher.outs >= MIN_PITCHER_OUTS and la_hr_rate > 0:
             pitcher_batters_faced = pitcher.outs / 3 * 4.3
             ballpark = ballpark_factors.get_ballpark_factors(home_team) if home_team else {"hr": 1.0}
             y17 = ballpark.get("hr", 1.0)
 
-            shrunk_batter_rate = _shrunk_factor(batter.hr, batter.ab, la_hr_rate, DEFAULT_HR_SHRINKAGE_K)
+            batter_rate = _shrunk_factor(batter.hr, batter.ab, la_hr_rate, DEFAULT_HR_SHRINKAGE_K)
+
+            # Swap in the batter's hand-specific factor when both the
+            # opposing pitcher's hand and a real (15+ AB) split are
+            # available - otherwise keep the season-blended shrunk rate.
+            hand = platoon_stats_sync.get_pitcher_hand(pitcher_id, "") if pitcher_hand == "unset" and pitcher_id else pitcher_hand
+            platoon_factor = platoon_stats_sync.get_batter_platoon_factor(batter_id, hand, "hr")
+            if platoon_factor is not None:
+                batter_rate = platoon_factor
+                used_platoon = True
+
             shrunk_pitcher_rate = _shrunk_factor(pitcher.hr_allowed, pitcher_batters_faced, la_hr_rate, DEFAULT_HR_SHRINKAGE_K)
 
             # Same lineup-position at-bats estimate as Hits/HRR - verbatim
@@ -140,9 +163,9 @@ def compute_hr_inputs(batter_id: int, batting_order: int, pitcher_id: int | None
             # expected at-bats.
             n_ab = max(1, int(_excel_round(4.073 - 0.0897 * (batting_order - 1))))
 
-            p = la_hr_rate * shrunk_batter_rate * shrunk_pitcher_rate * y17
+            p = la_hr_rate * batter_rate * shrunk_pitcher_rate * y17
             p = max(0.001, min(p, 0.3))  # same tighter clamp as core.py (HR rates run much lower than Hits)
 
-        return {"n_ab": n_ab, "p": p, "hr_index": hr_index}
+        return {"n_ab": n_ab, "p": p, "hr_index": hr_index, "used_platoon": used_platoon}
     finally:
         db.close()
