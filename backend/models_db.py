@@ -197,4 +197,5 @@ class PitcherHitsStat(Base):
     hits_allowed = Column(Integer, default=0)
     hr_allowed = Column(Integer, default=0)
     bb_allowed = Column(Integer, default=0)
+    runs_allowed = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
