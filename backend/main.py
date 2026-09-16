@@ -293,17 +293,25 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
 def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     """
     Same shape as /api/games/{game_pk}/hits, but for the HRR (Hits+Runs+RBI)
-    market: each batter gets (mean, sd) instead of (n_ab, p) since HRR is
-    modeled as approximately Normal rather than binomial - the frontend
-    computes "P(HRR >= line)" for any line instantly via a normal CDF,
-    the same "compute once, adjust instantly client-side" pattern Hits uses.
+    market: each batter gets Negative Binomial parameters (r, p) instead
+    of (n_ab, p) - the frontend computes "P(HRR >= line)" for any line
+    instantly via a Negative Binomial survival function, the same
+    "compute once, adjust instantly client-side" pattern Hits uses.
     """
     from models_db import LineupBatter
     import hrr_stats_sync
+    import hits_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
         return {"error": "not found"}
+
+    # Computed ONCE per request, not once per batter - each of these can
+    # be a real MLB API round-trip on a cold cache (dozens of calls), so
+    # doing this per-batter instead (9-18 times) risks the whole request
+    # timing out. See hrr_stats_sync's docstrings for the same note.
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    hrr_rates = hrr_stats_sync.get_league_hrr_rates()
 
     def batters_for_side(side: str, opposing_pitcher_id):
         rows = (
@@ -317,6 +325,7 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
             inputs = hrr_stats_sync.compute_hrr_inputs(
                 r.batter_id, r.batting_order, opposing_pitcher_id,
                 home_team=game.home_team, game_pk=game_pk, team_side=side,
+                la_b9=la_b9, hrr_rates=hrr_rates,
             )
             out.append({
                 "batter_id": r.batter_id,
@@ -333,9 +342,9 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
         "home_lineup_confirmed": game.home_lineup_confirmed,
         "away_lineup_confirmed": game.away_lineup_confirmed,
         "away_opp_pitcher_name": game.home_probable_pitcher,
-        "away_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.home_probable_pitcher_id),
+        "away_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.home_probable_pitcher_id, la_b9=la_b9, hrr_rates=hrr_rates),
         "home_opp_pitcher_name": game.away_probable_pitcher,
-        "home_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.away_probable_pitcher_id),
+        "home_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.away_probable_pitcher_id, la_b9=la_b9, hrr_rates=hrr_rates),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
     }

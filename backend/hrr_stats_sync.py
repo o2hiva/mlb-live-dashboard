@@ -201,24 +201,34 @@ def _lineup_neighbors(db, game_pk: int, team_side: str, batting_order: int):
     return next3, prev3
 
 
-def get_pitcher_hrr_index(pitcher_id: int | None) -> float | None:
+def get_pitcher_hrr_index(pitcher_id: int | None, la_b9: float | None = None, hrr_rates: dict | None = None) -> float | None:
     """
     The REAL "Pitcher HRR+" index from core.py: a weighted average of
     the pitcher's four "allowed" factors - Walks, Hits, Runs, and HR -
     with HR double-weighted (a HR always guarantees a hit, a run, AND
     at least one RBI simultaneously). Divided by 5 (1+1+1+2 weight units).
     Shown regardless of sample size (purely informational).
+
+    la_b9/hrr_rates: pass these in (computed ONCE per request by the
+    caller) to skip redundant cache lookups - calling this per batter/
+    pitcher without passing them means each call re-checks the cache
+    independently, which is slow even when warm and can be genuinely
+    expensive (dozens of MLB API calls) on a cold one. Only omit these
+    for a one-off standalone call.
     """
     if not pitcher_id:
         return None
+    if la_b9 is None:
+        la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    if hrr_rates is None:
+        hrr_rates = get_league_hrr_rates()
+
     db = SessionLocal()
     try:
         pitcher = db.get(PitcherHitsStat, pitcher_id)
         if not pitcher or pitcher.outs <= 0:
             return None
 
-        la_b9 = hits_stats_sync.get_league_average_hit_rate()
-        hrr_rates = get_league_hrr_rates()
         la_b11, la_b12 = hrr_rates["hr_rate"], hrr_rates["walk_rate"]
         la_runs_allowed = hrr_rates["runs_allowed_rate"]
 
@@ -235,7 +245,7 @@ def get_pitcher_hrr_index(pitcher_id: int | None) -> float | None:
         db.close()
 
 
-def get_batter_hrr_index(batter_id: int) -> float | None:
+def get_batter_hrr_index(batter_id: int, la_b9: float | None = None, la_hr_rate: float | None = None) -> float | None:
     """
     core.py's own file only defines a composite "HRR+" index for
     PITCHERS - there's no equivalent batter-side formula to port
@@ -243,25 +253,32 @@ def get_batter_hrr_index(batter_id: int) -> float | None:
     factors, same HR-double-weighting logic), NOT something pulled
     from your validated system - flagged here in case you want it
     changed to match a specific intent.
+
+    la_b9/la_hr_rate: same "pass in what the caller already computed"
+    pattern as get_pitcher_hrr_index - see that function's docstring.
     """
+    if la_b9 is None:
+        la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    if la_hr_rate is None:
+        la_hr_rate = get_league_hrr_rates()["hr_rate"]
+
     db = SessionLocal()
     try:
         batter = db.get(BatterSeasonStat, batter_id)
         if not batter or batter.ab <= 0:
             return None
-        la_b9 = hits_stats_sync.get_league_average_hit_rate()
-        la_b11 = get_league_hrr_rates()["hr_rate"]
-        if la_b11 <= 0:
+        if la_hr_rate <= 0:
             return None
         hits_factor = (batter.hits / batter.ab) / la_b9
-        hr_factor = (batter.hr / batter.ab) / la_b11
+        hr_factor = (batter.hr / batter.ab) / la_hr_rate
         return (hits_factor + 2 * hr_factor) / 3
     finally:
         db.close()
 
 
 def compute_hrr_inputs(batter_id: int, batting_order: int, pitcher_id: int | None,
-                        home_team: str | None, game_pk: int, team_side: str) -> dict | None:
+                        home_team: str | None, game_pk: int, team_side: str,
+                        la_b9: float | None = None, hrr_rates: dict | None = None) -> dict | None:
     """
     Returns {"r":, "p":, "batter_hrr_index":, "pitcher_hrr_index":} for
     one batter - r/p are the Negative Binomial parameters, None if
@@ -270,19 +287,29 @@ def compute_hrr_inputs(batter_id: int, batting_order: int, pitcher_id: int | Non
     instantly from (r, p) via a Negative Binomial survival function -
     same "compute once, adjust instantly client-side" pattern Hits uses.
 
+    la_b9/hrr_rates: same "pass in what the caller already computed"
+    pattern as get_pitcher_hrr_index - IMPORTANT when calling this once
+    per batter in a lineup (9-18 times per request): without passing
+    these, each call independently re-derives them, which is slow even
+    when cached and can be a genuine timeout risk on a cold cache
+    (dozens of MLB API calls, repeated per batter instead of once).
+
     Returns None only if there's no batter data at all yet.
     """
+    if la_b9 is None:
+        la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    if hrr_rates is None:
+        hrr_rates = get_league_hrr_rates()
+
     db = SessionLocal()
     try:
         batter = db.get(BatterSeasonStat, batter_id)
         if not batter:
             return None
 
-        batter_hrr_index = get_batter_hrr_index(batter_id)
-        pitcher_hrr_index = get_pitcher_hrr_index(pitcher_id)
+        batter_hrr_index = get_batter_hrr_index(batter_id, la_b9=la_b9, la_hr_rate=hrr_rates["hr_rate"])
+        pitcher_hrr_index = get_pitcher_hrr_index(pitcher_id, la_b9=la_b9, hrr_rates=hrr_rates)
 
-        la_b9 = hits_stats_sync.get_league_average_hit_rate()
-        hrr_rates = get_league_hrr_rates()
         la_b10, la_b11 = hrr_rates["obp"], hrr_rates["hr_rate"]
         la_b12 = hrr_rates["walk_rate"]
 
