@@ -50,18 +50,21 @@ def _excel_round(x, digits=0):
     return math.floor(x * factor + 0.5) / factor if x >= 0 else math.ceil(x * factor - 0.5) / factor
 
 
-def get_league_average_hit_rate() -> float:
+def get_league_average_hit_rate(force: bool = False) -> float:
     """
     Real, live-computed league-average hit rate (total hits / total
-    at-bats across all 30 teams), recomputed at most once every 24h.
-    Falls back to a rough historical MLB average (~0.245) if the live
-    computation fails for any reason, rather than crashing predictions.
+    at-bats across all 30 teams), recomputed at most once every 24h
+    unless force=True (used by the end-of-day job to guarantee a fresh
+    pull once all of a day's games are final, rather than waiting for
+    the cache to naturally expire). Falls back to a rough historical
+    MLB average (~0.245) if the live computation fails for any reason,
+    rather than crashing predictions.
     """
     db = SessionLocal()
     try:
         rate_row = db.get(SyncState, LEAGUE_RATE_KEY)
         date_row = db.get(SyncState, LEAGUE_RATE_DATE_KEY)
-        if rate_row and date_row:
+        if not force and rate_row and date_row:
             computed_at = datetime.fromisoformat(date_row.value)
             if datetime.utcnow() - computed_at < STAT_STALE_AFTER:
                 return float(rate_row.value)
@@ -98,9 +101,9 @@ def get_league_average_hit_rate() -> float:
         db.close()
 
 
-def _sync_batter_stat(db, batter_id: int, batter_name: str):
+def _sync_batter_stat(db, batter_id: int, batter_name: str, force: bool = False):
     row = db.get(BatterSeasonStat, batter_id)
-    if row and datetime.utcnow() - row.updated_at < STAT_STALE_AFTER:
+    if not force and row and datetime.utcnow() - row.updated_at < STAT_STALE_AFTER:
         return
     try:
         totals = mlb_client.get_season_hitting_totals(batter_id, SEASON)
@@ -121,9 +124,9 @@ def _sync_batter_stat(db, batter_id: int, batter_name: str):
         row.bb = totals["bb"]
 
 
-def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str):
+def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str, force: bool = False):
     row = db.get(PitcherHitsStat, pitcher_id)
-    if row and datetime.utcnow() - row.updated_at < STAT_STALE_AFTER:
+    if not force and row and datetime.utcnow() - row.updated_at < STAT_STALE_AFTER:
         return
     try:
         totals = mlb_client.get_season_pitching_totals(pitcher_id, SEASON)
@@ -135,13 +138,37 @@ def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str):
     if row is None:
         db.add(PitcherHitsStat(pitcher_id=pitcher_id, pitcher_name=pitcher_name,
                                 outs=totals["outs"], hits_allowed=totals["hits_allowed"],
-                                hr_allowed=totals["hr_allowed"], bb_allowed=totals["bb_allowed"]))
+                                hr_allowed=totals["hr_allowed"], bb_allowed=totals["bb_allowed"],
+                                runs_allowed=totals.get("runs_allowed", 0)))
     else:
         row.pitcher_name = pitcher_name
         row.outs = totals["outs"]
         row.hits_allowed = totals["hits_allowed"]
         row.hr_allowed = totals["hr_allowed"]
         row.bb_allowed = totals["bb_allowed"]
+        row.runs_allowed = totals.get("runs_allowed", 0)
+
+
+def refresh_all_stats_for_game(db, game: Game, force: bool = False) -> int:
+    """
+    Force-refreshes season stats for every batter in this game's
+    confirmed lineups (both sides) plus both probable pitchers. Used by
+    the end-of-day job (see end_of_day.py) to guarantee fresh numbers
+    once a day's games are final, rather than waiting for the lazy
+    per-lineup-confirmation path's 24h staleness cache to naturally
+    expire on its own. Returns how many batter/pitcher rows were touched.
+    """
+    count = 0
+    batters = db.query(LineupBatter).filter_by(game_pk=game.game_pk).all()
+    for b in batters:
+        _sync_batter_stat(db, b.batter_id, b.batter_name, force=force)
+        count += 1
+    for pid, pname in ((game.home_probable_pitcher_id, game.home_probable_pitcher),
+                        (game.away_probable_pitcher_id, game.away_probable_pitcher)):
+        if pid:
+            _sync_pitcher_hits_stat(db, pid, pname or "", force=force)
+            count += 1
+    return count
 
 
 def check_and_sync_lineups(db, game: Game, boxscore: dict):

@@ -20,15 +20,36 @@ MLB's documented public schema; verify against a live response once you
 run this on a machine with normal internet access.
 """
 import requests
-from datetime import date
+from datetime import date, timedelta
 
 BASE = "https://statsapi.mlb.com/api"
 TIMEOUT = 10
 
 
+def mlb_today() -> date:
+    """
+    MLB's schedule/game-day boundary is anchored to US Eastern time, NOT
+    whatever timezone this server's clock happens to be set to (Railway
+    containers run in UTC). Using naive date.today() here would be wrong
+    for a meaningful chunk of each day - e.g. at 1am UTC, it's still
+    "yesterday" in Eastern, but date.today() would already say "today".
+
+    This is the exact bug class already hit and fixed in the Excel-era
+    scripts (see fill_lineups.py's own mlb_today(), same reasoning) -
+    ported here so the live dashboard doesn't repeat it.
+    """
+    from zoneinfo import ZoneInfo
+    import datetime as _datetime
+    return _datetime.datetime.now(ZoneInfo("America/New_York")).date()
+
+
+def mlb_yesterday() -> date:
+    return mlb_today() - timedelta(days=1)
+
+
 def get_schedule(game_date: str | None = None) -> list[dict]:
     """Return today's (or a given date's) MLB games with basic status info."""
-    game_date = game_date or date.today().isoformat()
+    game_date = game_date or mlb_today().isoformat()
     url = f"{BASE}/v1/schedule"
     params = {"sportId": 1, "date": game_date, "hydrate": "probablePitcher,team"}
     resp = requests.get(url, params=params, timeout=TIMEOUT)
@@ -212,8 +233,8 @@ def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
 
 
 def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
-    """Real season-to-date outs recorded/hits-HR-walks-allowed for one
-    pitcher. Same endpoint and field mapping as
+    """Real season-to-date outs recorded/hits-HR-walks-runs-allowed for
+    one pitcher. Same endpoint and field mapping as
     fetch_raw_batting_stats.py's get_season_pitching_totals()."""
     resp = requests.get(
         f"{BASE}/v1/people/{person_id}/stats",
@@ -240,6 +261,7 @@ def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
         "outs": outs, "hits_allowed": hits_allowed,
         "hr_allowed": stat.get("homeRuns", 0) or 0,
         "bb_allowed": stat.get("baseOnBalls", 0) or 0,
+        "runs_allowed": stat.get("runs", 0) or 0,
     }
 
 
@@ -277,3 +299,31 @@ def get_team_season_hitting_totals(team_id: int, season: int) -> dict | None:
         "hr": stat.get("homeRuns", 0) or 0,
         "bb": stat.get("baseOnBalls", 0) or 0,
     }
+
+
+def get_team_season_pitching_totals(team_id: int, season: int) -> dict | None:
+    """This team's own real season-to-date runs-allowed/outs-recorded -
+    used to compute a live league-average runs-allowed rate (per
+    batter faced) for the HRR model's pitcher "Runs allowed" factor."""
+    resp = requests.get(
+        f"{BASE}/v1/teams/{team_id}/stats",
+        params={"stats": "season", "season": season, "group": "pitching"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    stats_list = resp.json().get("stats") or []
+    if not stats_list:
+        return None
+    splits = stats_list[0].get("splits") or []
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    outs = stat.get("outs")
+    if outs is None:
+        ip = stat.get("inningsPitched", "0.0")
+        whole, _, frac = str(ip).partition(".")
+        outs = int(whole or 0) * 3 + int(frac or 0)
+    runs_allowed = stat.get("runs")
+    if runs_allowed is None:
+        return None
+    return {"outs": outs, "runs_allowed": runs_allowed}

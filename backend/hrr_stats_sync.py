@@ -83,19 +83,20 @@ def _nbinom_sf(threshold_int: int, r: float, p: float) -> float:
     return max(0.0, min(1.0, 1 - cdf))
 
 
-def get_league_hrr_rates() -> dict:
+def get_league_hrr_rates(force: bool = False) -> dict:
     """
     Returns {"obp":, "hr_rate":, "walk_rate":, "runs_allowed_rate":} -
     real, live-computed league averages (summed across all 30 teams),
-    recomputed at most once every 24h. LA_B9 (hit rate) is intentionally
-    NOT duplicated here - reuses hits_stats_sync.get_league_average_hit_rate()'s
-    own cache instead of a second copy of the same number.
+    recomputed at most once every 24h unless force=True. LA_B9 (hit
+    rate) is intentionally NOT duplicated here - reuses
+    hits_stats_sync.get_league_average_hit_rate()'s own cache instead
+    of a second copy of the same number.
     """
     db = SessionLocal()
     try:
         date_row = db.get(SyncState, LEAGUE_RATES_DATE_KEY)
         keys = ("obp", "hr_rate", "walk_rate", "runs_allowed_rate")
-        if date_row:
+        if not force and date_row:
             computed_at = datetime.fromisoformat(date_row.value)
             if datetime.utcnow() - computed_at < STAT_STALE_AFTER:
                 rates = {}

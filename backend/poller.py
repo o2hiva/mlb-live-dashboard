@@ -14,11 +14,11 @@ Background job: keeps the database in sync with upcoming MLB games.
   label shown for each team.
 - For any game currently "In Progress": pull the live feed every ~15s
   and update score/inning/inning-lines.
-- Once daily (end of day, see INNING_STATS_REFRESH_HOUR_UTC): log the
-  previous day's final scores into the season-to-date team/pitcher
-  inning-stat tables the log5 model reads from. Also runs once
-  immediately on every app startup/redeploy. Can also be triggered
-  manually any time via GET /api/admin/refresh-inning-stats.
+- Once daily (end of day, see INNING_STATS_REFRESH_HOUR_UTC): runs the
+  full end-of-day routine (see end_of_day.py) - 1st-inning stats sync
+  PLUS a forced refresh of every Hits/HRR player who played that day.
+  Also runs once immediately on every app startup/redeploy. Can also be
+  triggered manually any time via GET /api/admin/run-daily-updates.
 
 Tune POLL_INTERVAL_LIVE / POLL_INTERVAL_IDLE / SYNC_DAYS_AHEAD to be as
 gentle as you like on MLB's public endpoint.
@@ -30,8 +30,8 @@ from apscheduler.triggers.cron import CronTrigger
 
 import mlb_client
 import predictor
-import inning_stats_sync
 import hits_stats_sync
+import end_of_day
 from database import SessionLocal
 from models_db import Game, InningLine, Prediction
 
@@ -126,7 +126,7 @@ def sync_schedule(days_ahead: int = SYNC_DAYS_AHEAD):
     db = SessionLocal()
     try:
         for offset in range(days_ahead + 1):
-            date_str = (date.today() + timedelta(days=offset)).isoformat()
+            date_str = (mlb_client.mlb_today() + timedelta(days=offset)).isoformat()
             _sync_one_date(db, date_str)
         db.commit()
     except Exception:
@@ -175,17 +175,18 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
     scheduler.add_job(poll_live_games, "interval", seconds=POLL_INTERVAL_LIVE_SECONDS, id="poll_live_games")
     # Runs once daily at a fixed end-of-day time (see
-    # INNING_STATS_REFRESH_HOUR_UTC above) - this is the "log yesterday's
-    # final scores into their season-stat tables" job. next_run_time=now
-    # ALSO fires it once immediately on every app startup/redeploy, in
-    # the scheduler's own background thread so it never blocks startup -
+    # INNING_STATS_REFRESH_HOUR_UTC above) - the full end-of-day routine:
+    # 1st-inning stats PLUS a forced refresh of every Hits/HRR player who
+    # played yesterday (see end_of_day.py). next_run_time=now ALSO fires
+    # it once immediately on every app startup/redeploy, in the
+    # scheduler's own background thread so it never blocks startup -
     # useful since a fresh deploy (or the very first run ever) means the
     # season-to-date counts aren't just "yesterday", they're the whole
     # backfill, and you shouldn't have to wait until 4am for that.
     scheduler.add_job(
-        inning_stats_sync.refresh_inning_stats,
+        end_of_day.run_end_of_day_update,
         CronTrigger(hour=INNING_STATS_REFRESH_HOUR_UTC, minute=INNING_STATS_REFRESH_MINUTE_UTC),
-        id="refresh_inning_stats",
+        id="end_of_day_update",
         next_run_time=datetime.utcnow(),
     )
     scheduler.start()

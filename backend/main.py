@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from models_db import Game, Prediction
 import poller
+import mlb_client
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
 
@@ -57,6 +58,7 @@ _ensure_column("batter_season_stats", "hr", "INTEGER DEFAULT 0")
 _ensure_column("batter_season_stats", "bb", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "hr_allowed", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "bb_allowed", "INTEGER DEFAULT 0")
+_ensure_column("pitcher_hits_stats", "runs_allowed", "INTEGER DEFAULT 0")
 
 _scheduler = None
 
@@ -89,7 +91,7 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
     to preview another day (e.g. tomorrow's slate, loaded ahead of time
     by the poller or by load_game_day.py).
     """
-    target_date = game_date or date.today().isoformat()
+    target_date = game_date or mlb_client.mlb_today().isoformat()
     games = (
         db.query(Game)
         .filter(Game.game_date == target_date)
@@ -188,15 +190,10 @@ def debug_inning_stats(db: Session = Depends(get_db)):
 @app.get("/api/admin/refresh-inning-stats")
 def manual_refresh_inning_stats(db: Session = Depends(get_db)):
     """
-    Manually triggers the end-of-day inning-stats sync right now, instead
-    of waiting for its scheduled 09:00 UTC run. Safe to hit any time -
-    it only processes days it hasn't already synced, so running this
-    right after the automatic daily run (or repeatedly) just confirms
-    you're already up to date rather than double-counting anything.
-
-    Runs synchronously and returns the resulting counts, so visiting
-    this URL in a browser both triggers the refresh AND shows you the
-    result in one step.
+    Manually triggers JUST the 1st-inning stats sync - kept for backward
+    compatibility (bookmarked from before the full end-of-day routine
+    existed). For everything (1st-inning stats + Hits/HRR player stats +
+    league rates), use /api/admin/run-daily-updates instead.
     """
     import inning_stats_sync
     from models_db import TeamInningStat, PitcherInningStat, SyncState
@@ -213,6 +210,28 @@ def manual_refresh_inning_stats(db: Session = Depends(get_db)):
         "pitcher_inning_stat_rows": pitcher_row_count,
         "last_synced_date": sync_row.value if sync_row else None,
     }
+
+
+@app.get("/api/admin/run-daily-updates")
+def manual_run_daily_updates():
+    """
+    Manually triggers the FULL end-of-day routine right now, instead of
+    waiting for its scheduled run (see poller.py's start_scheduler -
+    same time as the 1st-inning sync used to run alone, now folded
+    together): force-refreshes real season stats for every batter and
+    pitcher who played yesterday, refreshes the league-average rates
+    those formulas depend on, and re-syncs 1st-inning stats too - the
+    live-dashboard equivalent of running run_daily_updates.py by hand.
+
+    Safe to run any time, and safe to run more than once - every step
+    is idempotent (force-refreshing already-current data just confirms
+    it's current, doesn't double-count or corrupt anything).
+
+    Runs synchronously and returns a summary, so visiting this URL in a
+    browser both triggers it AND shows you the result in one step.
+    """
+    import end_of_day
+    return end_of_day.run_end_of_day_update()
 
 
 @app.get("/api/games/{game_pk}/hits")
@@ -303,8 +322,8 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
                 "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
                 "batting_order": r.batting_order,
-                "mean": inputs["mean"] if inputs else None,
-                "sd": inputs["sd"] if inputs else None,
+                "r": inputs["r"] if inputs else None,
+                "p": inputs["p"] if inputs else None,
                 "hrr_index": inputs["batter_hrr_index"] if inputs else None,
             })
         return out
