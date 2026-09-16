@@ -5,11 +5,14 @@ The live-dashboard equivalent of run_daily_updates.py's orchestration
 role - runs the full end-of-day routine in one call instead of several:
 
   1. Force-refresh season stats (Hits/HRR) for every batter and pitcher
-     who appeared in YESTERDAY's games, bypassing the normal 24h
-     staleness cache. Without this, a player's stats only update the
+     who appeared in YESTERDAY's and TODAY's games, bypassing the normal
+     24h staleness cache. Without this, a player's stats only update the
      next time their team's lineup happens to get (re-)confirmed and
-     24h have passed - this guarantees everyone who played is current
-     before the next day's slate gets analyzed.
+     24h have passed - this guarantees everyone who played (or has a
+     confirmed lineup today) is current. Including today specifically
+     matters for the MANUAL trigger - lets you self-heal a lineup
+     confirmed today whose stat sync failed for any reason, right away,
+     without waiting for the scheduled run.
   2. Force-refresh the league-average rates (hit rate, OBP, HR rate,
      walk rate, runs-allowed rate) the Hits/HRR formulas depend on -
      same reasoning, don't wait for the cache to expire naturally.
@@ -28,11 +31,12 @@ every 60s for every not-yet-started game). Those were manual, one-shot
 steps in the Excel workflow (fill_games.py once, fill_lineups.py
 pushed through the day); the live site just never stops doing them.
 
-DATE HANDLING: uses mlb_client.mlb_yesterday() (Eastern-anchored, see
-that function's own docstring) rather than a naive date.today() - the
-exact bug class already hit and fixed in the Excel-era scripts
-(mlb_today() being Eastern-anchored specifically to avoid a traveling
-user's local timezone picking the wrong day and returning zero games).
+DATE HANDLING: uses mlb_client.mlb_yesterday()/mlb_today() (both
+Eastern-anchored, see their own docstrings) rather than naive
+date.today() - the exact bug class already hit and fixed in the
+Excel-era scripts (mlb_today() being Eastern-anchored specifically to
+avoid a traveling user's local timezone picking the wrong day and
+returning zero games).
 """
 import logging
 
@@ -54,11 +58,15 @@ def run_end_of_day_update() -> dict:
     suitable for both the scheduled job's logs and the manual-trigger
     API endpoint's response.
     """
-    summary = {"date": mlb_client.mlb_yesterday().isoformat()}
+    summary = {"dates": [mlb_client.mlb_yesterday().isoformat(), mlb_client.mlb_today().isoformat()]}
 
-    # Step 1+2: force-refresh player stats + league rates for yesterday's games.
+    # Step 1+2: force-refresh player stats + league rates for yesterday's
+    # AND today's games. Including today matters for the MANUAL trigger
+    # specifically - self-heals any lineup that got confirmed today but
+    # whose underlying stat sync failed for some reason (e.g. a bug
+    # deployed mid-day), without waiting for the scheduled run.
     try:
-        summary["players_refreshed"] = _refresh_yesterdays_player_stats()
+        summary["players_refreshed"] = _refresh_recent_player_stats()
         summary["league_rates"] = "refreshed"
     except Exception:
         log.exception("Player/league-rate refresh failed")
@@ -78,18 +86,19 @@ def run_end_of_day_update() -> dict:
     return summary
 
 
-def _refresh_yesterdays_player_stats() -> int:
+def _refresh_recent_player_stats() -> int:
     """
-    Finds every game from yesterday (Eastern-anchored) and
+    Finds every game from yesterday AND today (Eastern-anchored) and
     force-refreshes season stats for each one's confirmed batters and
     probable pitchers. Games with no confirmed lineup (rare for a
-    completed day, but possible for a postponement) simply have nothing
-    to refresh - not an error. Returns total batter+pitcher rows touched.
+    completed day, but possible for a postponement, or simply not
+    confirmed yet for today) simply have nothing to refresh - not an
+    error. Returns total batter+pitcher rows touched.
     """
     db = SessionLocal()
     try:
-        yesterday_str = mlb_client.mlb_yesterday().isoformat()
-        games = db.query(Game).filter(Game.game_date == yesterday_str).all()
+        dates = [mlb_client.mlb_yesterday().isoformat(), mlb_client.mlb_today().isoformat()]
+        games = db.query(Game).filter(Game.game_date.in_(dates)).all()
 
         total_refreshed = 0
         for game in games:
