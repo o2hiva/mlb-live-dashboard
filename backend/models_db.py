@@ -136,7 +136,8 @@ class TrackedBet(Base):
     batter_name = Column(String)  # batter's name for "hits" bets, a display label (e.g. "1st Inning Run") otherwise
     team_side = Column(String, nullable=True)  # "home" / "away" - only meaningful for "hits" bets
     batting_order = Column(Integer, nullable=True)
-    hits_threshold = Column(Integer, nullable=True)  # the "at least H hits" selected - only for "hits" bets
+    hits_threshold = Column(Integer, nullable=True)  # legacy - see `line` below for both bet types
+    line = Column(Float, nullable=True)  # the O/U line at time of tracking - "at least H hits" (1.0, 2.0...) or an HRR line (1.5, 2.5...)
     yn = Column(String)  # "yes" / "no"
     model_probability = Column(Float)
     market_probability = Column(Float)  # stored as a percent (0-100), matching what's typed into the Market box
@@ -167,28 +168,33 @@ class LineupBatter(Base):
 
 
 class BatterSeasonStat(Base):
-    """Real season-to-date at-bats/hits for one batter, keyed by MLB's
-    own person id (not name) - sidesteps the real name-collision cases
-    your own fetch script already had to handle (e.g. two different
-    "Max Muncy"s on two different teams)."""
+    """Real season-to-date at-bats/hits/HR/walks for one batter, keyed
+    by MLB's own person id (not name) - sidesteps the real
+    name-collision cases your own fetch script already had to handle
+    (e.g. two different "Max Muncy"s on two different teams). HR/BB
+    were added for the HRR model - Hits alone only ever needed ab/hits."""
     __tablename__ = "batter_season_stats"
 
     batter_id = Column(Integer, primary_key=True)
     batter_name = Column(String)
     ab = Column(Integer, default=0)
     hits = Column(Integer, default=0)
+    hr = Column(Integer, default=0)
+    bb = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class PitcherHitsStat(Base):
-    """Real season-to-date outs recorded/hits-allowed for one pitcher,
-    keyed by person id - used by the Hits model's pitcher-shrinkage
-    term. Separate from PitcherInningStat (different data, different
-    model) even though both describe the same pitcher."""
+    """Real season-to-date outs recorded/hits-HR-walks-allowed for one
+    pitcher, keyed by person id - used by the Hits AND HRR models'
+    pitcher-shrinkage terms. Separate from PitcherInningStat (different
+    data, different model) even though both describe the same pitcher."""
     __tablename__ = "pitcher_hits_stats"
 
     pitcher_id = Column(Integer, primary_key=True)
     pitcher_name = Column(String)
     outs = Column(Integer, default=0)
     hits_allowed = Column(Integer, default=0)
+    hr_allowed = Column(Integer, default=0)
+    bb_allowed = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -24,6 +24,7 @@ import math
 from datetime import datetime, timedelta
 
 import mlb_client
+import ballpark_factors
 from database import SessionLocal
 from models_db import Game, LineupBatter, BatterSeasonStat, PitcherHitsStat, SyncState
 
@@ -110,11 +111,14 @@ def _sync_batter_stat(db, batter_id: int, batter_name: str):
         return
     if row is None:
         db.add(BatterSeasonStat(batter_id=batter_id, batter_name=batter_name,
-                                 ab=totals["ab"], hits=totals["hits"]))
+                                 ab=totals["ab"], hits=totals["hits"],
+                                 hr=totals["hr"], bb=totals["bb"]))
     else:
         row.batter_name = batter_name
         row.ab = totals["ab"]
         row.hits = totals["hits"]
+        row.hr = totals["hr"]
+        row.bb = totals["bb"]
 
 
 def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str):
@@ -130,11 +134,14 @@ def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str):
         return
     if row is None:
         db.add(PitcherHitsStat(pitcher_id=pitcher_id, pitcher_name=pitcher_name,
-                                outs=totals["outs"], hits_allowed=totals["hits_allowed"]))
+                                outs=totals["outs"], hits_allowed=totals["hits_allowed"],
+                                hr_allowed=totals["hr_allowed"], bb_allowed=totals["bb_allowed"]))
     else:
         row.pitcher_name = pitcher_name
         row.outs = totals["outs"]
         row.hits_allowed = totals["hits_allowed"]
+        row.hr_allowed = totals["hr_allowed"]
+        row.bb_allowed = totals["bb_allowed"]
 
 
 def check_and_sync_lineups(db, game: Game, boxscore: dict):
@@ -206,7 +213,8 @@ def get_pitcher_hit_index(pitcher_id: int | None) -> float | None:
         db.close()
 
 
-def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: int | None) -> dict | None:
+def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: int | None,
+                                home_team: str | None = None) -> dict | None:
     """
     Returns {"n_ab":, "p":, "hit_index":} for one batter:
 
@@ -219,7 +227,10 @@ def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: i
       - n_ab / p: shrinkage-adjusted inputs for "at least H hits", None
         if there isn't yet enough real sample to trust them (verbatim
         gates from core.py: 20 AB / 30 outs) OR the opposing pitcher's
-        stats haven't synced yet.
+        stats haven't synced yet. Now includes the ballpark HIT factor
+        (core.py's X17) for the game's actual venue - home_team
+        identifies which park (the home team's), applying to BOTH
+        teams' batters since it's about the park, not the team.
 
     Returns None only if there's no batter data at all yet (stats
     haven't synced for this player).
@@ -234,6 +245,7 @@ def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: i
         hit_index = (batter.hits / batter.ab) / league_rate if batter.ab > 0 else None
 
         pitcher = db.get(PitcherHitsStat, pitcher_id) if pitcher_id else None
+        ballpark_hit_factor = ballpark_factors.get_ballpark_factors(home_team)["hits"] if home_team else 1.0
 
         n_ab, p = None, None
         if pitcher and batter.ab >= MIN_BATTER_AB and pitcher.outs >= MIN_PITCHER_OUTS:
@@ -246,7 +258,8 @@ def compute_batter_hits_inputs(batter_id: int, batting_order: int, pitcher_id: i
             shrunk_pitcher_rate = (pitcher.hits_allowed + DEFAULT_LIVE_SHRINKAGE_K * league_rate) / \
                 (pitcher_batters_faced + DEFAULT_LIVE_SHRINKAGE_K)
 
-            p = league_rate * (shrunk_batter_rate / league_rate) * (shrunk_pitcher_rate / league_rate)
+            p = league_rate * (shrunk_batter_rate / league_rate) * (shrunk_pitcher_rate / league_rate) * \
+                ballpark_hit_factor
             p = max(0.01, min(p, 0.7))  # same sanity clamp as core.py
 
         return {"n_ab": n_ab, "p": p, "hit_index": hit_index}

@@ -183,8 +183,8 @@ def extract_boxscore_lineup(boxscore: dict, side: str) -> tuple:
 
 
 def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
-    """Real season-to-date at-bats/hits for one batter. Same endpoint
-    and field mapping as fetch_raw_batting_stats.py's
+    """Real season-to-date at-bats/hits/HR/walks for one batter. Same
+    endpoint and field mapping as fetch_raw_batting_stats.py's
     get_season_hitting_totals(). Returns None if this player has no
     hitting stats this season (e.g. a pure pitcher)."""
     resp = requests.get(
@@ -204,13 +204,17 @@ def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
     hits = stat.get("hits")
     if ab is None or hits is None:
         return None
-    return {"ab": ab, "hits": hits}
+    return {
+        "ab": ab, "hits": hits,
+        "hr": stat.get("homeRuns", 0) or 0,
+        "bb": stat.get("baseOnBalls", 0) or 0,
+    }
 
 
 def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
-    """Real season-to-date outs recorded/hits-allowed for one pitcher.
-    Same endpoint and field mapping as fetch_raw_batting_stats.py's
-    get_season_pitching_totals()."""
+    """Real season-to-date outs recorded/hits-HR-walks-allowed for one
+    pitcher. Same endpoint and field mapping as
+    fetch_raw_batting_stats.py's get_season_pitching_totals()."""
     resp = requests.get(
         f"{BASE}/v1/people/{person_id}/stats",
         params={"stats": "season", "season": season, "group": "pitching"},
@@ -232,7 +236,11 @@ def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
     hits_allowed = stat.get("hits")
     if hits_allowed is None:
         return None
-    return {"outs": outs, "hits_allowed": hits_allowed}
+    return {
+        "outs": outs, "hits_allowed": hits_allowed,
+        "hr_allowed": stat.get("homeRuns", 0) or 0,
+        "bb_allowed": stat.get("baseOnBalls", 0) or 0,
+    }
 
 
 ALL_TEAM_IDS = [
@@ -243,9 +251,10 @@ ALL_TEAM_IDS = [
 
 
 def get_team_season_hitting_totals(team_id: int, season: int) -> dict | None:
-    """This team's own real season-to-date at-bats/hits - used to
-    compute a real live league-average hit rate by summing across all
-    30 teams, rather than relying on a static/manually-set constant."""
+    """This team's own real season-to-date at-bats/hits/HR/walks - used
+    to compute real live league-average rates (hit rate, HR rate, walk
+    rate, on-base rate) by summing across all 30 teams, rather than
+    relying on a static/manually-set constant."""
     resp = requests.get(
         f"{BASE}/v1/teams/{team_id}/stats",
         params={"stats": "season", "season": season, "group": "hitting"},
@@ -263,4 +272,8 @@ def get_team_season_hitting_totals(team_id: int, season: int) -> dict | None:
     hits = stat.get("hits")
     if ab is None or hits is None:
         return None
-    return {"ab": ab, "hits": hits}
+    return {
+        "ab": ab, "hits": hits,
+        "hr": stat.get("homeRuns", 0) or 0,
+        "bb": stat.get("baseOnBalls", 0) or 0,
+    }

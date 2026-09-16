@@ -52,6 +52,11 @@ _ensure_column("bet_tracker_settings", "novig_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "fanduel_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "draftkings_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("tracked_bets", "bet_type", "VARCHAR DEFAULT 'hits'")
+_ensure_column("tracked_bets", "line", "FLOAT")
+_ensure_column("batter_season_stats", "hr", "INTEGER DEFAULT 0")
+_ensure_column("batter_season_stats", "bb", "INTEGER DEFAULT 0")
+_ensure_column("pitcher_hits_stats", "hr_allowed", "INTEGER DEFAULT 0")
+_ensure_column("pitcher_hits_stats", "bb_allowed", "INTEGER DEFAULT 0")
 
 _scheduler = None
 
@@ -238,7 +243,9 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
         )
         out = []
         for r in rows:
-            inputs = hits_stats_sync.compute_batter_hits_inputs(r.batter_id, r.batting_order, opposing_pitcher_id)
+            inputs = hits_stats_sync.compute_batter_hits_inputs(
+                r.batter_id, r.batting_order, opposing_pitcher_id, home_team=game.home_team
+            )
             out.append({
                 "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
@@ -258,6 +265,58 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
         "away_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.home_probable_pitcher_id),
         "home_opp_pitcher_name": game.away_probable_pitcher,
         "home_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.away_probable_pitcher_id),
+        "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
+        "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
+    }
+
+
+@app.get("/api/games/{game_pk}/hrr")
+def game_hrr(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Same shape as /api/games/{game_pk}/hits, but for the HRR (Hits+Runs+RBI)
+    market: each batter gets (mean, sd) instead of (n_ab, p) since HRR is
+    modeled as approximately Normal rather than binomial - the frontend
+    computes "P(HRR >= line)" for any line instantly via a normal CDF,
+    the same "compute once, adjust instantly client-side" pattern Hits uses.
+    """
+    from models_db import LineupBatter
+    import hrr_stats_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    def batters_for_side(side: str, opposing_pitcher_id):
+        rows = (
+            db.query(LineupBatter)
+            .filter_by(game_pk=game_pk, team_side=side)
+            .order_by(LineupBatter.batting_order)
+            .all()
+        )
+        out = []
+        for r in rows:
+            inputs = hrr_stats_sync.compute_hrr_inputs(
+                r.batter_id, r.batting_order, opposing_pitcher_id,
+                home_team=game.home_team, game_pk=game_pk, team_side=side,
+            )
+            out.append({
+                "batter_id": r.batter_id,
+                "batter_name": r.batter_name,
+                "batting_order": r.batting_order,
+                "mean": inputs["mean"] if inputs else None,
+                "sd": inputs["sd"] if inputs else None,
+                "hrr_index": inputs["batter_hrr_index"] if inputs else None,
+            })
+        return out
+
+    return {
+        "game_pk": game_pk,
+        "home_lineup_confirmed": game.home_lineup_confirmed,
+        "away_lineup_confirmed": game.away_lineup_confirmed,
+        "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.home_probable_pitcher_id),
+        "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.away_probable_pitcher_id),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
     }
@@ -374,12 +433,13 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
 
 class TrackedBetCreate(BaseModel):
     game_pk: int
-    bet_type: str = "hits"  # "hits" or "first_inning_run"
+    bet_type: str = "hits"  # "hits", "first_inning_run", or "hrr"
     batter_id: int | None = None
     batter_name: str
     team_side: str | None = None
     batting_order: int | None = None
     hits_threshold: int | None = None
+    line: float | None = None  # the O/U line at time of tracking - use this over hits_threshold for new bets
     yn: str
     model_probability: float | None = None
     market_probability: float | None = None
@@ -441,6 +501,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "matchup": f"{game.away_team} @ {game.home_team}" if game else "Unknown matchup",
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
+            "line": r.line if r.line is not None else r.hits_threshold,
             "yn": r.yn,
             "market_probability": r.market_probability,
             "wager": r.wager,
