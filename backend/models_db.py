@@ -142,6 +142,7 @@ class BatterPlatoonSplit(Base):
     hr_factor_vs_l = Column(Float, nullable=True)
     hr_factor_vs_r = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+class TrackedBet(Base):
     """A bet you've flagged with a 'Track' checkbox (from the Hits table
     or the 1st-inning market) - a snapshot of the bet as it looked at
     the moment you checked it (market %, wager, potential profit, model
