@@ -620,26 +620,45 @@
   const hrrDataCache = {};
   const hrrBetState = {};
 
-  function erf(x) {
-    // Abramowitz-Stegun approximation (max error ~1.5e-7) - avoids
-    // needing a math library just for this one function.
-    const sign = x < 0 ? -1 : 1;
-    x = Math.abs(x);
-    const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
-    const t = 1 / (1 + p * x);
-    const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-    return sign * y;
+  function lgamma(x) {
+    // Lanczos approximation to the log-gamma function (g=7, n=9 coefficients),
+    // accurate to ~15 significant digits for x > 0 - avoids needing a math
+    // library just for this. Used to compute the Negative Binomial PMF for
+    // non-integer r, the same way core.py's formula does via scipy/math.lgamma.
+    const g = 7;
+    const coeffs = [
+      0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+      771.32342877765313, -176.61502916214059, 12.507343278686905,
+      -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+    ];
+    if (x < 0.5) {
+      // Reflection formula for x < 0.5 - not needed for our use (r, k+r > 0 always) but kept for safety.
+      return Math.log(Math.PI / Math.sin(Math.PI * x)) - lgamma(1 - x);
+    }
+    x -= 1;
+    let a = coeffs[0];
+    const t = x + g + 0.5;
+    for (let i = 1; i < g + 2; i++) a += coeffs[i] / (x + i);
+    return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
   }
 
-  function normCdf(x, mean, sd) {
-    if (sd <= 0) return x < mean ? 1 : 0;
-    const z = (x - mean) / (sd * Math.sqrt(2));
-    return 0.5 * (1 + erf(z));
+  function nbinomSf(thresholdInt, r, p) {
+    // 1 - CDF(thresholdInt) for Negative Binomial(r, p) - same math as
+    // hrr_stats_sync.py's _nbinom_sf, just in JS so the line can change
+    // instantly without a server round-trip.
+    if (r == null || p == null || r <= 0 || p <= 0 || p >= 1) return null;
+    const logP = Math.log(p), log1mP = Math.log(1 - p);
+    let cdf = 0;
+    for (let k = 0; k <= thresholdInt; k++) {
+      const logPmf = lgamma(k + r) - lgamma(r) - lgamma(k + 1) + r * logP + k * log1mP;
+      cdf += Math.exp(logPmf);
+    }
+    return Math.max(0, Math.min(1, 1 - cdf));
   }
 
-  function probHrrAtLeast(mean, sd, line) {
-    if (mean == null || sd == null) return null;
-    return Math.max(0, Math.min(1, 1 - normCdf(line, mean, sd)));
+  function probHrrAtLeast(r, p, line) {
+    if (r == null || p == null) return null;
+    return nbinomSf(Math.trunc(line), r, p);
   }
 
   function getHrrBetState(gamePk, side, batterId) {
@@ -739,7 +758,7 @@
 
   function hrrBatterRowHtml(gamePk, side, b, line) {
     const hiStr = b.hrr_index != null ? b.hrr_index.toFixed(2) : "—";
-    const yesPct = (b.mean != null && b.sd != null) ? probHrrAtLeast(b.mean, b.sd, line) * 100 : null;
+    const yesPct = (b.r != null && b.p != null) ? probHrrAtLeast(b.r, b.p, line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
