@@ -61,6 +61,9 @@
   .lineup-status { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
   .lineup-status.confirmed { color: var(--accent); }
   .hits-toggle { font-size: 0.75rem; color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .lineup-tabs { display: flex; gap: 14px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px; }
+  .lineup-tab { cursor: pointer; font-size: 0.72rem; color: var(--muted); padding-bottom: 2px; }
+  .lineup-tab.active { color: var(--accent); font-weight: 600; border-bottom: 2px solid var(--accent); }
   .hits-container { margin-top: 8px; overflow-x: auto; }
   .hits-controls { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
   .hits-controls select { background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; }
@@ -194,8 +197,7 @@
       return;
     }
     grid.innerHTML = games.map(cardHtml).join("");
-    reapplyExpandedHits();
-    reapplyExpandedHrr();
+    reapplyExpandedLineups();
   }
 
   function formatLocalStartTime(isoUtc) {
@@ -277,11 +279,8 @@
           </div>` : ""}
         ${(g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
           <div style="margin-top:14px;">
-            <span id="hits-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleHits(${g.game_pk})">Show Hits ▾</span>
-            <span style="color:var(--muted); margin:0 6px;">|</span>
-            <span id="hrr-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleHrr(${g.game_pk})">HRR ▾</span>
-            <div id="hits-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
-            <div id="hrr-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
+            <span id="lineup-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleLineup(${g.game_pk})">Show Lineup ▾</span>
+            <div id="lineup-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
           </div>` : ""}
       </div>
     `;
@@ -291,7 +290,6 @@
   // State lives outside cardHtml/render so it survives the 10s poll
   // refresh, which otherwise rebuilds the whole grid (and would
   // collapse/re-fetch everything on every cycle without this).
-  const expandedHitsGames = new Set();
   const hitsThresholdByGame = {};
   const hitsDataCache = {};
 
@@ -314,19 +312,31 @@
     return Math.max(0, Math.min(1, 1 - cumulative));
   }
 
-  function toggleHits(gamePk) {
-    if (expandedHitsGames.has(gamePk)) {
-      expandedHitsGames.delete(gamePk);
+  // ---- Lineup section: ONE expandable area per game, with an internal
+  // Hits/HRR tab switch inside it (not two separate stacked sections). ----
+  const expandedLineupGames = new Set();
+  const activeLineupTab = {}; // gamePk -> "hits" | "hrr", default "hits"
+
+  function toggleLineup(gamePk) {
+    if (expandedLineupGames.has(gamePk)) {
+      expandedLineupGames.delete(gamePk);
     } else {
-      expandedHitsGames.add(gamePk);
+      expandedLineupGames.add(gamePk);
+      if (!activeLineupTab[gamePk]) activeLineupTab[gamePk] = "hits";
       if (!hitsThresholdByGame[gamePk]) hitsThresholdByGame[gamePk] = 1;
+      if (hrrLineByGame[gamePk] == null) hrrLineByGame[gamePk] = 1.5;
     }
-    renderHitsSection(gamePk);
+    renderLineupSection(gamePk);
+  }
+
+  function switchLineupTab(gamePk, tab) {
+    activeLineupTab[gamePk] = tab;
+    renderLineupSection(gamePk);
   }
 
   function setHitsThreshold(gamePk, value) {
     hitsThresholdByGame[gamePk] = parseInt(value, 10);
-    renderHitsSection(gamePk); // instant re-render from cache, no fetch
+    rerenderHits(gamePk); // instant re-render from cache, no fetch
   }
 
   // ---- Bet sizing (Kelly Criterion) ----
@@ -373,13 +383,6 @@
       state[field] = value;
     }
     rerenderHits(gamePk);
-  }
-
-  function rerenderHits(gamePk) {
-    const container = document.getElementById(`hits-container-${gamePk}`);
-    if (container && hitsDataCache[gamePk]) {
-      container.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
-    }
   }
 
   function kellyWagerAmount(modelProb, marketPct) {
@@ -602,52 +605,17 @@
     `;
   }
 
-  function renderHitsSection(gamePk) {
-    const container = document.getElementById(`hits-container-${gamePk}`);
-    const toggle = document.getElementById(`hits-toggle-${gamePk}`);
-    if (!container) return;
-
-    if (!expandedHitsGames.has(gamePk)) {
-      container.style.display = "none";
-      container.innerHTML = "";
-      if (toggle) toggle.textContent = "Show Hits ▾";
-      return;
+  function rerenderHits(gamePk) {
+    if (activeLineupTab[gamePk] !== "hits") return; // that tab isn't currently shown, nothing to update
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && hitsDataCache[gamePk]) {
+      contentDiv.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
     }
-
-    if (toggle) toggle.textContent = "Hide Hits ▴";
-    container.style.display = "block";
-
-    if (hitsDataCache[gamePk]) {
-      container.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
-      return;
-    }
-
-    container.innerHTML = `<div class="hits-loading">Loading batters...</div>`;
-    fetch(`${API_BASE}/api/games/${gamePk}/hits`)
-      .then(res => res.json())
-      .then(data => {
-        hitsDataCache[gamePk] = data;
-        if (expandedHitsGames.has(gamePk)) {
-          container.innerHTML = hitsSectionHtml(gamePk, data);
-        }
-      })
-      .catch(() => {
-        container.innerHTML = `<div class="hits-loading">Couldn't load batters.</div>`;
-      });
-  }
-
-  function reapplyExpandedHits() {
-    // The 10s poll refresh rebuilds the whole grid from scratch, so any
-    // previously-expanded Hits section needs to be restored afterward -
-    // from cache (instant) rather than re-fetched, since batter season
-    // stats don't change within a browsing session.
-    expandedHitsGames.forEach(renderHitsSection);
   }
 
   // ---- HRR prop: same structure as Hits, but a NORMAL distribution
   // (mean/sd) instead of binomial (n_ab/p), since HRR production is
   // modeled as continuous, not a count of discrete at-bats. ----
-  const expandedHrrGames = new Set();
   const hrrLineByGame = {};
   const hrrDataCache = {};
   const hrrBetState = {};
@@ -696,9 +664,10 @@
   }
 
   function rerenderHrr(gamePk) {
-    const container = document.getElementById(`hrr-container-${gamePk}`);
-    if (container && hrrDataCache[gamePk]) {
-      container.innerHTML = hrrSectionHtml(gamePk, hrrDataCache[gamePk]);
+    if (activeLineupTab[gamePk] !== "hrr") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && hrrDataCache[gamePk]) {
+      contentDiv.innerHTML = hrrSectionHtml(gamePk, hrrDataCache[gamePk]);
     }
   }
 
@@ -813,52 +782,64 @@
     rerenderHrr(gamePk);
   }
 
-  function toggleHrr(gamePk) {
-    if (expandedHrrGames.has(gamePk)) {
-      expandedHrrGames.delete(gamePk);
-    } else {
-      expandedHrrGames.add(gamePk);
-      if (hrrLineByGame[gamePk] == null) hrrLineByGame[gamePk] = 1.5;
-    }
-    renderHrrSection(gamePk);
-  }
+  function renderLineupSection(gamePk) {
+    const outerContainer = document.getElementById(`lineup-container-${gamePk}`);
+    const toggle = document.getElementById(`lineup-toggle-${gamePk}`);
+    if (!outerContainer) return;
 
-  function renderHrrSection(gamePk) {
-    const container = document.getElementById(`hrr-container-${gamePk}`);
-    const toggle = document.getElementById(`hrr-toggle-${gamePk}`);
-    if (!container) return;
-
-    if (!expandedHrrGames.has(gamePk)) {
-      container.style.display = "none";
-      container.innerHTML = "";
-      if (toggle) toggle.textContent = "HRR ▾";
+    if (!expandedLineupGames.has(gamePk)) {
+      outerContainer.style.display = "none";
+      outerContainer.innerHTML = "";
+      if (toggle) toggle.textContent = "Show Lineup ▾";
       return;
     }
 
-    if (toggle) toggle.textContent = "HRR ▴";
-    container.style.display = "block";
+    if (toggle) toggle.textContent = "Hide Lineup ▴";
+    outerContainer.style.display = "block";
 
-    if (hrrDataCache[gamePk]) {
-      container.innerHTML = hrrSectionHtml(gamePk, hrrDataCache[gamePk]);
+    const tab = activeLineupTab[gamePk] || "hits";
+    outerContainer.innerHTML = `
+      <div class="lineup-tabs">
+        <span class="lineup-tab ${tab === "hits" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hits')">Hits</span>
+        <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
+      </div>
+      <div id="lineup-content-${gamePk}"></div>
+    `;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+
+    const dataCache = tab === "hits" ? hitsDataCache : hrrDataCache;
+    const sectionHtmlFn = tab === "hits" ? hitsSectionHtml : hrrSectionHtml;
+    const apiPath = tab === "hits" ? "hits" : "hrr";
+
+    if (dataCache[gamePk]) {
+      contentDiv.innerHTML = sectionHtmlFn(gamePk, dataCache[gamePk]);
       return;
     }
 
-    container.innerHTML = `<div class="hits-loading">Loading batters...</div>`;
-    fetch(`${API_BASE}/api/games/${gamePk}/hrr`)
+    contentDiv.innerHTML = `<div class="hits-loading">Loading batters...</div>`;
+    fetch(`${API_BASE}/api/games/${gamePk}/${apiPath}`)
       .then(res => res.json())
       .then(data => {
-        hrrDataCache[gamePk] = data;
-        if (expandedHrrGames.has(gamePk)) {
-          container.innerHTML = hrrSectionHtml(gamePk, data);
+        dataCache[gamePk] = data;
+        // Only paint the result if the viewer hasn't switched tabs/collapsed
+        // the section while this fetch was in flight.
+        if (expandedLineupGames.has(gamePk) && (activeLineupTab[gamePk] || "hits") === tab) {
+          contentDiv.innerHTML = sectionHtmlFn(gamePk, data);
         }
       })
       .catch(() => {
-        container.innerHTML = `<div class="hits-loading">Couldn't load batters.</div>`;
+        if (expandedLineupGames.has(gamePk) && (activeLineupTab[gamePk] || "hits") === tab) {
+          contentDiv.innerHTML = `<div class="hits-loading">Couldn't load batters.</div>`;
+        }
       });
   }
 
-  function reapplyExpandedHrr() {
-    expandedHrrGames.forEach(renderHrrSection);
+  function reapplyExpandedLineups() {
+    // The 10s poll refresh rebuilds the whole grid from scratch, so any
+    // previously-expanded lineup section needs to be restored afterward -
+    // from cache (instant) rather than re-fetched, since batter season
+    // stats don't change within a browsing session.
+    expandedLineupGames.forEach(renderLineupSection);
   }
 
   fetchGames();
