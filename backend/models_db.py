@@ -113,7 +113,35 @@ class BetTrackerSettings(Base):
     draftkings_balance = Column(Float, default=0.0)
 
 
-class TrackedBet(Base):
+class PitcherHand(Base):
+    """A pitcher's throwing hand ('L'/'R'), keyed by person id. Unlike
+    everything else in this file, this never changes for a given
+    player - fetched once and effectively cached forever (see
+    platoon_stats_sync.py), not on the usual 24h cycle."""
+    __tablename__ = "pitcher_hands"
+
+    pitcher_id = Column(Integer, primary_key=True)
+    pitcher_name = Column(String)
+    hand = Column(String)  # "L" or "R"
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BatterPlatoonSplit(Base):
+    """A batter's real Hits/HR rate specifically vs LHP and vs RHP,
+    already converted to factors (ratio to league average, same
+    convention as every other factor in this system). NULL for any
+    split with under 15 AB against that hand - not enough sample to
+    trust, matching fetch_batter_platoon_splits.py's own threshold.
+    Ported from that script's "Batter Platoon Splits" tab."""
+    __tablename__ = "batter_platoon_splits"
+
+    batter_id = Column(Integer, primary_key=True)
+    batter_name = Column(String)
+    hits_factor_vs_l = Column(Float, nullable=True)
+    hits_factor_vs_r = Column(Float, nullable=True)
+    hr_factor_vs_l = Column(Float, nullable=True)
+    hr_factor_vs_r = Column(Float, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     """A bet you've flagged with a 'Track' checkbox (from the Hits table
     or the 1st-inning market) - a snapshot of the bet as it looked at
     the moment you checked it (market %, wager, potential profit, model

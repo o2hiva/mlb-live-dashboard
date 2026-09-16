@@ -265,6 +265,43 @@ def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
     }
 
 
+def get_pitch_hand(person_id: int) -> str | None:
+    """
+    This pitcher's throwing hand ('L' or 'R'), straight from their
+    player record - unlike everything else in this file, this never
+    changes for a given player, so it's safe to cache indefinitely
+    rather than on the usual 24h cycle. Ported from
+    fetch_pitcher_hands.py's get_pitch_hand().
+    """
+    resp = requests.get(f"{BASE}/v1/people/{person_id}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    people = resp.json().get("people", [])
+    if not people:
+        return None
+    return people[0].get("pitchHand", {}).get("code")
+
+
+def get_batter_platoon_split(person_id: int, season: int, sit_code: str) -> dict | None:
+    """
+    One split ('vl' or 'vr') of a batter's real season hitting stats -
+    ported from fetch_batter_platoon_splits.py's get_platoon_split().
+    NOTE: this endpoint is explicitly flagged by that script's own
+    author as untested against live data ("the most speculative part").
+    Returns the raw stat dict (atBats, hits, homeRuns, etc.) or None if
+    no splits exist for this situation code.
+    """
+    resp = requests.get(
+        f"{BASE}/v1/people/{person_id}/stats",
+        params={"stats": "statSplits", "sitCodes": sit_code, "group": "hitting", "season": season},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    splits = resp.json().get("stats", [{}])[0].get("splits", [])
+    if not splits:
+        return None
+    return splits[0].get("stat", {})
+
+
 ALL_TEAM_IDS = [
     108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
     118, 119, 120, 121, 133, 134, 135, 136, 137, 138,
