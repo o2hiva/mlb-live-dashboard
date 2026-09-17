@@ -77,6 +77,8 @@
   }
   .hits-batter input[type="checkbox"] { width: auto; justify-self: center; }
   .hits-index { color: var(--muted); font-size: 0.7rem; text-align: center; }
+  .prob-yes { color: #4ade80; }
+  .prob-no { color: #f87171; }
   .hits-batter > span:last-child { text-align: right; }
   .hits-na { color: var(--muted); font-size: 0.75rem; }
   .hits-loading { font-size: 0.75rem; color: var(--muted); }
@@ -268,7 +270,7 @@
               <div style="background:var(--live); height:100%; width:${noPct}%;"></div>
             </div>
             <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.9rem;">
-              <span>Yes: ${yesPct}%</span><span>No: ${noPct}%</span>
+              <span class="prob-yes">Yes: ${yesPct}%</span><span class="prob-no">No: ${noPct}%</span>
             </div>
             <div class="hits-batter hits-batter-header" style="grid-template-columns: 46px 52px 30px 60px 60px 40px; margin-top:10px;">
               <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
@@ -543,7 +545,7 @@
     const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${h},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
       <select id="yn-${idBase}" onchange="updateBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
         <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
         <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
@@ -567,7 +569,7 @@
       <div class="hits-batter">
         <span>${b.batting_order}. ${b.batter_name}</span>
         <span class="hits-index">HI ${hiStr}</span>
-        <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${betRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
       </div>
     `;
@@ -700,7 +702,7 @@
     const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
       <select id="yn-${idBase}" onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
         <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
         <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
@@ -724,7 +726,7 @@
       <div class="hits-batter">
         <span>${b.batting_order}. ${b.batter_name}</span>
         <span class="hits-index">HI ${hiStr}</span>
-        <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct)}
       </div>
     `;
@@ -877,7 +879,7 @@
     const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
       <select id="yn-${idBase}" onchange="updateHrrBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)">
         <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
         <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
@@ -901,7 +903,7 @@
       <div class="hits-batter">
         <span>${b.batting_order}. ${b.batter_name}</span>
         <span class="hits-index">HI ${hiStr}</span>
-        <span>${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${hrrBetRowCellsHtml(gamePk, side, b, yesPct, noPct, line)}
       </div>
     `;
