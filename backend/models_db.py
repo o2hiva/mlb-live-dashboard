@@ -132,7 +132,10 @@ class BatterPlatoonSplit(Base):
     convention as every other factor in this system). NULL for any
     split with under 15 AB against that hand - not enough sample to
     trust, matching fetch_batter_platoon_splits.py's own threshold.
-    Ported from that script's "Batter Platoon Splits" tab."""
+    Ported from that script's "Batter Platoon Splits" tab. bat_side
+    ('L'/'R'/'S' for switch-hitter) lives here too since it's the same
+    "batter handedness-related data" concern, even though it's fetched
+    from a different endpoint and cached far longer (never changes)."""
     __tablename__ = "batter_platoon_splits"
 
     batter_id = Column(Integer, primary_key=True)
@@ -141,6 +144,8 @@ class BatterPlatoonSplit(Base):
     hits_factor_vs_r = Column(Float, nullable=True)
     hr_factor_vs_l = Column(Float, nullable=True)
     hr_factor_vs_r = Column(Float, nullable=True)
+    bat_side = Column(String, nullable=True)  # 'L' / 'R' / 'S'
+    bat_side_updated_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 class PitcherKStat(Base):
     """Real season-to-date strikeouts/batters-faced/starts/innings for

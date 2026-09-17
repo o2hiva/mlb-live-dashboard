@@ -59,6 +59,45 @@ def get_pitcher_hand(pitcher_id: int, pitcher_name: str, force: bool = False) ->
         db.close()
 
 
+def get_batter_hand(batter_id: int, batter_name: str, force: bool = False) -> str | None:
+    """
+    Returns 'L'/'R'/'S' (switch-hitter) for this batter, fetching+
+    caching on first ask (or if force=True). Stored on the same
+    BatterPlatoonSplit row as the vs-L/vs-R factors, but with its OWN
+    much-longer staleness window (bat_side never changes, unlike those
+    factors which refresh every 24h) - checked via bat_side_updated_at,
+    not the row's own updated_at, so this doesn't get needlessly
+    re-fetched just because the split factors happen to be refreshing.
+    Returns None if the lookup fails - callers should treat that as
+    "side unknown", not an error.
+    """
+    db = SessionLocal()
+    try:
+        row = db.get(BatterPlatoonSplit, batter_id)
+        if row and row.bat_side and not force and row.bat_side_updated_at and \
+                datetime.utcnow() - row.bat_side_updated_at < HAND_STALE_AFTER:
+            return row.bat_side
+        try:
+            side = mlb_client.get_bat_side(batter_id)
+        except Exception:
+            log.exception("Failed to fetch bat side for %s (%s)", batter_name, batter_id)
+            return row.bat_side if row else None
+        if side is None:
+            return row.bat_side if row else None
+        if row is None:
+            row = BatterPlatoonSplit(batter_id=batter_id, batter_name=batter_name,
+                                      bat_side=side, bat_side_updated_at=datetime.utcnow())
+            db.add(row)
+        else:
+            row.batter_name = batter_name
+            row.bat_side = side
+            row.bat_side_updated_at = datetime.utcnow()
+        db.commit()
+        return side
+    finally:
+        db.close()
+
+
 def _factor(split_stat: dict | None, count_key: str, league_rate: float | None) -> float | None:
     """Verbatim from fetch_batter_platoon_splits.py's factor() - None if
     under 15 AB against this hand (too small a sample to trust)."""

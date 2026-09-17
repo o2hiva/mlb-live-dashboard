@@ -227,9 +227,9 @@ def check_and_sync_lineups(db, game: Game, boxscore: dict):
 
 
 def _sync_batter_platoon(db, batter_id: int, batter_name: str):
-    """Syncs this batter's real vs-L/vs-R Hits/HR factors (see
-    platoon_stats_sync.py), used by compute_batter_hits_inputs and
-    hr_stats_sync.compute_hr_inputs to swap in a hand-specific rate
+    """Syncs this batter's real vs-L/vs-R Hits/HR factors AND their bat
+    side (see platoon_stats_sync.py), used by compute_batter_hits_inputs
+    and hr_stats_sync.compute_hr_inputs to swap in a hand-specific rate
     when available. Best-effort: a failure here doesn't block the
     batter's own season-stat sync above. Local imports avoid a circular
     import (hrr_stats_sync imports this module at its own top level)."""
@@ -239,6 +239,7 @@ def _sync_batter_platoon(db, batter_id: int, batter_name: str):
         la_b9 = get_league_average_hit_rate()
         la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
         platoon_stats_sync.sync_batter_platoon_split(batter_id, batter_name, SEASON, la_b9, la_hr_rate)
+        platoon_stats_sync.get_batter_hand(batter_id, batter_name)
     except Exception:
         log.exception("Failed to sync platoon split for %s (%s)", batter_name, batter_id)
 

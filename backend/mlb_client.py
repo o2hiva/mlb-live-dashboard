@@ -319,6 +319,21 @@ def get_pitch_hand(person_id: int) -> str | None:
     return people[0].get("pitchHand", {}).get("code")
 
 
+def get_bat_side(person_id: int) -> str | None:
+    """
+    This batter's batting side ('L', 'R', or 'S' for switch-hitter),
+    straight from their player record - same endpoint as
+    get_pitch_hand, just a different field. Never changes for a given
+    player, safe to cache indefinitely.
+    """
+    resp = requests.get(f"{BASE}/v1/people/{person_id}", timeout=TIMEOUT)
+    resp.raise_for_status()
+    people = resp.json().get("people", [])
+    if not people:
+        return None
+    return people[0].get("batSide", {}).get("code")
+
+
 def get_batter_platoon_split(person_id: int, season: int, sit_code: str) -> dict | None:
     """
     One split ('vl' or 'vr') of a batter's real season hitting stats -

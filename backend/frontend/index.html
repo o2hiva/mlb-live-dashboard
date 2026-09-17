@@ -591,7 +591,7 @@
 
     return `
       <div class="hits-batter">
-        <span>${b.batting_order}. ${b.batter_name}</span>
+        <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
         <span class="hits-index">HI ${hiStr}</span>
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${betRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
@@ -611,10 +611,10 @@
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(gamePk, "away", b, h)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(gamePk, "away", b, h)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(gamePk, "home", b, h)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(gamePk, "home", b, h)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
@@ -748,7 +748,7 @@
 
     return `
       <div class="hits-batter">
-        <span>${b.batting_order}. ${b.batter_name}</span>
+        <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
         <span class="hits-index">HI ${hiStr}</span>
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct)}
@@ -761,10 +761,10 @@
     const homePitcherHi = data.home_opp_pitcher_hr_index != null ? data.home_opp_pitcher_hr_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrBatterRowHtml(gamePk, "away", b)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrBatterRowHtml(gamePk, "away", b)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrBatterRowHtml(gamePk, "home", b)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrBatterRowHtml(gamePk, "home", b)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
@@ -890,7 +890,7 @@
 
     return `
       <div class="hits-batter">
-        <span>${pitcher.pitcher_name || "TBD"}</span>
+        <span>${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}</span>
         <span class="hits-index">K ${kiStr} / Opp ${oppStr}</span>
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${kBetRowCellsHtml(gamePk, side, pitcher.pitcher_name || "", yesPct, noPct, line)}
@@ -1074,7 +1074,7 @@
 
     return `
       <div class="hits-batter">
-        <span>${b.batting_order}. ${b.batter_name}</span>
+        <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
         <span class="hits-index">HI ${hiStr}</span>
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${hrrBetRowCellsHtml(gamePk, side, b, yesPct, noPct, line)}
@@ -1088,10 +1088,10 @@
     const homePitcherHi = data.home_opp_pitcher_hrr_index != null ? data.home_opp_pitcher_hrr_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b, line)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b, line)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b, line)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b, line)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `

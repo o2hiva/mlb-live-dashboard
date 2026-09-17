@@ -62,6 +62,8 @@ _ensure_column("batter_season_stats", "plate_appearances", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "hr_allowed", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "bb_allowed", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "runs_allowed", "INTEGER DEFAULT 0")
+_ensure_column("batter_platoon_splits", "bat_side", "VARCHAR")
+_ensure_column("batter_platoon_splits", "bat_side_updated_at", "TIMESTAMP")
 
 _scheduler = None
 
@@ -251,6 +253,7 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
     """
     from models_db import LineupBatter
     import hits_stats_sync
+    import platoon_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
@@ -272,6 +275,7 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
                 "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
                 "batting_order": r.batting_order,
+                "bat_side": platoon_stats_sync.get_batter_hand(r.batter_id, r.batter_name),
                 "n_ab": inputs["n_ab"] if inputs else None,
                 "p": inputs["p"] if inputs else None,
                 "hit_index": inputs["hit_index"] if inputs else None,
@@ -284,8 +288,10 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
         "away_lineup_confirmed": game.away_lineup_confirmed,
         # Away batters face the HOME team's probable pitcher, and vice versa.
         "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.home_probable_pitcher_id, game.home_probable_pitcher or ""),
         "away_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.home_probable_pitcher_id),
         "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.away_probable_pitcher_id, game.away_probable_pitcher or ""),
         "home_opp_pitcher_hit_index": hits_stats_sync.get_pitcher_hit_index(game.away_probable_pitcher_id),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
@@ -304,6 +310,7 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     from models_db import LineupBatter
     import hrr_stats_sync
     import hits_stats_sync
+    import platoon_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
@@ -334,6 +341,7 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
                 "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
                 "batting_order": r.batting_order,
+                "bat_side": platoon_stats_sync.get_batter_hand(r.batter_id, r.batter_name),
                 "r": inputs["r"] if inputs else None,
                 "p": inputs["p"] if inputs else None,
                 "hrr_index": inputs["batter_hrr_index"] if inputs else None,
@@ -345,8 +353,10 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
         "home_lineup_confirmed": game.home_lineup_confirmed,
         "away_lineup_confirmed": game.away_lineup_confirmed,
         "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.home_probable_pitcher_id, game.home_probable_pitcher or ""),
         "away_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.home_probable_pitcher_id, la_b9=la_b9, hrr_rates=hrr_rates),
         "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.away_probable_pitcher_id, game.away_probable_pitcher or ""),
         "home_opp_pitcher_hrr_index": hrr_stats_sync.get_pitcher_hrr_index(game.away_probable_pitcher_id, la_b9=la_b9, hrr_rates=hrr_rates),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
@@ -394,6 +404,7 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
                 "batter_id": r.batter_id,
                 "batter_name": r.batter_name,
                 "batting_order": r.batting_order,
+                "bat_side": platoon_stats_sync.get_batter_hand(r.batter_id, r.batter_name),
                 "n_ab": inputs["n_ab"] if inputs else None,
                 "p": inputs["p"] if inputs else None,
                 "hr_index": inputs["hr_index"] if inputs else None,
@@ -406,8 +417,10 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
         "home_lineup_confirmed": game.home_lineup_confirmed,
         "away_lineup_confirmed": game.away_lineup_confirmed,
         "away_opp_pitcher_name": game.home_probable_pitcher,
+        "away_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.home_probable_pitcher_id, game.home_probable_pitcher or ""),
         "away_opp_pitcher_hr_index": hr_stats_sync.get_pitcher_hr_index(game.home_probable_pitcher_id, la_hr_rate=la_hr_rate),
         "home_opp_pitcher_name": game.away_probable_pitcher,
+        "home_opp_pitcher_hand": platoon_stats_sync.get_pitcher_hand(game.away_probable_pitcher_id, game.away_probable_pitcher or ""),
         "home_opp_pitcher_hr_index": hr_stats_sync.get_pitcher_hr_index(game.away_probable_pitcher_id, la_hr_rate=la_hr_rate),
         "home_batters": batters_for_side("home", game.away_probable_pitcher_id),
         "away_batters": batters_for_side("away", game.home_probable_pitcher_id),
@@ -425,6 +438,7 @@ def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
     own team's.
     """
     import pitcher_k_sync
+    import platoon_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
@@ -438,6 +452,7 @@ def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
         return {
             "pitcher_id": pitcher_id,
             "pitcher_name": pitcher_name,
+            "pitcher_hand": platoon_stats_sync.get_pitcher_hand(pitcher_id, pitcher_name or "") if pitcher_id else None,
             "mean": inputs["mean"] if inputs else None,
             "sd": inputs["sd"] if inputs else None,
             "pitcher_k_index": inputs["pitcher_k_index"] if inputs else None,
