@@ -411,6 +411,46 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/games/{game_pk}/pitcher-k")
+def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Pitcher K prop - structurally different from Hits/HRR/HR: only 2
+    rows (the two starting pitchers), not one per batter, since a
+    strikeout total is a per-PITCHER stat. Each pitcher's probability
+    depends on the OPPOSING lineup being confirmed (the genuinely
+    lineup-specific batter blend - see pitcher_k_sync.py), not their
+    own team's.
+    """
+    import pitcher_k_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    la_b13 = pitcher_k_sync.get_league_k_rate()
+
+    def pitcher_row(pitcher_id, pitcher_name, batting_team_side):
+        inputs = pitcher_k_sync.compute_pitcher_k_inputs(pitcher_id, game_pk, batting_team_side, la_b13=la_b13) \
+            if pitcher_id else None
+        return {
+            "pitcher_id": pitcher_id,
+            "pitcher_name": pitcher_name,
+            "mean": inputs["mean"] if inputs else None,
+            "sd": inputs["sd"] if inputs else None,
+            "pitcher_k_index": inputs["pitcher_k_index"] if inputs else None,
+            "opposing_lineup_k_index": inputs["opposing_lineup_k_index"] if inputs else None,
+        }
+
+    return {
+        "game_pk": game_pk,
+        "home_lineup_confirmed": game.home_lineup_confirmed,
+        "away_lineup_confirmed": game.away_lineup_confirmed,
+        # The home pitcher faces the AWAY lineup, and vice versa.
+        "home_pitcher": pitcher_row(game.home_probable_pitcher_id, game.home_probable_pitcher, "away"),
+        "away_pitcher": pitcher_row(game.away_probable_pitcher_id, game.away_probable_pitcher, "home"),
+    }
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """

@@ -142,6 +142,22 @@ class BatterPlatoonSplit(Base):
     hr_factor_vs_l = Column(Float, nullable=True)
     hr_factor_vs_r = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+class PitcherKStat(Base):
+    """Real season-to-date strikeouts/batters-faced/starts/innings for
+    one pitcher, keyed by person id. Used by the Pitcher K prop -
+    separate from PitcherHitsStat (different data, different model)
+    even though both describe the same pitcher."""
+    __tablename__ = "pitcher_k_stats"
+
+    pitcher_id = Column(Integer, primary_key=True)
+    pitcher_name = Column(String)
+    strikeouts = Column(Integer, default=0)
+    batters_faced = Column(Integer, default=0)
+    games_started = Column(Integer, default=0)
+    outs = Column(Integer, default=0)  # used to derive innings-per-start (this system's stand-in for "Med IP" - see pitcher_k_sync.py)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class TrackedBet(Base):
     """A bet you've flagged with a 'Track' checkbox (from the Hits table
     or the 1st-inning market) - a snapshot of the bet as it looked at
@@ -197,11 +213,12 @@ class LineupBatter(Base):
 
 
 class BatterSeasonStat(Base):
-    """Real season-to-date at-bats/hits/HR/walks for one batter, keyed
-    by MLB's own person id (not name) - sidesteps the real
-    name-collision cases your own fetch script already had to handle
-    (e.g. two different "Max Muncy"s on two different teams). HR/BB
-    were added for the HRR model - Hits alone only ever needed ab/hits."""
+    """Real season-to-date at-bats/hits/HR/walks/strikeouts/PA for one
+    batter, keyed by MLB's own person id (not name) - sidesteps the
+    real name-collision cases your own fetch script already had to
+    handle (e.g. two different "Max Muncy"s on two different teams).
+    strikeouts/plate_appearances were added for the Pitcher K prop's
+    lineup-specific opposing-batter blend."""
     __tablename__ = "batter_season_stats"
 
     batter_id = Column(Integer, primary_key=True)
@@ -210,6 +227,8 @@ class BatterSeasonStat(Base):
     hits = Column(Integer, default=0)
     hr = Column(Integer, default=0)
     bb = Column(Integer, default=0)
+    strikeouts = Column(Integer, default=0)
+    plate_appearances = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

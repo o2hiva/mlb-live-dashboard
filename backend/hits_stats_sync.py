@@ -115,13 +115,16 @@ def _sync_batter_stat(db, batter_id: int, batter_name: str, force: bool = False)
     if row is None:
         db.add(BatterSeasonStat(batter_id=batter_id, batter_name=batter_name,
                                  ab=totals["ab"], hits=totals["hits"],
-                                 hr=totals["hr"], bb=totals["bb"]))
+                                 hr=totals["hr"], bb=totals["bb"],
+                                 strikeouts=totals["strikeouts"], plate_appearances=totals["pa"]))
     else:
         row.batter_name = batter_name
         row.ab = totals["ab"]
         row.hits = totals["hits"]
         row.hr = totals["hr"]
         row.bb = totals["bb"]
+        row.strikeouts = totals["strikeouts"]
+        row.plate_appearances = totals["pa"]
 
 
 def _sync_pitcher_hits_stat(db, pitcher_id: int, pitcher_name: str, force: bool = False):
@@ -169,6 +172,7 @@ def refresh_all_stats_for_game(db, game: Game, force: bool = False) -> int:
         if pid:
             _sync_pitcher_hits_stat(db, pid, pname or "", force=force)
             _sync_pitcher_hand(pid, pname or "")
+            _sync_pitcher_k(pid, pname or "", force=force)
             count += 1
     return count
 
@@ -219,6 +223,7 @@ def check_and_sync_lineups(db, game: Game, boxscore: dict):
         if opposing_pitcher_id:
             _sync_pitcher_hits_stat(db, opposing_pitcher_id, opposing_pitcher_name or "")
             _sync_pitcher_hand(opposing_pitcher_id, opposing_pitcher_name or "")
+            _sync_pitcher_k(opposing_pitcher_id, opposing_pitcher_name or "")
 
 
 def _sync_batter_platoon(db, batter_id: int, batter_name: str):
@@ -247,6 +252,17 @@ def _sync_pitcher_hand(pitcher_id: int, pitcher_name: str):
         platoon_stats_sync.get_pitcher_hand(pitcher_id, pitcher_name)
     except Exception:
         log.exception("Failed to sync pitch hand for %s (%s)", pitcher_name, pitcher_id)
+
+
+def _sync_pitcher_k(pitcher_id: int, pitcher_name: str, force: bool = False):
+    """Syncs this pitcher's real season K/batters-faced/starts/outs
+    (see pitcher_k_sync.py) - separate table from PitcherHitsStat
+    (different data, different model) even though it's the same pitcher."""
+    try:
+        import pitcher_k_sync
+        pitcher_k_sync.sync_pitcher_k_stat(pitcher_id, pitcher_name, force=force)
+    except Exception:
+        log.exception("Failed to sync pitcher K stat for %s (%s)", pitcher_name, pitcher_id)
 
 
 def get_pitcher_hit_index(pitcher_id: int | None) -> float | None:

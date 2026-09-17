@@ -314,6 +314,29 @@
     return Math.max(0, Math.min(1, 1 - cumulative));
   }
 
+  function erf(x) {
+    // Abramowitz-Stegun approximation (max error ~1.5e-7) - used only
+    // by the Pitcher K prop, which is modeled as approximately Normal
+    // (unlike Hits' binomial or HRR's negative binomial).
+    const sign = x < 0 ? -1 : 1;
+    x = Math.abs(x);
+    const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+    const t = 1 / (1 + p * x);
+    const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+    return sign * y;
+  }
+
+  function normCdf(x, mean, sd) {
+    if (sd <= 0) return x < mean ? 1 : 0;
+    const z = (x - mean) / (sd * Math.sqrt(2));
+    return 0.5 * (1 + erf(z));
+  }
+
+  function probKAtLeast(mean, sd, line) {
+    if (mean == null || sd == null) return null;
+    return Math.max(0, Math.min(1, 1 - normCdf(line, mean, sd)));
+  }
+
   // ---- Lineup section: ONE expandable area per game, with an internal
   // Hits/HRR tab switch inside it (not two separate stacked sections). ----
   const expandedLineupGames = new Set();
@@ -327,6 +350,7 @@
       if (!activeLineupTab[gamePk]) activeLineupTab[gamePk] = "hits";
       if (!hitsThresholdByGame[gamePk]) hitsThresholdByGame[gamePk] = 1;
       if (hrrLineByGame[gamePk] == null) hrrLineByGame[gamePk] = 1.5;
+      if (kLineByGame[gamePk] == null) kLineByGame[gamePk] = 5.5;
     }
     renderLineupSection(gamePk);
   }
@@ -751,6 +775,155 @@
     `;
   }
 
+  // ---- Pitcher K prop: only 2 rows per game (the starting pitchers),
+  // not one per batter - a strikeout total is a per-pitcher stat. Uses
+  // the Normal-distribution math above (mean/sd), same pattern as HRR
+  // used before its negative-binomial correction. ----
+  const kDataCache = {};
+  const kBetState = {};
+  const kLineByGame = {};
+
+  function getKBetState(gamePk, side) {
+    if (!kBetState[gamePk]) kBetState[gamePk] = {};
+    if (!kBetState[gamePk][side]) {
+      kBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return kBetState[gamePk][side];
+  }
+
+  function updateKBetField(gamePk, side, field, value) {
+    const state = getKBetState(gamePk, side);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderK(gamePk);
+  }
+
+  function rerenderK(gamePk) {
+    if (activeLineupTab[gamePk] !== "k") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && kDataCache[gamePk]) {
+      contentDiv.innerHTML = kSectionHtml(gamePk, kDataCache[gamePk]);
+    }
+  }
+
+  function setKLine(gamePk, value) {
+    kLineByGame[gamePk] = parseFloat(value);
+    rerenderK(gamePk);
+  }
+
+  async function toggleKTrack(gamePk, side, checked, pitcherName, line, modelProb, marketPct, wager, profit) {
+    const state = getKBetState(gamePk, side);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "pitcher_k", batter_name: pitcherName,
+            team_side: side, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderK(gamePk);
+  }
+
+  function kBetRowCellsHtml(gamePk, side, pitcherName, yesPct, noPct, line) {
+    const state = getKBetState(gamePk, side);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `k-${gamePk}-${side}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
+           onchange="updateKBetField(${gamePk},'${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'${side}',this.checked,'${pitcherName.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updateKBetField(${gamePk},'${side}','yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
+        onchange="updateKBetField(${gamePk},'${side}','market',this.value)" />
+      <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
+        onchange="updateKBetField(${gamePk},'${side}','useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleKTrack(${trackArgs})" />
+    `;
+  }
+
+  function pitcherKRowHtml(gamePk, side, pitcher, line) {
+    const kiStr = pitcher.pitcher_k_index != null ? pitcher.pitcher_k_index.toFixed(2) : "—";
+    const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
+    const yesPct = (pitcher.mean != null && pitcher.sd != null) ? probKAtLeast(pitcher.mean, pitcher.sd, line) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+
+    return `
+      <div class="hits-batter">
+        <span>${pitcher.pitcher_name || "TBD"}</span>
+        <span class="hits-index">K ${kiStr} / Opp ${oppStr}</span>
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${kBetRowCellsHtml(gamePk, side, pitcher.pitcher_name || "", yesPct, noPct, line)}
+      </div>
+    `;
+  }
+
+  function kSectionHtml(gamePk, data) {
+    const line = kLineByGame[gamePk] != null ? kLineByGame[gamePk] : 5.5;
+
+    const homeHtml = data.away_lineup_confirmed
+      ? pitcherKRowHtml(gamePk, "home", data.home_pitcher, line)
+      : `<div class="hits-side-label">Home Pitcher — Opposing Lineup Not Confirmed</div>`;
+    const awayHtml = data.home_lineup_confirmed
+      ? pitcherKRowHtml(gamePk, "away", data.away_pitcher, line)
+      : `<div class="hits-side-label">Away Pitcher — Opposing Lineup Not Confirmed</div>`;
+
+    return `
+      <div class="hits-controls">
+        <span>At least</span>
+        <select onchange="setKLine(${gamePk}, this.value)">
+          ${[3.5, 4.5, 5.5, 6.5, 7.5, 8.5].map(n => `<option value="${n}" ${n === line ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+        <span>strikeouts</span>
+      </div>
+      ${HITS_TABLE_HEADER}
+      <div class="hits-side-label">Away</div>
+      ${awayHtml}
+      <div class="hits-side-label">Home</div>
+      ${homeHtml}
+    `;
+  }
+
   // ---- HRR prop: same structure as Hits, but a NORMAL distribution
   // (mean/sd) instead of binomial (n_ab/p), since HRR production is
   // modeled as continuous, not a count of discrete at-bats. ----
@@ -960,6 +1133,7 @@
         <span class="lineup-tab ${tab === "hits" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hits')">Hits</span>
         <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
         <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
+        <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
     `;
@@ -969,6 +1143,7 @@
       hits: { cache: hitsDataCache, render: hitsSectionHtml, path: "hits" },
       hr: { cache: hrDataCache, render: hrSectionHtml, path: "hr" },
       hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
+      k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
     };
     const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];
 

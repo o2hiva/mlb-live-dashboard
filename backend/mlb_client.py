@@ -204,9 +204,11 @@ def extract_boxscore_lineup(boxscore: dict, side: str) -> tuple:
 
 
 def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
-    """Real season-to-date at-bats/hits/HR/walks for one batter. Same
-    endpoint and field mapping as fetch_raw_batting_stats.py's
-    get_season_hitting_totals(). Returns None if this player has no
+    """Real season-to-date at-bats/hits/HR/walks/strikeouts/PA for one
+    batter. Same endpoint and field mapping as fetch_raw_batting_stats.py's
+    get_season_hitting_totals(). strikeouts/pa were added for the
+    lineup-specific Pitcher K formula - same API response already had
+    them, no new endpoint needed. Returns None if this player has no
     hitting stats this season (e.g. a pure pitcher)."""
     resp = requests.get(
         f"{BASE}/v1/people/{person_id}/stats",
@@ -229,13 +231,17 @@ def get_season_hitting_totals(person_id: int, season: int) -> dict | None:
         "ab": ab, "hits": hits,
         "hr": stat.get("homeRuns", 0) or 0,
         "bb": stat.get("baseOnBalls", 0) or 0,
+        "strikeouts": stat.get("strikeOuts", 0) or 0,
+        "pa": stat.get("plateAppearances", 0) or 0,
     }
 
 
 def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
     """Real season-to-date outs recorded/hits-HR-walks-runs-allowed for
     one pitcher. Same endpoint and field mapping as
-    fetch_raw_batting_stats.py's get_season_pitching_totals()."""
+    fetch_raw_batting_stats.py's get_season_pitching_totals(). Also
+    includes strikeouts/battersFaced/gamesStarted for the Pitcher K
+    prop - same endpoint already returns these, no extra call needed."""
     resp = requests.get(
         f"{BASE}/v1/people/{person_id}/stats",
         params={"stats": "season", "season": season, "group": "pitching"},
@@ -262,7 +268,39 @@ def get_season_pitching_totals(person_id: int, season: int) -> dict | None:
         "hr_allowed": stat.get("homeRuns", 0) or 0,
         "bb_allowed": stat.get("baseOnBalls", 0) or 0,
         "runs_allowed": stat.get("runs", 0) or 0,
+        "strikeouts": stat.get("strikeOuts", 0) or 0,
+        "batters_faced": stat.get("battersFaced", 0) or 0,
+        "games_started": stat.get("gamesStarted", 0) or 0,
     }
+
+
+def get_team_season_k_stats(team_id: int, season: int) -> dict | None:
+    """
+    This team's own real season-to-date strikeouts AND plate
+    appearances AS HITTERS (their own batters' K-proneness) - needed
+    for the Pitcher K prop's "opposing team" factor, which is about how
+    often that team's LINEUP strikes out, not anything pitching-related.
+    Same team/hitting endpoint already used elsewhere - just two more
+    fields off the same response.
+    """
+    resp = requests.get(
+        f"{BASE}/v1/teams/{team_id}/stats",
+        params={"stats": "season", "season": season, "group": "hitting"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    stats_list = resp.json().get("stats") or []
+    if not stats_list:
+        return None
+    splits = stats_list[0].get("splits") or []
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    strikeouts = stat.get("strikeOuts")
+    plate_appearances = stat.get("plateAppearances")
+    if strikeouts is None or plate_appearances is None:
+        return None
+    return {"strikeouts": strikeouts, "plate_appearances": plate_appearances}
 
 
 def get_pitch_hand(person_id: int) -> str | None:
