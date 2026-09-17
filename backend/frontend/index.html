@@ -99,7 +99,7 @@
   .bankroll-total { font-size: 1.8rem; font-weight: 600; margin-top: 4px; }
   .tracked-bets-list { font-size: 0.85rem; }
   .tracked-bet-row {
-    display: grid; grid-template-columns: 1.5fr 1fr 0.7fr 0.6fr 0.7fr 0.7fr 0.6fr;
+    display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.6fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
   }
   .tracked-bet-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
@@ -1209,9 +1209,18 @@
       const header = `
         <div class="tracked-bet-row tracked-bet-header">
           <span>Batter</span><span>Matchup</span><span>Y/N</span><span>Line</span>
-          <span>Market</span><span>Wager</span><span></span>
+          <span>Market</span><span>Wager</span><span>Result</span><span></span>
         </div>`;
-      const rows = bets.map(b => `
+      const rows = bets.map(b => {
+        let resultCell;
+        if (!b.resolved) {
+          resultCell = `<span class="settings-hint" style="margin:0;">Pending</span>`;
+        } else if (b.result === "win") {
+          resultCell = `<span class="prob-yes">Win (${b.actual_value})</span>`;
+        } else {
+          resultCell = `<span class="prob-no">Loss (${b.actual_value})</span>`;
+        }
+        return `
         <div class="tracked-bet-row">
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
@@ -1219,8 +1228,10 @@
           <span>${b.line != null ? (b.bet_type === "hrr" ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
+          ${resultCell}
           <span class="tracked-bet-remove" onclick="removeTrackedBet(${b.id})">Remove</span>
-        </div>`).join("");
+        </div>`;
+      }).join("");
       container.innerHTML = header + rows;
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load tracked bets.</div>`;

@@ -192,7 +192,8 @@ class TrackedBet(Base):
 
     # Filled in later by the (not-yet-built) end-of-day grading job.
     resolved = Column(Boolean, default=False)
-    actual_hits = Column(Integer, nullable=True)
+    actual_hits = Column(Integer, nullable=True)  # legacy/unused - see actual_value below
+    actual_value = Column(Float, nullable=True)  # the real outcome, in whatever unit this bet_type uses (hits count, HRR total, HR count 0/1, strikeouts, or 1.0/0.0 for first_inning_run)
     result = Column(String, nullable=True)  # "win" / "loss" / "push"
 
 

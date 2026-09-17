@@ -22,6 +22,13 @@ role - runs the full end-of-day routine in one call instead of several:
      button/schedule for the whole end-of-day routine, matching how
      run_daily_updates.py itself was "six steps in one command instead
      of six."
+  4. Grade every tracked bet whose game has actually finished (see
+     bet_grading.py) - the "does this game need recording, does any
+     bet on it need grading" step. Games themselves don't need a
+     separate "record it" step: scores/status update live throughout
+     play (poller.py), and 1st-inning results are already captured via
+     InningLine the moment they happen - there was never a gap where a
+     finished game's own data was missing, only in USING it to grade bets.
 
 WHAT THIS DOESN'T NEED TO DO, unlike the Excel-era version: load next
 day's games (the poller already does this automatically, continuously)
@@ -44,6 +51,7 @@ import mlb_client
 import hits_stats_sync
 import hrr_stats_sync
 import inning_stats_sync
+import bet_grading
 from database import SessionLocal
 from models_db import Game
 
@@ -52,7 +60,7 @@ log = logging.getLogger("end_of_day")
 
 def run_end_of_day_update() -> dict:
     """
-    Runs all three steps in sequence, continuing even if one fails
+    Runs all four steps in sequence, continuing even if one fails
     (same "don't let one hiccup stop the rest" philosophy as
     run_daily_updates.py's own run_step()). Returns a summary dict
     suitable for both the scheduled job's logs and the manual-trigger
@@ -81,6 +89,13 @@ def run_end_of_day_update() -> dict:
     except Exception:
         log.exception("Inning-stats refresh failed")
         summary["inning_stats"] = "FAILED"
+
+    # Step 4: grade every tracked bet whose game has actually finished.
+    try:
+        summary["bet_grading"] = bet_grading.grade_pending_bets()
+    except Exception:
+        log.exception("Bet grading failed")
+        summary["bet_grading"] = {"error": "grading failed - see logs"}
 
     log.info("End-of-day update complete: %s", summary)
     return summary

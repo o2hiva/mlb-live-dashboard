@@ -608,14 +608,15 @@ def untrack_bet(tracked_bet_id: int, db: Session = Depends(get_db)):
 @app.get("/api/bet-tracker/tracked")
 def list_tracked_bets(db: Session = Depends(get_db)):
     """
-    All currently-tracked, not-yet-resolved bets, with just enough game
-    context (matchup, date) to identify them at a glance in the Bet
-    Tracker tab. Ordered most-recently-tracked first.
+    Every tracked bet, both still-pending and already-graded (see
+    bet_grading.py), with just enough game context (matchup, date) to
+    identify them at a glance in the Bet Tracker tab. Most-recently-
+    tracked first. Resolved bets include their actual outcome/result so
+    a win/loss doesn't just silently vanish from this list once graded.
     """
     from models_db import TrackedBet
     rows = (
         db.query(TrackedBet)
-        .filter_by(resolved=False)
         .order_by(TrackedBet.placed_at.desc())
         .all()
     )
@@ -636,8 +637,24 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "wager": r.wager,
             "potential_profit": r.potential_profit,
             "placed_at": r.placed_at.isoformat(),
+            "resolved": r.resolved,
+            "actual_value": r.actual_value,
+            "result": r.result,
         })
     return out
+
+
+@app.get("/api/admin/grade-bets")
+def manual_grade_bets():
+    """
+    Manually grades every tracked bet whose game has finished, right
+    now, instead of waiting for the scheduled end-of-day run. Safe to
+    hit any time and any number of times - already-resolved bets are
+    never re-graded, and a bet whose game isn't final yet (or whose
+    per-game stats aren't available yet) is simply left pending.
+    """
+    import bet_grading
+    return bet_grading.grade_pending_bets()
 
 
 @app.get("/api/debug/hrr-inputs/{game_pk}")
