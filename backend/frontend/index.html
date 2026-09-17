@@ -1206,6 +1206,11 @@
         container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
         return;
       }
+      const resolvedBets = bets.filter(b => b.resolved);
+      const wins = resolvedBets.filter(b => b.result === "win").length;
+      const hitRateHtml = resolvedBets.length
+        ? `<div class="settings-hint" style="margin-bottom:10px;">Hit rate: ${wins}/${resolvedBets.length} (${Math.round((wins / resolvedBets.length) * 100)}%)</div>`
+        : `<div class="settings-hint" style="margin-bottom:10px;">Hit rate: no graded bets yet</div>`;
       const header = `
         <div class="tracked-bet-row tracked-bet-header">
           <span>Batter</span><span>Matchup</span><span>Y/N</span><span>Line</span>
@@ -1232,7 +1237,7 @@
           <span class="tracked-bet-remove" onclick="removeTrackedBet(${b.id})">Remove</span>
         </div>`;
       }).join("");
-      container.innerHTML = header + rows;
+      container.innerHTML = hitRateHtml + header + rows;
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load tracked bets.</div>`;
     }
