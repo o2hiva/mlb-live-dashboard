@@ -347,7 +347,6 @@
     } else {
       expandedLineupGames.add(gamePk);
       if (!activeLineupTab[gamePk]) activeLineupTab[gamePk] = "hits";
-      if (hrrLineByGame[gamePk] == null) hrrLineByGame[gamePk] = 1.5;
       if (kLineByGame[gamePk] == null) kLineByGame[gamePk] = 5.5;
     }
     renderLineupSection(gamePk);
@@ -928,7 +927,6 @@
   // ---- HRR prop: same structure as Hits, but a NORMAL distribution
   // (mean/sd) instead of binomial (n_ab/p), since HRR production is
   // modeled as continuous, not a count of discrete at-bats. ----
-  const hrrLineByGame = {};
   const hrrDataCache = {};
   const hrrBetState = {};
 
@@ -977,9 +975,15 @@
     if (!hrrBetState[gamePk]) hrrBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
     if (!hrrBetState[gamePk][key]) {
-      hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+      hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1.5 };
     }
     return hrrBetState[gamePk][key];
+  }
+
+  function updateHrrThreshold(gamePk, side, batterId, value) {
+    const state = getHrrBetState(gamePk, side, batterId);
+    state.threshold = Math.max(0.5, parseFloat(value) || 1.5);
+    rerenderHrr(gamePk);
   }
 
   function updateHrrBetField(gamePk, side, batterId, field, value) {
@@ -1068,15 +1072,19 @@
     `;
   }
 
-  function hrrBatterRowHtml(gamePk, side, b, line) {
+  function hrrBatterRowHtml(gamePk, side, b) {
     const hiStr = b.hrr_index != null ? b.hrr_index.toFixed(2) : "—";
+    const state = getHrrBetState(gamePk, side, b.batter_id);
+    const line = state.threshold;
     const yesPct = (b.r != null && b.p != null) ? probHrrAtLeast(b.r, b.p, line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter">
+      <div class="hits-batter" style="grid-template-columns: 1.8fr 44px 28px 34px 34px 46px 52px 30px 60px 38px 40px;">
         <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
-        <span class="hits-index">HI ${hiStr}</span>
+        <span class="hits-index">${hiStr}</span>
+        <input type="number" min="0.5" step="0.5" value="${line}" style="text-align:center;"
+          onchange="updateHrrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${hrrBetRowCellsHtml(gamePk, side, b, yesPct, noPct, line)}
       </div>
@@ -1084,33 +1092,21 @@
   }
 
   function hrrSectionHtml(gamePk, data) {
-    const line = hrrLineByGame[gamePk] != null ? hrrLineByGame[gamePk] : 1.5;
     const awayPitcherHi = data.away_opp_pitcher_hrr_index != null ? data.away_opp_pitcher_hrr_index.toFixed(2) : "—";
     const homePitcherHi = data.home_opp_pitcher_hrr_index != null ? data.home_opp_pitcher_hrr_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b, line)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b, line)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
-      <div class="hits-controls">
-        <span>HRR line</span>
-        <select onchange="setHrrLine(${gamePk}, this.value)">
-          ${[0.5, 1.5, 2.5, 3.5].map(n => `<option value="${n}" ${n === line ? "selected" : ""}>${n}</option>`).join("")}
-        </select>
-      </div>
-      ${HITS_TABLE_HEADER}
+      ${HITS_TABLE_HEADER_WITH_OU}
       ${awayHtml}
       ${homeHtml}
     `;
-  }
-
-  function setHrrLine(gamePk, value) {
-    hrrLineByGame[gamePk] = parseFloat(value);
-    rerenderHrr(gamePk);
   }
 
   function renderLineupSection(gamePk) {
