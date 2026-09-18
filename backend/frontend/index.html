@@ -968,7 +968,12 @@
 
   function probHrrAtLeast(r, p, line) {
     if (r == null || p == null) return null;
-    return nbinomSf(Math.trunc(line), r, p);
+    // "At least `line`" - Math.ceil(line)-1 correctly handles both a
+    // whole-number line (2 -> threshold 1 -> P(X>=2)) and a half-integer
+    // O/U-style line (1.5 -> threshold 1 -> P(X>=2), same as "over 1.5").
+    // Math.trunc(line) alone only worked for the old half-integer-only
+    // dropdown - it silently computed "at least line+1" for whole numbers.
+    return nbinomSf(Math.ceil(line) - 1, r, p);
   }
 
   function getHrrBetState(gamePk, side, batterId) {
