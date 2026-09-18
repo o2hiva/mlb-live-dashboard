@@ -73,6 +73,20 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict) -> float | 
         actual = _first_inning_actual(db, bet.game_pk)
         return None if actual is None else (1.0 if actual else 0.0)
 
+    # Self-heal: a bug (now fixed) in the Pitcher K tracking UI never
+    # sent the pitcher's id, only their name - any bet caught by that
+    # window has batter_id=None and would otherwise be stuck pending
+    # forever. Since we know which pitcher started for a given
+    # team_side in a given game (Game.home/away_probable_pitcher_id),
+    # backfill it here rather than leave it permanently ungradeable.
+    if bet.bet_type == "pitcher_k" and not bet.batter_id and bet.team_side:
+        game = db.get(Game, bet.game_pk)
+        if game:
+            pitcher_id = game.home_probable_pitcher_id if bet.team_side == "home" else game.away_probable_pitcher_id
+            if pitcher_id:
+                bet.batter_id = pitcher_id
+                log.info("Backfilled missing batter_id=%s for pitcher_k bet %s", pitcher_id, bet.id)
+
     if bet.game_pk not in boxscore_cache:
         try:
             boxscore_cache[bet.game_pk] = mlb_client.get_boxscore(bet.game_pk)

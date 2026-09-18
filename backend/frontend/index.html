@@ -844,7 +844,7 @@
     }
   }
 
-  async function toggleKTrack(gamePk, side, checked, pitcherName, line, modelProb, marketPct, wager, profit) {
+  async function toggleKTrack(gamePk, side, checked, pitcherId, pitcherName, line, modelProb, marketPct, wager, profit) {
     const state = getKBetState(gamePk, side);
     if (checked) {
       try {
@@ -852,7 +852,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            game_pk: gamePk, bet_type: "pitcher_k", batter_name: pitcherName,
+            game_pk: gamePk, bet_type: "pitcher_k", batter_id: pitcherId, batter_name: pitcherName,
             team_side: side, line: line,
             yn: state.yn, model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
@@ -876,7 +876,7 @@
     rerenderK(gamePk);
   }
 
-  function kBetRowCellsHtml(gamePk, side, pitcherName, yesPct, noPct, line) {
+  function kBetRowCellsHtml(gamePk, side, pitcherId, pitcherName, yesPct, noPct, line) {
     const state = getKBetState(gamePk, side);
     const modelPct = state.yn === "yes" ? yesPct : noPct;
     const modelProb = modelPct != null ? modelPct / 100 : null;
@@ -892,7 +892,7 @@
       : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
            onchange="updateKBetField(${gamePk},'${side}','manualWager',this.value)" />`;
 
-    const trackArgs = `${gamePk},'${side}',this.checked,'${pitcherName.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `${gamePk},'${side}',this.checked,${pitcherId},'${pitcherName.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
       <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
@@ -925,7 +925,7 @@
         <input type="number" min="1" step="1" value="${line}" style="text-align:center;"
           onchange="updateKThreshold(${gamePk},'${side}',this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
-        ${kBetRowCellsHtml(gamePk, side, pitcher.pitcher_name || "", yesPct, noPct, line)}
+        ${kBetRowCellsHtml(gamePk, side, pitcher.pitcher_id, pitcher.pitcher_name || "", yesPct, noPct, line)}
       </div>
     `;
   }
