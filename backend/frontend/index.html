@@ -591,10 +591,10 @@
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter" style="grid-template-columns: 1.1fr 34px 40px 34px 34px 46px 52px 30px 60px 60px 40px;">
+      <div class="hits-batter" style="grid-template-columns: 1.4fr 44px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
         <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
         <span class="hits-index">HI ${hiStr}</span>
-        <input type="number" min="1" step="1" value="${h}"
+        <input type="number" min="1" step="1" value="${h}" style="text-align:center;"
           onchange="updateHitsThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${betRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
@@ -609,7 +609,7 @@
     </div>`;
 
   const HITS_TABLE_HEADER_WITH_OU = `
-    <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.1fr 34px 40px 34px 34px 46px 52px 30px 60px 60px 40px;">
+    <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.4fr 44px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
       <span>Batter</span><span>HI</span><span>O/U</span><span>Yes</span><span>No</span>
       <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
     </div>`;
