@@ -593,7 +593,7 @@
     return `
       <div class="hits-batter" style="grid-template-columns: 1.8fr 44px 28px 34px 34px 46px 52px 30px 60px 38px 40px;">
         <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
-        <span class="hits-index">HI ${hiStr}</span>
+        <span class="hits-index">${hiStr}</span>
         <input type="number" min="1" step="1" value="${h}" style="text-align:center;"
           onchange="updateHitsThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
