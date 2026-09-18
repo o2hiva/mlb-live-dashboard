@@ -895,7 +895,7 @@
     const trackArgs = `${gamePk},'${side}',this.checked,'${pitcherName.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <span>${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
       <select id="yn-${idBase}" onchange="updateKBetField(${gamePk},'${side}','yn',this.value)">
         <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
         <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
