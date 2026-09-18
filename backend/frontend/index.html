@@ -620,6 +620,16 @@
       <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
     </div>`;
 
+  // Pitcher K's index column shows "X.XX VS Y.YY" (much wider than a
+  // single index number), so it needs its own wider column and can't
+  // reuse HITS_TABLE_HEADER_WITH_OU's widths - Profit shrunk further to
+  // make room, matching pitcherKRowHtml's own inline grid-template-columns.
+  const K_TABLE_HEADER = `
+    <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.5fr 75px 28px 34px 34px 46px 52px 30px 60px 30px 40px;">
+      <span>Pitcher</span><span>K Idx VS Opp</span><span>O/U</span><span>Yes</span><span>No</span>
+      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+    </div>`;
+
   function hitsSectionHtml(gamePk, data) {
     const awayPitcherHi = data.away_opp_pitcher_hit_index != null ? data.away_opp_pitcher_hit_index.toFixed(2) : "—";
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
@@ -909,7 +919,7 @@
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter" style="grid-template-columns: 1.8fr 44px 28px 34px 34px 46px 52px 30px 60px 38px 40px;">
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 75px 28px 34px 34px 46px 52px 30px 60px 30px 40px;">
         <span>${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}</span>
         <span class="hits-index">${kiStr} VS ${oppStr}</span>
         <input type="number" min="1" step="1" value="${line}" style="text-align:center;"
@@ -929,7 +939,7 @@
       : `<div class="hits-side-label">Away Pitcher — Opposing Lineup Not Confirmed</div>`;
 
     return `
-      ${HITS_TABLE_HEADER_WITH_OU}
+      ${K_TABLE_HEADER}
       <div class="hits-side-label">Away</div>
       ${awayHtml}
       <div class="hits-side-label">Home</div>
