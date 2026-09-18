@@ -20,8 +20,19 @@ guessed at:
   1. "Med IP" (median innings pitched per start) is read from a
      manually-maintained Excel cell in the original workbook - there's
      no direct MLB API equivalent. This uses AVERAGE innings per start
-     (total outs / 3 / games started) as a stand-in. Reasonable, but
-     not literally the same statistic.
+     (total outs / 3 / games started) as a stand-in. Reasonable for a
+     pure starter, but a REAL, CONFIRMED PROBLEM for anyone who's also
+     pitched in relief: "outs" is total season outs across EVERY
+     appearance, while "games_started" only counts starts, so a
+     swingman/rookie-callup's relief innings get misattributed as
+     extra innings-per-START. Confirmed with real data (Wilber Dotel,
+     2 starts but relief innings mixed in, computed to 18.67 "innings
+     per start" - impossible for any real start), which produced a
+     mean of 16.7 strikeouts and a probability rounding to 100%. Now
+     clamped to 3.0-7.5 innings (a range no genuine start falls outside
+     of) as a safety net, pending a real fix: fetching starts-only
+     innings needs a separate API call this basic season-stats
+     endpoint doesn't provide.
 
   2. Batters with under 30 real PA against this specific matchup
      context are treated as exactly league-average (shrunk rate = la_b13
@@ -242,8 +253,24 @@ def compute_pitcher_k_inputs(pitcher_id: int, game_pk: int, batting_team_side: s
             # season outs, not a true median (see module docstring).
             # Falls back to 5 innings, matching core.py's own blank-value
             # fallback, if this pitcher hasn't started yet.
+            #
+            # SAFETY CLAMP: "outs" is this pitcher's TOTAL season outs
+            # across EVERY appearance (starts AND relief), but
+            # "games_started" only counts starts - for a pitcher who's
+            # also worked in relief (a common swingman/rookie-callup
+            # pattern), dividing total outs by starts-only massively
+            # overstates innings-per-START. Confirmed with real data:
+            # Wilber Dotel (2 starts, but relief innings mixed into his
+            # season outs) computed to 18.67 "innings per start" -
+            # physically impossible (no starter throws 18+ innings in
+            # one game) - which fed a runaway mean (16.7 strikeouts) and
+            # a probability that rounded to 100%. Clamped to a range no
+            # genuine MLB start falls outside of, until a starts-only
+            # innings figure can be fetched (needs a separate API call
+            # this basic season-stats endpoint doesn't provide).
             if pitcher.games_started > 0:
                 med_ip = (pitcher.outs / 3) / pitcher.games_started
+                med_ip = max(3.0, min(med_ip, 7.5))
             else:
                 med_ip = 5
 
