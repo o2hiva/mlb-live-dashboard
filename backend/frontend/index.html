@@ -643,15 +643,20 @@
   // adjustable threshold cell for HR, so no line selector here. ----
   const hrDataCache = {};
   const hrBetState = {};
-  const FIXED_HR_THRESHOLD = 1;
 
   function getHrBetState(gamePk, side, batterId) {
     if (!hrBetState[gamePk]) hrBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
     if (!hrBetState[gamePk][key]) {
-      hrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+      hrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
     return hrBetState[gamePk][key];
+  }
+
+  function updateHrThreshold(gamePk, side, batterId, value) {
+    const state = getHrBetState(gamePk, side, batterId);
+    state.threshold = Math.max(1, parseInt(value, 10) || 1);
+    rerenderHr(gamePk);
   }
 
   function updateHrBetField(gamePk, side, batterId, field, value) {
@@ -674,7 +679,7 @@
     }
   }
 
-  async function toggleHrTrack(gamePk, side, batterId, checked, batterName, battingOrder, modelProb, marketPct, wager, profit) {
+  async function toggleHrTrack(gamePk, side, batterId, checked, batterName, battingOrder, line, modelProb, marketPct, wager, profit) {
     const state = getHrBetState(gamePk, side, batterId);
     if (checked) {
       try {
@@ -683,7 +688,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             game_pk: gamePk, bet_type: "hr", batter_id: batterId, batter_name: batterName,
-            team_side: side, batting_order: battingOrder, line: FIXED_HR_THRESHOLD,
+            team_side: side, batting_order: battingOrder, line: line,
             yn: state.yn, model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
           }),
@@ -706,7 +711,7 @@
     rerenderHr(gamePk);
   }
 
-  function hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct) {
+  function hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct, line) {
     const state = getHrBetState(gamePk, side, b.batter_id);
     const modelPct = state.yn === "yes" ? yesPct : noPct;
     const modelProb = modelPct != null ? modelPct / 100 : null;
@@ -722,7 +727,7 @@
       : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
            onchange="updateHrBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)" />`;
 
-    const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
       <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
@@ -742,15 +747,24 @@
 
   function hrBatterRowHtml(gamePk, side, b) {
     const hiStr = b.hr_index != null ? b.hr_index.toFixed(2) : "—";
-    const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, FIXED_HR_THRESHOLD) * 100 : null;
+    const state = getHrBetState(gamePk, side, b.batter_id);
+    const h = state.threshold;
+    // probAtLeastHits already means "at least h" literally (direct binomial
+    // sum, no truncation step) - passing h straight through here carries
+    // NO risk of the off-by-one class of bug just fixed in HRR's negative
+    // binomial path, which needed a separate ceil/trunc conversion step
+    // that this binomial math never had in the first place.
+    const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, h) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter">
+      <div class="hits-batter" style="grid-template-columns: 1.8fr 44px 28px 34px 34px 46px 52px 30px 60px 38px 40px;">
         <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
-        <span class="hits-index">HI ${hiStr}</span>
+        <span class="hits-index">${hiStr}</span>
+        <input type="number" min="1" step="1" value="${h}" style="text-align:center;"
+          onchange="updateHrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
-        ${hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct)}
+        ${hrBetRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
       </div>
     `;
   }
@@ -760,15 +774,13 @@
     const homePitcherHi = data.home_opp_pitcher_hr_index != null ? data.home_opp_pitcher_hr_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrBatterRowHtml(gamePk, "away", b)).join("")}`
+      ? `<div class="hits-side-label">Away VS ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${HITS_TABLE_HEADER_WITH_OU}${data.away_batters.map(b => hrBatterRowHtml(gamePk, "away", b)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrBatterRowHtml(gamePk, "home", b)).join("")}`
+      ? `<div class="hits-side-label">Home VS ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${HITS_TABLE_HEADER_WITH_OU}${data.home_batters.map(b => hrBatterRowHtml(gamePk, "home", b)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
-      <div class="hits-controls"><span>At least 1 home run</span></div>
-      ${HITS_TABLE_HEADER}
       ${awayHtml}
       ${homeHtml}
     `;
@@ -1100,14 +1112,13 @@
     const homePitcherHi = data.home_opp_pitcher_hrr_index != null ? data.home_opp_pitcher_hrr_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b)).join("")}`
+      ? `<div class="hits-side-label">Away VS ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${HITS_TABLE_HEADER_WITH_OU}${data.away_batters.map(b => hrrBatterRowHtml(gamePk, "away", b)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b)).join("")}`
+      ? `<div class="hits-side-label">Home VS ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${HITS_TABLE_HEADER_WITH_OU}${data.home_batters.map(b => hrrBatterRowHtml(gamePk, "home", b)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
-      ${HITS_TABLE_HEADER_WITH_OU}
       ${awayHtml}
       ${homeHtml}
     `;
