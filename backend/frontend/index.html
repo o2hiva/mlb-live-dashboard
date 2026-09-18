@@ -333,7 +333,15 @@
 
   function probKAtLeast(mean, sd, line) {
     if (mean == null || sd == null) return null;
-    return Math.max(0, Math.min(1, 1 - normCdf(line, mean, sd)));
+    // Continuity correction: strikeouts are a discrete count, but
+    // mean/sd come from a continuous Normal approximation to it -
+    // "at least `line`" for a discrete count corresponds to
+    // P(continuous > line - 0.5), not P(continuous > line) directly.
+    // Skipping this understates "at least N" the same way HRR's
+    // negative-binomial threshold conversion did before that fix -
+    // same symptom, different root cause (continuous-vs-discrete here,
+    // not an integer-threshold offset).
+    return Math.max(0, Math.min(1, 1 - normCdf(line - 0.5, mean, sd)));
   }
 
   // ---- Lineup section: ONE expandable area per game, with an internal
@@ -347,7 +355,6 @@
     } else {
       expandedLineupGames.add(gamePk);
       if (!activeLineupTab[gamePk]) activeLineupTab[gamePk] = "hits";
-      if (kLineByGame[gamePk] == null) kLineByGame[gamePk] = 5.5;
     }
     renderLineupSection(gamePk);
   }
@@ -792,14 +799,19 @@
   // used before its negative-binomial correction. ----
   const kDataCache = {};
   const kBetState = {};
-  const kLineByGame = {};
 
   function getKBetState(gamePk, side) {
     if (!kBetState[gamePk]) kBetState[gamePk] = {};
     if (!kBetState[gamePk][side]) {
-      kBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+      kBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 5 };
     }
     return kBetState[gamePk][side];
+  }
+
+  function updateKThreshold(gamePk, side, value) {
+    const state = getKBetState(gamePk, side);
+    state.threshold = Math.max(1, parseInt(value, 10) || 5);
+    rerenderK(gamePk);
   }
 
   function updateKBetField(gamePk, side, field, value) {
@@ -820,11 +832,6 @@
     if (contentDiv && kDataCache[gamePk]) {
       contentDiv.innerHTML = kSectionHtml(gamePk, kDataCache[gamePk]);
     }
-  }
-
-  function setKLine(gamePk, value) {
-    kLineByGame[gamePk] = parseFloat(value);
-    rerenderK(gamePk);
   }
 
   async function toggleKTrack(gamePk, side, checked, pitcherName, line, modelProb, marketPct, wager, profit) {
@@ -893,16 +900,20 @@
     `;
   }
 
-  function pitcherKRowHtml(gamePk, side, pitcher, line) {
+  function pitcherKRowHtml(gamePk, side, pitcher) {
     const kiStr = pitcher.pitcher_k_index != null ? pitcher.pitcher_k_index.toFixed(2) : "—";
     const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
+    const state = getKBetState(gamePk, side);
+    const line = state.threshold;
     const yesPct = (pitcher.mean != null && pitcher.sd != null) ? probKAtLeast(pitcher.mean, pitcher.sd, line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter">
+      <div class="hits-batter" style="grid-template-columns: 1.8fr 44px 28px 34px 34px 46px 52px 30px 60px 38px 40px;">
         <span>${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}</span>
-        <span class="hits-index">K ${kiStr} / Opp ${oppStr}</span>
+        <span class="hits-index">${kiStr} VS ${oppStr}</span>
+        <input type="number" min="1" step="1" value="${line}" style="text-align:center;"
+          onchange="updateKThreshold(${gamePk},'${side}',this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${kBetRowCellsHtml(gamePk, side, pitcher.pitcher_name || "", yesPct, noPct, line)}
       </div>
@@ -910,24 +921,15 @@
   }
 
   function kSectionHtml(gamePk, data) {
-    const line = kLineByGame[gamePk] != null ? kLineByGame[gamePk] : 5.5;
-
     const homeHtml = data.away_lineup_confirmed
-      ? pitcherKRowHtml(gamePk, "home", data.home_pitcher, line)
+      ? pitcherKRowHtml(gamePk, "home", data.home_pitcher)
       : `<div class="hits-side-label">Home Pitcher — Opposing Lineup Not Confirmed</div>`;
     const awayHtml = data.home_lineup_confirmed
-      ? pitcherKRowHtml(gamePk, "away", data.away_pitcher, line)
+      ? pitcherKRowHtml(gamePk, "away", data.away_pitcher)
       : `<div class="hits-side-label">Away Pitcher — Opposing Lineup Not Confirmed</div>`;
 
     return `
-      <div class="hits-controls">
-        <span>At least</span>
-        <select onchange="setKLine(${gamePk}, this.value)">
-          ${[3.5, 4.5, 5.5, 6.5, 7.5, 8.5].map(n => `<option value="${n}" ${n === line ? "selected" : ""}>${n}</option>`).join("")}
-        </select>
-        <span>strikeouts</span>
-      </div>
-      ${HITS_TABLE_HEADER}
+      ${HITS_TABLE_HEADER_WITH_OU}
       <div class="hits-side-label">Away</div>
       ${awayHtml}
       <div class="hits-side-label">Home</div>
