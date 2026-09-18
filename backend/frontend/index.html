@@ -975,14 +975,14 @@
     if (!hrrBetState[gamePk]) hrrBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
     if (!hrrBetState[gamePk][key]) {
-      hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1.5 };
+      hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 2 };
     }
     return hrrBetState[gamePk][key];
   }
 
   function updateHrrThreshold(gamePk, side, batterId, value) {
     const state = getHrrBetState(gamePk, side, batterId);
-    state.threshold = Math.max(0.5, parseFloat(value) || 1.5);
+    state.threshold = Math.max(0.5, parseFloat(value) || 2);
     rerenderHrr(gamePk);
   }
 
