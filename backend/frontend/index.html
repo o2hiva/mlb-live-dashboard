@@ -292,7 +292,6 @@
   // State lives outside cardHtml/render so it survives the 10s poll
   // refresh, which otherwise rebuilds the whole grid (and would
   // collapse/re-fetch everything on every cycle without this).
-  const hitsThresholdByGame = {};
   const hitsDataCache = {};
 
   function combination(n, k) {
@@ -348,7 +347,6 @@
     } else {
       expandedLineupGames.add(gamePk);
       if (!activeLineupTab[gamePk]) activeLineupTab[gamePk] = "hits";
-      if (!hitsThresholdByGame[gamePk]) hitsThresholdByGame[gamePk] = 1;
       if (hrrLineByGame[gamePk] == null) hrrLineByGame[gamePk] = 1.5;
       if (kLineByGame[gamePk] == null) kLineByGame[gamePk] = 5.5;
     }
@@ -358,11 +356,6 @@
   function switchLineupTab(gamePk, tab) {
     activeLineupTab[gamePk] = tab;
     renderLineupSection(gamePk);
-  }
-
-  function setHitsThreshold(gamePk, value) {
-    hitsThresholdByGame[gamePk] = parseInt(value, 10);
-    rerenderHits(gamePk); // instant re-render from cache, no fetch
   }
 
   // ---- Bet sizing (Kelly Criterion) ----
@@ -394,9 +387,15 @@
     if (!hitsBetState[gamePk]) hitsBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
     if (!hitsBetState[gamePk][key]) {
-      hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+      hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
     return hitsBetState[gamePk][key];
+  }
+
+  function updateHitsThreshold(gamePk, side, batterId, value) {
+    const state = getBetState(gamePk, side, batterId);
+    state.threshold = Math.max(1, parseInt(value, 10) || 1);
+    rerenderHits(gamePk);
   }
 
   function updateBetField(gamePk, side, batterId, field, value) {
@@ -584,15 +583,19 @@
     `;
   }
 
-  function batterRowHtml(gamePk, side, b, h) {
+  function batterRowHtml(gamePk, side, b) {
     const hiStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
+    const state = getBetState(gamePk, side, b.batter_id);
+    const h = state.threshold;
     const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, h) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
-      <div class="hits-batter">
+      <div class="hits-batter" style="grid-template-columns: 1.1fr 34px 40px 34px 34px 46px 52px 30px 60px 60px 40px;">
         <span>${b.batting_order}. ${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}</span>
         <span class="hits-index">HI ${hiStr}</span>
+        <input type="number" min="1" step="1" value="${h}"
+          onchange="updateHitsThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         ${betRowCellsHtml(gamePk, side, b, yesPct, noPct, h)}
       </div>
@@ -605,27 +608,25 @@
       <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
     </div>`;
 
+  const HITS_TABLE_HEADER_WITH_OU = `
+    <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.1fr 34px 40px 34px 34px 46px 52px 30px 60px 60px 40px;">
+      <span>Batter</span><span>HI</span><span>O/U</span><span>Yes</span><span>No</span>
+      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+    </div>`;
+
   function hitsSectionHtml(gamePk, data) {
-    const h = hitsThresholdByGame[gamePk] || 1;
     const awayPitcherHi = data.away_opp_pitcher_hit_index != null ? data.away_opp_pitcher_hit_index.toFixed(2) : "—";
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
 
     const awayHtml = data.away_lineup_confirmed
-      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(gamePk, "away", b, h)).join("")}`
+      ? `<div class="hits-side-label">Away — ${data.away_opp_pitcher_name || "TBD"}${data.away_opp_pitcher_hand ? " (" + data.away_opp_pitcher_hand + ")" : ""} (HI ${awayPitcherHi})</div>${data.away_batters.map(b => batterRowHtml(gamePk, "away", b)).join("")}`
       : `<div class="hits-side-label">Away — Not Confirmed</div>`;
     const homeHtml = data.home_lineup_confirmed
-      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(gamePk, "home", b, h)).join("")}`
+      ? `<div class="hits-side-label">Home — ${data.home_opp_pitcher_name || "TBD"}${data.home_opp_pitcher_hand ? " (" + data.home_opp_pitcher_hand + ")" : ""} (HI ${homePitcherHi})</div>${data.home_batters.map(b => batterRowHtml(gamePk, "home", b)).join("")}`
       : `<div class="hits-side-label">Home — Not Confirmed</div>`;
 
     return `
-      <div class="hits-controls">
-        <span>At least</span>
-        <select onchange="setHitsThreshold(${gamePk}, this.value)">
-          ${[1, 2, 3, 4].map(n => `<option value="${n}" ${n === h ? "selected" : ""}>${n}</option>`).join("")}
-        </select>
-        <span>hit(s)</span>
-      </div>
-      ${HITS_TABLE_HEADER}
+      ${HITS_TABLE_HEADER_WITH_OU}
       ${awayHtml}
       ${homeHtml}
     `;
