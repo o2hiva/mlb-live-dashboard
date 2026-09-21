@@ -39,6 +39,29 @@ from models_db import TrackedBet, Game, InningLine
 log = logging.getLogger("bet_grading")
 
 
+def _refresh_abstract_status(db, game: Game):
+    """
+    Live re-check of one game's true abstract status directly from MLB,
+    bypassing the regular poller entirely - the poller only ever
+    revisits today + the next 2 days, so a game whose date has already
+    passed would otherwise never get its abstract_status corrected,
+    even after the column itself started being populated correctly
+    going forward. Safe to call for any game; a real network/API
+    failure just leaves the stored value as-is rather than raising.
+    """
+    try:
+        games_that_day = mlb_client.get_schedule(game.game_date)
+    except Exception:
+        log.exception("Failed to refresh abstract_status for game %s", game.game_pk)
+        return
+    for g in games_that_day:
+        if g["game_pk"] == game.game_pk:
+            game.status = g["status"]
+            game.abstract_status = g["abstract_status"]
+            db.commit()
+            return
+
+
 def _first_inning_actual(db, game_pk: int) -> bool | None:
     """True if either team scored in the 1st inning, False if neither
     did, None if we don't have any 1st-inning line data for this game
@@ -145,14 +168,23 @@ def grade_pending_bets() -> dict:
 
         for bet in pending:
             game = db.get(Game, bet.game_pk)
+            if not game:
+                still_pending += 1
+                continue
+
             # abstract_status is always exactly "Final" once a game is
             # truly over, regardless of what MLB's more verbose `status`
-            # field happened to say at poll time (challenges, reviews,
-            # delays, etc. all show up there too) - confirmed a real
-            # bet stuck indefinitely because its game's snapshot was
-            # "Player challenge: Pitch Result" rather than a status this
-            # code recognized as final.
-            if not game or game.abstract_status != "Final":
+            # field happened to say at poll time - but the STORED value
+            # only gets refreshed by the regular poller, which only ever
+            # revisits today + the next 2 days. A game whose date has
+            # already passed is never re-checked, so an old row can be
+            # stuck at whatever abstract_status it had (or the column's
+            # own migration-time default) forever. Rather than trust a
+            # value that may simply never have been updated, re-check
+            # live with MLB directly for anything not already "Final".
+            if game.abstract_status != "Final":
+                _refresh_abstract_status(db, game)
+            if game.abstract_status != "Final":
                 still_pending += 1
                 continue
 
