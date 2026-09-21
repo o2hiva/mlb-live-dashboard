@@ -23,6 +23,7 @@ class Game(Base):
     home_lineup_confirmed = Column(Boolean, default=False)
     away_lineup_confirmed = Column(Boolean, default=False)
     status = Column(String)  # Preview / Live / Final / etc.
+    abstract_status = Column(String, nullable=True, default="Preview")  # ALWAYS exactly "Preview"/"Live"/"Final" - see mlb_client.get_schedule's own comment on why this exists alongside the more verbose `status` field
     home_score = Column(Integer, default=0)
     away_score = Column(Integer, default=0)
     inning = Column(Integer, default=0)

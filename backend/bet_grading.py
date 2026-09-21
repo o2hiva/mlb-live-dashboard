@@ -38,8 +38,6 @@ from models_db import TrackedBet, Game, InningLine
 
 log = logging.getLogger("bet_grading")
 
-FINAL_STATUSES = {"Final", "Game Over"}
-
 
 def _first_inning_actual(db, game_pk: int) -> bool | None:
     """True if either team scored in the 1st inning, False if neither
@@ -147,7 +145,14 @@ def grade_pending_bets() -> dict:
 
         for bet in pending:
             game = db.get(Game, bet.game_pk)
-            if not game or game.status not in FINAL_STATUSES:
+            # abstract_status is always exactly "Final" once a game is
+            # truly over, regardless of what MLB's more verbose `status`
+            # field happened to say at poll time (challenges, reviews,
+            # delays, etc. all show up there too) - confirmed a real
+            # bet stuck indefinitely because its game's snapshot was
+            # "Player challenge: Pitch Result" rather than a status this
+            # code recognized as final.
+            if not game or game.abstract_status != "Final":
                 still_pending += 1
                 continue
 

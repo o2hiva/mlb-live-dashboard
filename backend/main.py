@@ -47,6 +47,7 @@ def _ensure_column(table: str, column: str, sql_type: str):
 _ensure_column("games", "game_datetime_utc", "VARCHAR")
 _ensure_column("games", "home_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
 _ensure_column("games", "away_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
+_ensure_column("games", "abstract_status", "VARCHAR DEFAULT 'Preview'")
 _ensure_column("bet_tracker_settings", "kalshi_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "polymarket_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "novig_balance", "FLOAT DEFAULT 0.0")

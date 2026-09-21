@@ -100,6 +100,7 @@ def _sync_one_date(db, date_str: str):
         existing.home_probable_pitcher_id = g["home_probable_pitcher_id"]
         existing.away_probable_pitcher_id = g["away_probable_pitcher_id"]
         existing.status = g["status"]
+        existing.abstract_status = g["abstract_status"]
 
         if existing.status in NOT_STARTED_STATUSES:
             _upsert_first_inning_prediction(db, existing, g)
@@ -139,7 +140,13 @@ def sync_schedule(days_ahead: int = SYNC_DAYS_AHEAD):
 def poll_live_games():
     db = SessionLocal()
     try:
-        live_games = db.query(Game).filter(Game.status == "In Progress").all()
+        # abstract_status is always exactly "Live" while a game is
+        # actually in progress, regardless of MLB's dozens of possible
+        # verbose detailedState strings (challenges, reviews, delays,
+        # etc.) - matching on the literal string "In Progress" alone
+        # missed those, silently freezing score/inning-line updates for
+        # any game caught mid-review at poll time.
+        live_games = db.query(Game).filter(Game.abstract_status == "Live").all()
         for game in live_games:
             try:
                 feed = mlb_client.get_live_feed(game.game_pk)

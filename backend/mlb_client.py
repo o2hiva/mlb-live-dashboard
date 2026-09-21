@@ -67,6 +67,16 @@ def get_schedule(game_date: str | None = None) -> list[dict]:
                 "game_date": game_date,
                 "game_datetime_utc": g.get("gameDate"),  # ISO 8601 UTC, e.g. "2026-09-15T02:10:00Z"
                 "status": g.get("status", {}).get("detailedState", "Unknown"),
+                # MLB's detailedState has dozens of possible verbose values
+                # (challenges, reviews, delays, etc.) - abstractGameState is
+                # always exactly one of "Preview"/"Live"/"Final", regardless
+                # of what's happening mid-game. Using this as the
+                # authoritative "is this game actually over" signal avoids
+                # having to enumerate every possible transient status string
+                # (confirmed a real gap: "Player challenge: Pitch Result"
+                # was being treated as "not finished" by bet grading, even
+                # for a game that had already ended).
+                "abstract_status": g.get("status", {}).get("abstractGameState", "Preview"),
                 "venue_id": g.get("venue", {}).get("id"),
                 "venue_name": g.get("venue", {}).get("name"),
                 "home_team": home.get("team", {}).get("name"),
