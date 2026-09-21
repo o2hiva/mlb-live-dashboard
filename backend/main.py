@@ -470,6 +470,47 @@ def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/games/{game_pk}/pitcher-hits-allowed")
+def game_pitcher_hits_allowed(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Pitcher Hits Allowed prop - same 2-row structure as Pitcher K (one
+    per starting pitcher, not one per batter), since this is also a
+    per-PITCHER stat. Needs no new sync trigger of its own - reuses
+    PitcherHitsStat/PitcherKStat/BatterSeasonStat, all already synced
+    at lineup confirmation for other props. See
+    pitcher_hits_allowed_sync.py for the full formula.
+    """
+    import pitcher_hits_allowed_sync
+    import hits_stats_sync
+    import platoon_stats_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+
+    def pitcher_row(pitcher_id, pitcher_name, batting_team_side):
+        inputs = pitcher_hits_allowed_sync.compute_pitcher_hits_allowed_inputs(pitcher_id, game_pk, batting_team_side, la_b9=la_b9) \
+            if pitcher_id else None
+        return {
+            "pitcher_id": pitcher_id,
+            "pitcher_name": pitcher_name,
+            "pitcher_hand": platoon_stats_sync.get_pitcher_hand(pitcher_id, pitcher_name or "") if pitcher_id else None,
+            "mean": inputs["mean"] if inputs else None,
+            "pitcher_hits_allowed_index": inputs["pitcher_hits_allowed_index"] if inputs else None,
+            "opposing_lineup_hit_index": inputs["opposing_lineup_hit_index"] if inputs else None,
+        }
+
+    return {
+        "game_pk": game_pk,
+        "home_lineup_confirmed": game.home_lineup_confirmed,
+        "away_lineup_confirmed": game.away_lineup_confirmed,
+        "home_pitcher": pitcher_row(game.home_probable_pitcher_id, game.home_probable_pitcher, "away"),
+        "away_pitcher": pitcher_row(game.away_probable_pitcher_id, game.away_probable_pitcher, "home"),
+    }
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """

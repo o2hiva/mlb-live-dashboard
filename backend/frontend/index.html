@@ -349,6 +349,33 @@
     return Math.max(0, Math.min(1, 1 - normCdf(line - 0.5, mean, sd)));
   }
 
+  function poissonPmf(k, mean) {
+    // Uses lgamma (defined below - hoisted, safe to call from here)
+    // for the same reason HRR's negative binomial does: k! via
+    // factorial directly overflows for even modest k, lgamma doesn't.
+    return Math.exp(k * Math.log(mean) - mean - lgamma(k + 1));
+  }
+
+  function poissonSf(thresholdInt, mean) {
+    // P(X > thresholdInt) = 1 - CDF(thresholdInt) for Poisson(mean).
+    if (mean == null || mean <= 0) return null;
+    let cdf = 0;
+    for (let k = 0; k <= thresholdInt; k++) cdf += poissonPmf(k, mean);
+    return Math.max(0, Math.min(1, 1 - cdf));
+  }
+
+  function probHitsAllowedAtLeast(mean, line) {
+    if (mean == null) return null;
+    // Verified against scipy.stats.poisson directly before shipping -
+    // matched exactly (P(X>=5) at mean=5.02: both 0.5630). Same
+    // Math.ceil(line)-1 "at least N" conversion already proven correct
+    // for HRR earlier today - core.py's own int(threshold) was written
+    // for half-integer O/U lines, not this system's whole-number O/U
+    // box convention (confirmed: naively porting it would have
+    // silently computed "at least N+1" instead of "at least N").
+    return poissonSf(Math.ceil(line) - 1, mean);
+  }
+
   // ---- Lineup section: ONE expandable area per game, with an internal
   // Hits/HRR tab switch inside it (not two separate stacked sections). ----
   const expandedLineupGames = new Set();
@@ -635,6 +662,12 @@
       <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
     </div>`;
 
+  const PHA_TABLE_HEADER = `
+    <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.5fr 75px 28px 34px 34px 46px 52px 30px 60px 30px 40px;">
+      <span>Pitcher</span><span>Hits Idx VS Opp</span><span>O/U</span><span>Yes</span><span>No</span>
+      <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+    </div>`;
+
   function hitsSectionHtml(gamePk, data) {
     const awayPitcherHi = data.away_opp_pitcher_hit_index != null ? data.away_opp_pitcher_hit_index.toFixed(2) : "—";
     const homePitcherHi = data.home_opp_pitcher_hit_index != null ? data.home_opp_pitcher_hit_index.toFixed(2) : "—";
@@ -804,6 +837,149 @@
 
     return `
       ${awayHtml}
+      ${homeHtml}
+    `;
+  }
+
+  // ---- Pitcher Hits Allowed prop: same 2-rows-per-game structure as
+  // Pitcher K, but Poisson-distributed (mean only, no sd/spread param).
+  // See pitcher_hits_allowed_sync.py for the full formula. ----
+  const phaDataCache = {};
+  const phaBetState = {};
+
+  function getPhaBetState(gamePk, side) {
+    if (!phaBetState[gamePk]) phaBetState[gamePk] = {};
+    if (!phaBetState[gamePk][side]) {
+      phaBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 5 };
+    }
+    return phaBetState[gamePk][side];
+  }
+
+  function updatePhaThreshold(gamePk, side, value) {
+    const state = getPhaBetState(gamePk, side);
+    state.threshold = Math.max(1, parseInt(value, 10) || 5);
+    rerenderPha(gamePk);
+  }
+
+  function updatePhaBetField(gamePk, side, field, value) {
+    const state = getPhaBetState(gamePk, side);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderPha(gamePk);
+  }
+
+  function rerenderPha(gamePk) {
+    if (activeLineupTab[gamePk] !== "pha") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && phaDataCache[gamePk]) {
+      contentDiv.innerHTML = phaSectionHtml(gamePk, phaDataCache[gamePk]);
+    }
+  }
+
+  async function togglePhaTrack(gamePk, side, checked, pitcherId, pitcherName, line, modelProb, marketPct, wager, profit) {
+    const state = getPhaBetState(gamePk, side);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "pitcher_hits_allowed", batter_id: pitcherId, batter_name: pitcherName,
+            team_side: side, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderPha(gamePk);
+  }
+
+  function phaBetRowCellsHtml(gamePk, side, pitcherId, pitcherName, yesPct, noPct, line) {
+    const state = getPhaBetState(gamePk, side);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `pha-${gamePk}-${side}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
+           onchange="updatePhaBetField(${gamePk},'${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'${side}',this.checked,${pitcherId},'${pitcherName.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updatePhaBetField(${gamePk},'${side}','yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
+        onchange="updatePhaBetField(${gamePk},'${side}','market',this.value)" />
+      <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
+        onchange="updatePhaBetField(${gamePk},'${side}','useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="togglePhaTrack(${trackArgs})" />
+    `;
+  }
+
+  function pitcherPhaRowHtml(gamePk, side, pitcher) {
+    const piStr = pitcher.pitcher_hits_allowed_index != null ? pitcher.pitcher_hits_allowed_index.toFixed(2) : "—";
+    const oppStr = pitcher.opposing_lineup_hit_index != null ? pitcher.opposing_lineup_hit_index.toFixed(2) : "—";
+    const state = getPhaBetState(gamePk, side);
+    const line = state.threshold;
+    const yesPct = pitcher.mean != null ? probHitsAllowedAtLeast(pitcher.mean, line) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+
+    return `
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 75px 28px 34px 34px 46px 52px 30px 60px 30px 40px;">
+        <span>${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}</span>
+        <span class="hits-index">${piStr} VS ${oppStr}</span>
+        <input type="number" min="1" step="1" value="${line}" style="text-align:center;"
+          onchange="updatePhaThreshold(${gamePk},'${side}',this.value)" />
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${phaBetRowCellsHtml(gamePk, side, pitcher.pitcher_id, pitcher.pitcher_name || "", yesPct, noPct, line)}
+      </div>
+    `;
+  }
+
+  function phaSectionHtml(gamePk, data) {
+    const homeHtml = data.away_lineup_confirmed
+      ? pitcherPhaRowHtml(gamePk, "home", data.home_pitcher)
+      : `<div class="hits-side-label">Home Pitcher — Opposing Lineup Not Confirmed</div>`;
+    const awayHtml = data.home_lineup_confirmed
+      ? pitcherPhaRowHtml(gamePk, "away", data.away_pitcher)
+      : `<div class="hits-side-label">Away Pitcher — Opposing Lineup Not Confirmed</div>`;
+
+    return `
+      ${PHA_TABLE_HEADER}
+      <div class="hits-side-label">Away</div>
+      ${awayHtml}
+      <div class="hits-side-label">Home</div>
       ${homeHtml}
     `;
   }
@@ -1163,6 +1339,7 @@
         <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
         <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
+        <span class="lineup-tab ${tab === "pha" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'pha')">P-Hits</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
     `;
@@ -1173,6 +1350,7 @@
       hr: { cache: hrDataCache, render: hrSectionHtml, path: "hr" },
       hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
       k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
+      pha: { cache: phaDataCache, render: phaSectionHtml, path: "pitcher-hits-allowed" },
     };
     const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];
 
