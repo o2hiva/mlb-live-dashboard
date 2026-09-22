@@ -103,10 +103,17 @@ def get_hybrid_baselines(db) -> tuple:
 
 def get_pitcher_hits_allowed_index(pitcher_id: int | None, league_pitcher_hit_rate: float | None = None) -> float | None:
     """This pitcher's own hits-allowed rate (per batter faced) relative
-    to the league baseline - shown regardless of sample size (purely
-    informational). league_pitcher_hit_rate: pass in the caller's
-    already-computed hybrid baseline to avoid recomputing it per
-    pitcher - same "once per request" reasoning as every other prop."""
+    to the league baseline, SHRUNK the same way the actual mean
+    calculation is - verbatim DEFAULT_PITCHER_SHRINKAGE_K formula, not
+    the raw rate. Same fix applied to Pitcher K's own display index
+    after a real case (Brady Basso) showed the raw rate can look
+    contradictory next to a small-sample pitcher's actual (properly
+    regressed) prediction. Shown regardless of sample size (purely
+    informational either way - MIN_PITCHER_BATTERS_FACED still
+    controls whether a probability gets computed at all).
+    league_pitcher_hit_rate: pass in the caller's already-computed
+    hybrid baseline to avoid recomputing it per pitcher - same "once
+    per request" reasoning as every other prop."""
     if not pitcher_id:
         return None
     db = SessionLocal()
@@ -117,7 +124,9 @@ def get_pitcher_hits_allowed_index(pitcher_id: int | None, league_pitcher_hit_ra
         pitcher_k = db.get(PitcherKStat, pitcher_id)
         if not pitcher_hits or not pitcher_k or pitcher_k.batters_faced <= 0:
             return None
-        return (pitcher_hits.hits_allowed / pitcher_k.batters_faced) / league_pitcher_hit_rate
+        shrunk_rate = (pitcher_hits.hits_allowed + DEFAULT_PITCHER_SHRINKAGE_K * league_pitcher_hit_rate) / \
+            (pitcher_k.batters_faced + DEFAULT_PITCHER_SHRINKAGE_K)
+        return shrunk_rate / league_pitcher_hit_rate
     finally:
         db.close()
 
