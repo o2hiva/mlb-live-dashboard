@@ -17,15 +17,24 @@ DISTRIBUTION: Poisson (not Binomial/Negative-Binomial/Normal - a new
 one for this system). Validated directly against Normal and Negative
 Binomial in the backtest; Poisson gave the calibrated result (z=+0.53).
 
-TWO HARDCODED CONSTANTS - DELIBERATE, NOT AN OVERSIGHT: unlike every
-other league rate in this system (all live-computed from current
-season data), core.py uses two fixed historical values here:
-LEAGUE_PITCHER_HIT_RATE_PER_BF and LEAGUE_AVG_HITS_ALLOWED_PER_START.
-Ported verbatim rather than "improved" into live averages - that would
-silently change the formula's actual structure away from what was
-backtested. Worth knowing these two numbers will grow stale over
-time in a way nothing else in this system does; only worth revisiting
-if the underlying league-wide hitting environment shifts materially.
+TWO BASELINE CONSTANTS - HYBRID, NOT PURELY STATIC: originally ported
+as fixed historical values (deliberately, not an oversight -
+"improving" them into naive live averages would have silently changed
+the formula's structure away from what was backtested). core.py later
+added a validated hybrid approach, implemented here in
+get_hybrid_baselines(): use these exact static, backtested values
+until enough REAL live data has accumulated (30+ distinct pitchers,
+each with 50+ batters faced AND a real start count), then switch to
+the live-computed equivalent from that same real data, self-correcting
+as the season's true conditions evolve rather than staying frozen at
+the day this was written. Below that threshold, behavior is IDENTICAL
+to the original static-only version - so early-season results don't
+change at all. This needed no new data either - PitcherKStat already
+has games_started, and this queries the database this system already
+keeps (no MLB API calls), so unlike every other league rate in this
+system, no staleness-caching layer is needed for it: the underlying
+data only grows as more games get displayed, so it's always exactly
+as fresh as this dashboard's own accumulated history.
 
 THRESHOLD SEMANTICS - checked deliberately: core.py's own threshold
 handling (`1 - poisson.cdf(int(threshold), mean)`) was written for
@@ -47,6 +56,8 @@ from models_db import PitcherHitsStat, PitcherKStat, BatterSeasonStat, LineupBat
 
 log = logging.getLogger("pitcher_hits_allowed_sync")
 
+MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE = 30
+
 # Verbatim from core.py - deliberately static, see module docstring.
 LEAGUE_PITCHER_HIT_RATE_PER_BF = 0.2224
 LEAGUE_AVG_HITS_ALLOWED_PER_START = 5.02
@@ -59,19 +70,54 @@ DEFAULT_PITCHER_SHRINKAGE_K = 800
 DEFAULT_BATTER_SHRINKAGE_K = 100
 
 
-def get_pitcher_hits_allowed_index(pitcher_id: int | None) -> float | None:
+def get_hybrid_baselines(db) -> tuple:
+    """
+    Returns (league_pitcher_hit_rate_per_bf, league_avg_hits_allowed_per_start)
+    - the live-computed equivalents once 30+ distinct pitchers qualify
+    (50+ batters faced AND a real start count on file - "starts" is
+    what converts hits_allowed, a season-to-date CUMULATIVE total, into
+    a per-start figure), falling back to the validated static constants
+    below that threshold, so early behavior is identical to what was
+    actually backtested. Pure local DB query - no MLB API call, so
+    unlike every other league rate in this system, this needs no
+    staleness cache; it naturally reflects whatever real pitcher data
+    has already accumulated in PitcherHitsStat/PitcherKStat from every
+    game this dashboard has ever displayed (a set that only grows).
+    """
+    pitchers = db.query(PitcherHitsStat).all()
+    qualifying = []
+    for ph in pitchers:
+        pk = db.get(PitcherKStat, ph.pitcher_id)
+        if pk and pk.batters_faced >= MIN_PITCHER_BATTERS_FACED and pk.games_started > 0:
+            qualifying.append((ph.hits_allowed, pk.batters_faced, pk.games_started))
+
+    if len(qualifying) < MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE:
+        return LEAGUE_PITCHER_HIT_RATE_PER_BF, LEAGUE_AVG_HITS_ALLOWED_PER_START
+
+    total_hits = sum(h for h, bf, gs in qualifying)
+    total_bf = sum(bf for h, bf, gs in qualifying)
+    total_starts = sum(gs for h, bf, gs in qualifying)
+
+    return total_hits / total_bf, total_hits / total_starts
+
+
+def get_pitcher_hits_allowed_index(pitcher_id: int | None, league_pitcher_hit_rate: float | None = None) -> float | None:
     """This pitcher's own hits-allowed rate (per batter faced) relative
-    to the league constant - shown regardless of sample size (purely
-    informational)."""
+    to the league baseline - shown regardless of sample size (purely
+    informational). league_pitcher_hit_rate: pass in the caller's
+    already-computed hybrid baseline to avoid recomputing it per
+    pitcher - same "once per request" reasoning as every other prop."""
     if not pitcher_id:
         return None
     db = SessionLocal()
     try:
+        if league_pitcher_hit_rate is None:
+            league_pitcher_hit_rate = get_hybrid_baselines(db)[0]
         pitcher_hits = db.get(PitcherHitsStat, pitcher_id)
         pitcher_k = db.get(PitcherKStat, pitcher_id)
         if not pitcher_hits or not pitcher_k or pitcher_k.batters_faced <= 0:
             return None
-        return (pitcher_hits.hits_allowed / pitcher_k.batters_faced) / LEAGUE_PITCHER_HIT_RATE_PER_BF
+        return (pitcher_hits.hits_allowed / pitcher_k.batters_faced) / league_pitcher_hit_rate
     finally:
         db.close()
 
@@ -126,7 +172,9 @@ def compute_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_t
         if not pitcher_hits or not pitcher_k:
             return None
 
-        pitcher_hits_allowed_index = get_pitcher_hits_allowed_index(pitcher_id)
+        league_pitcher_hit_rate, league_avg_hits_per_start = get_hybrid_baselines(db)
+
+        pitcher_hits_allowed_index = get_pitcher_hits_allowed_index(pitcher_id, league_pitcher_hit_rate=league_pitcher_hit_rate)
 
         lineup_hit_index, batters_with_data = _lineup_hit_factor(db, game_pk, batting_team_side, la_b9)
 
@@ -134,11 +182,11 @@ def compute_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_t
         if pitcher_k.batters_faced >= MIN_PITCHER_BATTERS_FACED and \
                 batters_with_data >= MIN_LINEUP_BATTERS_WITH_DATA and lineup_hit_index is not None:
 
-            shrunk_pitcher_rate = (pitcher_hits.hits_allowed + DEFAULT_PITCHER_SHRINKAGE_K * LEAGUE_PITCHER_HIT_RATE_PER_BF) / \
+            shrunk_pitcher_rate = (pitcher_hits.hits_allowed + DEFAULT_PITCHER_SHRINKAGE_K * league_pitcher_hit_rate) / \
                 (pitcher_k.batters_faced + DEFAULT_PITCHER_SHRINKAGE_K)
-            pitcher_hit_index = shrunk_pitcher_rate / LEAGUE_PITCHER_HIT_RATE_PER_BF
+            pitcher_hit_index = shrunk_pitcher_rate / league_pitcher_hit_rate
 
-            mean = pitcher_hit_index * lineup_hit_index * LEAGUE_AVG_HITS_ALLOWED_PER_START
+            mean = pitcher_hit_index * lineup_hit_index * league_avg_hits_per_start
 
         return {
             "mean": mean,
