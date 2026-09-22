@@ -99,6 +99,12 @@
   .bankroll-total { font-size: 1.8rem; font-weight: 600; margin-top: 4px; }
   .hit-rate-value { font-size: 1.3rem; font-weight: 600; margin-top: 4px; }
   .hit-rate-record { font-size: 0.7rem; color: var(--muted); }
+  .weekly-row {
+    display: grid; grid-template-columns: 1.5fr 0.8fr 0.8fr 0.8fr 0.8fr;
+    gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .weekly-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+  .weekly-row-current { font-weight: 600; }
   .tracked-bets-list { font-size: 0.85rem; }
   .tracked-bet-row {
     display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.6fr;
@@ -160,6 +166,9 @@
 
     <h2 style="margin-top:32px;">Hit Rates</h2>
     <div class="platform-grid" id="hit-rate-boxes">Loading...</div>
+
+    <h2 style="margin-top:32px;">Hit Rates by Week</h2>
+    <div id="weekly-hit-rate-table">Loading...</div>
 
     <h2 style="margin-top:32px;">Tracked Bets</h2>
     <div id="tracked-bets-list" class="tracked-bets-list">Loading...</div>
@@ -1443,12 +1452,76 @@
     container.innerHTML = html;
   }
 
+  function getMondayOfWeek(dateStr) {
+    // dateStr like "2026-09-17" - returns the YYYY-MM-DD of that week's
+    // Monday (weeks run Monday-Sunday, matching the user's own request).
+    const d = new Date(dateStr + "T00:00:00");
+    const day = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function formatWeekRange(mondayStr) {
+    const monday = new Date(mondayStr + "T00:00:00");
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const fmt = d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return `${fmt(monday)} - ${fmt(sunday)}`;
+  }
+
+  function renderWeeklyHitRateTable(bets) {
+    const container = document.getElementById("weekly-hit-rate-table");
+    const resolved = bets.filter(b => b.resolved && b.game_date);
+
+    // Group resolved bets by the Monday of their game's week.
+    const byWeek = {};
+    for (const b of resolved) {
+      const monday = getMondayOfWeek(b.game_date);
+      if (!byWeek[monday]) byWeek[monday] = [];
+      byWeek[monday].push(b);
+    }
+
+    // Today's week always appears first, even with zero bets yet -
+    // the table "starts" from today going backward, per the user's
+    // own framing, rather than starting from whatever the oldest
+    // data happens to be.
+    const todayMonday = getMondayOfWeek(new Date().toISOString().slice(0, 10));
+    if (!byWeek[todayMonday]) byWeek[todayMonday] = [];
+
+    const weeks = Object.keys(byWeek).sort().reverse(); // most recent first
+
+    const header = `
+      <div class="weekly-row weekly-row-header">
+        <span>Week</span><span>Bets</span><span>Wins</span><span>Losses</span><span>Hit Rate</span>
+      </div>`;
+
+    const rows = weeks.map(monday => {
+      const weekBets = byWeek[monday];
+      const rate = hitRateFor(weekBets);
+      const isCurrent = monday === todayMonday;
+      const rowClass = isCurrent ? "weekly-row weekly-row-current" : "weekly-row";
+      const label = formatWeekRange(monday) + (isCurrent ? " (This Week)" : "");
+      return `
+        <div class="${rowClass}">
+          <span>${label}</span>
+          <span>${rate ? rate.total : 0}</span>
+          <span class="prob-yes">${rate ? rate.wins : 0}</span>
+          <span class="prob-no">${rate ? rate.total - rate.wins : 0}</span>
+          <span>${rate ? rate.pct + "%" : "—"}</span>
+        </div>`;
+    }).join("");
+
+    container.innerHTML = header + rows;
+  }
+
   async function loadTrackedBets() {
     const container = document.getElementById("tracked-bets-list");
     try {
       const res = await fetch(`${API_BASE}/api/bet-tracker/tracked`);
       const bets = await res.json();
       renderHitRateBoxes(bets);
+      renderWeeklyHitRateTable(bets);
       if (!bets.length) {
         container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
         return;
