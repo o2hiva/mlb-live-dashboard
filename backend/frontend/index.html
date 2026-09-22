@@ -1404,13 +1404,15 @@
     }
   }
 
-  const BET_TYPE_LABELS = {
-    first_inning_run: "YNRFI",
-    hits: "Hits",
-    hrr: "HRR",
-    hr: "HR",
-    pitcher_k: "Pitcher K's",
-  };
+  const HIT_RATE_CATEGORIES = [
+    { label: "YRFI", filter: b => b.bet_type === "first_inning_run" && b.yn === "yes" },
+    { label: "NRFI", filter: b => b.bet_type === "first_inning_run" && b.yn === "no" },
+    { label: "Hits", filter: b => b.bet_type === "hits" },
+    { label: "HRR", filter: b => b.bet_type === "hrr" },
+    { label: "HR", filter: b => b.bet_type === "hr" },
+    { label: "Pitcher K's", filter: b => b.bet_type === "pitcher_k" },
+    { label: "P-Hits", filter: b => b.bet_type === "pitcher_hits_allowed" },
+  ];
 
   function hitRateFor(bets) {
     const resolved = bets.filter(b => b.resolved);
@@ -1434,9 +1436,9 @@
     const container = document.getElementById("hit-rate-boxes");
     const overall = hitRateFor(bets);
     let html = hitRateBoxHtml("Overall", overall);
-    for (const [betType, label] of Object.entries(BET_TYPE_LABELS)) {
-      const rate = hitRateFor(bets.filter(b => b.bet_type === betType));
-      html += hitRateBoxHtml(label, rate);
+    for (const cat of HIT_RATE_CATEGORIES) {
+      const rate = hitRateFor(bets.filter(cat.filter));
+      html += hitRateBoxHtml(cat.label, rate);
     }
     container.innerHTML = html;
   }
