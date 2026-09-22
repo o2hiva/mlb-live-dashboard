@@ -1663,20 +1663,28 @@
     }
     container.innerHTML = `<div class="settings-hint">Loading every bet across ${confirmedGames.length} confirmed game(s)...</div>`;
 
+    // Fetch every game's every prop IN PARALLEL, not one at a time -
+    // 15 games x 5 props sequentially could mean 75 round-trips back
+    // to back, which is slow enough to look hung. Firing them all at
+    // once bounds the wait to the SLOWEST single request instead of
+    // the sum of all of them.
+    const paths = { hits: "hits", hrr: "hrr", hr: "hr", k: "pitcher-k", pha: "pitcher-hits-allowed" };
     const data = {};
+    for (const g of confirmedGames) data[g.game_pk] = {};
+
+    const fetchPromises = [];
     for (const g of confirmedGames) {
       const gamePk = g.game_pk;
-      const paths = { hits: "hits", hrr: "hrr", hr: "hr", k: "pitcher-k", pha: "pitcher-hits-allowed" };
-      data[gamePk] = {};
       for (const [key, path] of Object.entries(paths)) {
-        try {
-          const res = await fetch(`${API_BASE}/api/games/${gamePk}/${path}`);
-          data[gamePk][key] = await res.json();
-        } catch (e) {
-          data[gamePk][key] = null;
-        }
+        fetchPromises.push(
+          fetch(`${API_BASE}/api/games/${gamePk}/${path}`)
+            .then(res => res.json())
+            .then(json => { data[gamePk][key] = json; })
+            .catch(() => { data[gamePk][key] = null; })
+        );
       }
     }
+    await Promise.all(fetchPromises);
     byBetsCache = { games: confirmedGames, data };
     renderByBetsTable();
   }
