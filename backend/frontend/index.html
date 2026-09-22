@@ -99,6 +99,13 @@
   .bankroll-total { font-size: 1.8rem; font-weight: 600; margin-top: 4px; }
   .hit-rate-value { font-size: 1.3rem; font-weight: 600; margin-top: 4px; }
   .hit-rate-record { font-size: 0.7rem; color: var(--muted); }
+  .bybets-row {
+    display: grid; grid-template-columns: 1.3fr 0.9fr 50px 28px 34px 34px 46px 52px 30px 60px 46px 40px;
+    gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;
+  }
+  .bybets-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+  .bybets-row select, .bybets-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
+  .bybets-row input[type="checkbox"] { width: auto; justify-self: center; }
   .weekly-row {
     display: grid; grid-template-columns: 1.5fr 0.8fr 0.8fr 0.8fr 0.8fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
@@ -118,7 +125,13 @@
   <h1>MLB Live Dashboard</h1>
   <div class="tabs">
     <span id="tab-btn-live" class="tab-btn active" onclick="switchTab('live')">Live Games</span>
+    <span id="tab-btn-bybets" class="tab-btn" onclick="switchTab('bybets')">By Bets</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+  </div>
+
+  <div id="tab-content-bybets" style="display:none;">
+    <div class="sub">Every bet across every confirmed game, ranked highest to lowest Yes probability.</div>
+    <div id="bybets-content">Loading...</div>
   </div>
 
   <div id="tab-content-live">
@@ -1402,14 +1415,17 @@
   const PLATFORM_FIELDS = ["kalshi", "polymarket", "novig", "fanduel", "draftkings"];
 
   function switchTab(tab) {
-    const isLive = tab === "live";
-    document.getElementById("tab-content-live").style.display = isLive ? "block" : "none";
-    document.getElementById("tab-content-bettracker").style.display = isLive ? "none" : "block";
-    document.getElementById("tab-btn-live").classList.toggle("active", isLive);
-    document.getElementById("tab-btn-bettracker").classList.toggle("active", !isLive);
-    if (!isLive) {
+    document.getElementById("tab-content-live").style.display = tab === "live" ? "block" : "none";
+    document.getElementById("tab-content-bybets").style.display = tab === "bybets" ? "block" : "none";
+    document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
+    document.getElementById("tab-btn-live").classList.toggle("active", tab === "live");
+    document.getElementById("tab-btn-bybets").classList.toggle("active", tab === "bybets");
+    document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
+    if (tab === "bettracker") {
       loadBetTrackerSettings();
       loadTrackedBets();
+    } else if (tab === "bybets") {
+      loadByBetsTab();
     }
   }
 
@@ -1617,6 +1633,279 @@
       // Best-effort - next load will just show the last saved values.
     }
   }
+
+  // ---- "By Bets" tab: flattens every bettable row across every
+  // confirmed game and every prop type into one table, sorted by Yes
+  // probability. Reuses the SAME shared state objects and toggle/update
+  // functions each prop's own tab already uses (hitsBetState,
+  // hrrBetState, hrBetState, kBetState, phaBetState,
+  // firstInningBetState) - so Track/O-U/Market/Kelly changes made here
+  // stay perfectly synced with the Live Games tab, and vice versa. ----
+  const BYBETS_TABLE_HEADER = `
+    <div class="bybets-row bybets-row-header">
+      <span>Player</span><span>Bet Type</span><span>Index</span><span>O/U</span>
+      <span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
+      <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+    </div>`;
+
+  let byBetsCache = null; // { games: [...], data: { [gamePk]: { hits, hrr, hr, k, pha } } }
+
+  async function loadByBetsTab() {
+    const container = document.getElementById("bybets-content");
+    if (!lastFetchedGames || !lastFetchedGames.length) {
+      container.innerHTML = `<div class="settings-hint">No games loaded yet - check the Live Games tab first.</div>`;
+      return;
+    }
+    const confirmedGames = lastFetchedGames.filter(g => g.home_lineup_confirmed || g.away_lineup_confirmed);
+    if (!confirmedGames.length) {
+      container.innerHTML = `<div class="settings-hint">No confirmed lineups yet today - check back closer to first pitch.</div>`;
+      return;
+    }
+    container.innerHTML = `<div class="settings-hint">Loading every bet across ${confirmedGames.length} confirmed game(s)...</div>`;
+
+    const data = {};
+    for (const g of confirmedGames) {
+      const gamePk = g.game_pk;
+      const paths = { hits: "hits", hrr: "hrr", hr: "hr", k: "pitcher-k", pha: "pitcher-hits-allowed" };
+      data[gamePk] = {};
+      for (const [key, path] of Object.entries(paths)) {
+        try {
+          const res = await fetch(`${API_BASE}/api/games/${gamePk}/${path}`);
+          data[gamePk][key] = await res.json();
+        } catch (e) {
+          data[gamePk][key] = null;
+        }
+      }
+    }
+    byBetsCache = { games: confirmedGames, data };
+    renderByBetsTable();
+  }
+
+  // Shared cell-building logic - identical Kelly/wager/profit math and
+  // column shape regardless of which prop's state object is passed in.
+  function byBetsGenericCells(state, yesPct, noPct, onYnChange, onMarketChange, onKellyChange, onWagerChangeAttr, trackOnChangeAttr) {
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="${onWagerChangeAttr}" />`;
+    return {
+      modelProb, wager, profit,
+      noHtml: `<span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>`,
+      ynHtml: `<select onchange="${onYnChange}"><option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option><option value="no" ${state.yn === "no" ? "selected" : ""}>No</option></select>`,
+      marketHtml: `<input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="${onMarketChange}" />`,
+      kellyHtml: `<input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="${onKellyChange}" />`,
+      wagerHtml,
+      profitHtml: `<span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>`,
+      trackHtml: `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="${trackOnChangeAttr}" />`,
+    };
+  }
+
+  function byBetsRowHtml(name, betType, indexStr, ouHtml, yesPct, cells) {
+    return `
+      <div class="bybets-row">
+        <span>${name}</span>
+        <span>${betType}</span>
+        <span>${indexStr}</span>
+        ${ouHtml}
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${cells.noHtml}
+        ${cells.ynHtml}
+        ${cells.marketHtml}
+        ${cells.kellyHtml}
+        ${cells.wagerHtml}
+        ${cells.profitHtml}
+        ${cells.trackHtml}
+      </div>`;
+  }
+
+  function renderByBetsTable() {
+    const container = document.getElementById("bybets-content");
+    if (!byBetsCache) return;
+    const rows = []; // { sortVal, html }
+
+    for (const g of byBetsCache.games) {
+      const gamePk = g.game_pk;
+      const d = byBetsCache.data[gamePk] || {};
+
+      // --- 1st Inning (game-level, no side/batter) ---
+      if (g.first_inning_run_yes_probability != null && g.model_version !== "placeholder-v0-insufficient-data") {
+        const yesPct = g.first_inning_run_yes_probability * 100;
+        const noPct = g.first_inning_run_no_probability * 100;
+        const state = getFirstInningBetState(gamePk);
+        const modelPct = state.yn === "yes" ? yesPct : noPct;
+        const modelProb = modelPct != null ? modelPct / 100 : null;
+        const cells = byBetsGenericCells(
+          state, yesPct, noPct,
+          `updateFirstInningBetField(${gamePk},'yn',this.value)`,
+          `updateFirstInningBetField(${gamePk},'market',this.value)`,
+          `updateFirstInningBetField(${gamePk},'useKelly',this.checked)`,
+          `updateFirstInningBetField(${gamePk},'manualWager',this.value)`,
+          "" // placeholder - rebuilt below once wager/profit are known
+        );
+        // trackHtml above needs the REAL wager/profit, computed inside
+        // byBetsGenericCells - rebuild the track onchange now that we have them.
+        cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleFirstInningTrack(${gamePk},this.checked,${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
+        rows.push({ sortVal: yesPct, html: byBetsRowHtml("1st Inning", "YRFI/NRFI", "—", `<span>—</span>`, yesPct, cells) });
+      }
+
+      // --- Hits ---
+      if (d.hits) {
+        for (const side of ["home", "away"]) {
+          for (const b of (d.hits[`${side}_batters`] || [])) {
+            const state = getBetState(gamePk, side, b.batter_id);
+            const h = state.threshold;
+            const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, h) * 100 : null;
+            const noPct = yesPct != null ? 100 - yesPct : null;
+            const modelPct = state.yn === "yes" ? yesPct : noPct;
+            const modelProb = modelPct != null ? modelPct / 100 : null;
+            const cells = byBetsGenericCells(
+              state, yesPct, noPct,
+              `updateBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)`,
+              `updateBetField(${gamePk},'${side}',${b.batter_id},'market',this.value)`,
+              `updateBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)`,
+              `updateBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)`,
+              "" // placeholder, rebuilt below
+            );
+            const battingOrder = b.batting_order;
+            const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${battingOrder},${h},${modelProb},${state.market},${cells.wager},${cells.profit}`;
+            cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleTrack(${trackArgs})" />`;
+            const ouHtml = `<input type="number" min="1" step="1" value="${h}" style="text-align:center;" onchange="updateHitsThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
+            const indexStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
+            if (yesPct != null) {
+              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "Hits", indexStr, ouHtml, yesPct, cells) });
+            }
+          }
+        }
+      }
+
+      // --- HRR ---
+      if (d.hrr) {
+        for (const side of ["home", "away"]) {
+          for (const b of (d.hrr[`${side}_batters`] || [])) {
+            const state = getHrrBetState(gamePk, side, b.batter_id);
+            const line = state.threshold;
+            const yesPct = (b.r != null && b.p != null) ? probHrrAtLeast(b.r, b.p, line) * 100 : null;
+            const noPct = yesPct != null ? 100 - yesPct : null;
+            const modelPct = state.yn === "yes" ? yesPct : noPct;
+            const modelProb = modelPct != null ? modelPct / 100 : null;
+            const cells = byBetsGenericCells(
+              state, yesPct, noPct,
+              `updateHrrBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)`,
+              `updateHrrBetField(${gamePk},'${side}',${b.batter_id},'market',this.value)`,
+              `updateHrrBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)`,
+              `updateHrrBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)`,
+              ""
+            );
+            const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${line},${modelProb},${state.market},${cells.wager},${cells.profit}`;
+            cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleHrrTrack(${trackArgs})" />`;
+            const ouHtml = `<input type="number" min="0.5" step="0.5" value="${line}" style="text-align:center;" onchange="updateHrrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
+            const indexStr = b.hrr_index != null ? b.hrr_index.toFixed(2) : "—";
+            if (yesPct != null) {
+              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "HRR", indexStr, ouHtml, yesPct, cells) });
+            }
+          }
+        }
+      }
+
+      // --- HR ---
+      if (d.hr) {
+        for (const side of ["home", "away"]) {
+          for (const b of (d.hr[`${side}_batters`] || [])) {
+            const state = getHrBetState(gamePk, side, b.batter_id);
+            const h = state.threshold;
+            const yesPct = (b.n_ab != null && b.p != null) ? probAtLeastHits(b.n_ab, b.p, h) * 100 : null;
+            const noPct = yesPct != null ? 100 - yesPct : null;
+            const modelPct = state.yn === "yes" ? yesPct : noPct;
+            const modelProb = modelPct != null ? modelPct / 100 : null;
+            const cells = byBetsGenericCells(
+              state, yesPct, noPct,
+              `updateHrBetField(${gamePk},'${side}',${b.batter_id},'yn',this.value)`,
+              `updateHrBetField(${gamePk},'${side}',${b.batter_id},'market',this.value)`,
+              `updateHrBetField(${gamePk},'${side}',${b.batter_id},'useKelly',this.checked)`,
+              `updateHrBetField(${gamePk},'${side}',${b.batter_id},'manualWager',this.value)`,
+              ""
+            );
+            const trackArgs = `${gamePk},'${side}',${b.batter_id},this.checked,'${b.batter_name.replace(/'/g, "\\'")}',${b.batting_order},${h},${modelProb},${state.market},${cells.wager},${cells.profit}`;
+            cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleHrTrack(${trackArgs})" />`;
+            const ouHtml = `<input type="number" min="1" step="1" value="${h}" style="text-align:center;" onchange="updateHrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
+            const indexStr = b.hr_index != null ? b.hr_index.toFixed(2) : "—";
+            if (yesPct != null) {
+              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "HR", indexStr, ouHtml, yesPct, cells) });
+            }
+          }
+        }
+      }
+
+      // --- Pitcher K's ---
+      if (d.k) {
+        for (const side of ["home", "away"]) {
+          const pitcher = d.k[`${side}_pitcher`];
+          if (!pitcher || pitcher.mean == null) continue;
+          const state = getKBetState(gamePk, side);
+          const line = state.threshold;
+          const yesPct = probKAtLeast(pitcher.mean, pitcher.sd, line) * 100;
+          const noPct = 100 - yesPct;
+          const modelPct = state.yn === "yes" ? yesPct : noPct;
+          const modelProb = modelPct != null ? modelPct / 100 : null;
+          const cells = byBetsGenericCells(
+            state, yesPct, noPct,
+            `updateKBetField(${gamePk},'${side}','yn',this.value)`,
+            `updateKBetField(${gamePk},'${side}','market',this.value)`,
+            `updateKBetField(${gamePk},'${side}','useKelly',this.checked)`,
+            `updateKBetField(${gamePk},'${side}','manualWager',this.value)`,
+            ""
+          );
+          const trackArgs = `${gamePk},'${side}',this.checked,${pitcher.pitcher_id},'${(pitcher.pitcher_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit}`;
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleKTrack(${trackArgs})" />`;
+          const ouHtml = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateKThreshold(${gamePk},'${side}',this.value)" />`;
+          const kiStr = pitcher.pitcher_k_index != null ? pitcher.pitcher_k_index.toFixed(2) : "—";
+          const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
+          rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`, "K's", `${kiStr}/${oppStr}`, ouHtml, yesPct, cells) });
+        }
+      }
+
+      // --- Pitcher Hits Allowed ---
+      if (d.pha) {
+        for (const side of ["home", "away"]) {
+          const pitcher = d.pha[`${side}_pitcher`];
+          if (!pitcher || pitcher.mean == null) continue;
+          const state = getPhaBetState(gamePk, side);
+          const line = state.threshold;
+          const yesPct = probHitsAllowedAtLeast(pitcher.mean, line) * 100;
+          const noPct = 100 - yesPct;
+          const modelPct = state.yn === "yes" ? yesPct : noPct;
+          const modelProb = modelPct != null ? modelPct / 100 : null;
+          const cells = byBetsGenericCells(
+            state, yesPct, noPct,
+            `updatePhaBetField(${gamePk},'${side}','yn',this.value)`,
+            `updatePhaBetField(${gamePk},'${side}','market',this.value)`,
+            `updatePhaBetField(${gamePk},'${side}','useKelly',this.checked)`,
+            `updatePhaBetField(${gamePk},'${side}','manualWager',this.value)`,
+            ""
+          );
+          const trackArgs = `${gamePk},'${side}',this.checked,${pitcher.pitcher_id},'${(pitcher.pitcher_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit}`;
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="togglePhaTrack(${trackArgs})" />`;
+          const ouHtml = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updatePhaThreshold(${gamePk},'${side}',this.value)" />`;
+          const piStr = pitcher.pitcher_hits_allowed_index != null ? pitcher.pitcher_hits_allowed_index.toFixed(2) : "—";
+          const oppStr = pitcher.opposing_lineup_hit_index != null ? pitcher.opposing_lineup_hit_index.toFixed(2) : "—";
+          rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`, "Hits Allowed", `${piStr}/${oppStr}`, ouHtml, yesPct, cells) });
+        }
+      }
+    }
+
+    rows.sort((a, b) => (b.sortVal || 0) - (a.sortVal || 0));
+
+    if (!rows.length) {
+      container.innerHTML = `<div class="settings-hint">No gradeable bets yet - lineups may still be syncing stats.</div>`;
+      return;
+    }
+    container.innerHTML = BYBETS_TABLE_HEADER + rows.map(r => r.html).join("");
+  }
 </script>
+
 </body>
 </html>
