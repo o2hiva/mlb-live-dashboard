@@ -489,10 +489,13 @@ def game_pitcher_hits_allowed(game_pk: int, db: Session = Depends(get_db)):
         return {"error": "not found"}
 
     la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    league_pitcher_hit_rate, league_avg_hits_per_start = pitcher_hits_allowed_sync.get_hybrid_baselines(db)
 
     def pitcher_row(pitcher_id, pitcher_name, batting_team_side):
-        inputs = pitcher_hits_allowed_sync.compute_pitcher_hits_allowed_inputs(pitcher_id, game_pk, batting_team_side, la_b9=la_b9) \
-            if pitcher_id else None
+        inputs = pitcher_hits_allowed_sync.compute_pitcher_hits_allowed_inputs(
+            pitcher_id, game_pk, batting_team_side, la_b9=la_b9,
+            league_pitcher_hit_rate=league_pitcher_hit_rate, league_avg_hits_per_start=league_avg_hits_per_start,
+        ) if pitcher_id else None
         return {
             "pitcher_id": pitcher_id,
             "pitcher_name": pitcher_name,
@@ -725,9 +728,10 @@ def debug_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_tea
         return {"error": f"Missing PitcherHitsStat or PitcherKStat row for pitcher_id {pitcher_id} - stats haven't fully synced for them yet"}
 
     league_rate, league_avg_per_start = pitcher_hits_allowed_sync.get_hybrid_baselines(db)
+    pitcher_k_by_id = {pk.pitcher_id: pk for pk in db.query(PitcherKStat).all()}
     qualifying_count = len([
         1 for ph in db.query(PitcherHitsStat).all()
-        if (pk := db.get(PitcherKStat, ph.pitcher_id)) and pk.batters_faced >= pitcher_hits_allowed_sync.MIN_PITCHER_BATTERS_FACED and pk.games_started > 0
+        if (pk := pitcher_k_by_id.get(ph.pitcher_id)) and pk.batters_faced >= pitcher_hits_allowed_sync.MIN_PITCHER_BATTERS_FACED and pk.games_started > 0
     ])
     la_b9 = hits_stats_sync.get_league_average_hit_rate()
     lineup_hit_index, batters_with_data = pitcher_hits_allowed_sync._lineup_hit_factor(db, game_pk, batting_team_side, la_b9)

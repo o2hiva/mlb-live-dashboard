@@ -49,7 +49,7 @@ HRR's negative-binomial threshold earlier today.
 """
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import SessionLocal
 from models_db import PitcherHitsStat, PitcherKStat, BatterSeasonStat, LineupBatter
@@ -57,6 +57,22 @@ from models_db import PitcherHitsStat, PitcherKStat, BatterSeasonStat, LineupBat
 log = logging.getLogger("pitcher_hits_allowed_sync")
 
 MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE = 30
+
+# PERFORMANCE: get_hybrid_baselines scans every pitcher this dashboard
+# has ever tracked (a pool that only grows all season). A real
+# regression confirmed directly: it was written with an N+1 query
+# pattern (db.get() inside a loop) AND no caching at all, on the
+# reasoning that "a pure local DB query is cheap" - true for a handful
+# of pitchers, false at 300+ with each db.get() a real network
+# round-trip to Postgres, and worse, it was being called TWICE per
+# single page request (once per pitcher, never hoisted to "compute
+# once per request" the way every other league rate in this system
+# is) - then multiplied again by the By Bets tab calling it across
+# every confirmed game. Fixed with a single bulk query + dict lookup
+# (no more N+1) AND this cache (no more redundant recomputation).
+CACHE_TTL = timedelta(minutes=10)
+_baseline_cache = None
+_baseline_cache_time = None
 
 # Verbatim from core.py - deliberately static, see module docstring.
 LEAGUE_PITCHER_HIT_RATE_PER_BF = 0.2224
@@ -78,27 +94,39 @@ def get_hybrid_baselines(db) -> tuple:
     what converts hits_allowed, a season-to-date CUMULATIVE total, into
     a per-start figure), falling back to the validated static constants
     below that threshold, so early behavior is identical to what was
-    actually backtested. Pure local DB query - no MLB API call, so
-    unlike every other league rate in this system, this needs no
-    staleness cache; it naturally reflects whatever real pitcher data
-    has already accumulated in PitcherHitsStat/PitcherKStat from every
-    game this dashboard has ever displayed (a set that only grows).
+    actually backtested. Cached for CACHE_TTL - see module docstring's
+    "PERFORMANCE" note for why this needs caching despite being a pure
+    local DB query with no MLB API call involved.
     """
-    pitchers = db.query(PitcherHitsStat).all()
+    global _baseline_cache, _baseline_cache_time
+    now = datetime.utcnow()
+    if _baseline_cache is not None and now - _baseline_cache_time < CACHE_TTL:
+        return _baseline_cache
+
+    # Single bulk query + a dict lookup, NOT one query per pitcher (see
+    # module docstring's PERFORMANCE note - this used to be db.get()
+    # inside a loop, an N+1 pattern that got slower every day as the
+    # pitcher pool grew).
+    pitcher_hits_rows = db.query(PitcherHitsStat).all()
+    pitcher_k_by_id = {pk.pitcher_id: pk for pk in db.query(PitcherKStat).all()}
+
     qualifying = []
-    for ph in pitchers:
-        pk = db.get(PitcherKStat, ph.pitcher_id)
+    for ph in pitcher_hits_rows:
+        pk = pitcher_k_by_id.get(ph.pitcher_id)
         if pk and pk.batters_faced >= MIN_PITCHER_BATTERS_FACED and pk.games_started > 0:
             qualifying.append((ph.hits_allowed, pk.batters_faced, pk.games_started))
 
     if len(qualifying) < MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE:
-        return LEAGUE_PITCHER_HIT_RATE_PER_BF, LEAGUE_AVG_HITS_ALLOWED_PER_START
+        result = (LEAGUE_PITCHER_HIT_RATE_PER_BF, LEAGUE_AVG_HITS_ALLOWED_PER_START)
+    else:
+        total_hits = sum(h for h, bf, gs in qualifying)
+        total_bf = sum(bf for h, bf, gs in qualifying)
+        total_starts = sum(gs for h, bf, gs in qualifying)
+        result = (total_hits / total_bf, total_hits / total_starts)
 
-    total_hits = sum(h for h, bf, gs in qualifying)
-    total_bf = sum(bf for h, bf, gs in qualifying)
-    total_starts = sum(gs for h, bf, gs in qualifying)
-
-    return total_hits / total_bf, total_hits / total_starts
+    _baseline_cache = result
+    _baseline_cache_time = now
+    return result
 
 
 def get_pitcher_hits_allowed_index(pitcher_id: int | None, league_pitcher_hit_rate: float | None = None) -> float | None:
@@ -158,7 +186,8 @@ def _lineup_hit_factor(db, game_pk: int, batting_team_side: str, la_b9: float) -
 
 
 def compute_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_team_side: str,
-                                         la_b9: float) -> dict | None:
+                                         la_b9: float, league_pitcher_hit_rate: float | None = None,
+                                         league_avg_hits_per_start: float | None = None) -> dict | None:
     """
     Returns {"mean":, "pitcher_hits_allowed_index":,
     "opposing_lineup_hit_index":} for one starting pitcher - mean feeds
@@ -168,9 +197,13 @@ def compute_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_t
     50+ batters faced for the pitcher, AND at least 5 of the opposing
     lineup's 9 confirmed batters need real season data on file.
 
-    la_b9: pass in the caller's already-computed league hit rate to
-    avoid a redundant lookup per pitcher - same "once per request, not
-    once per row" reasoning as every other prop in this system.
+    la_b9 / league_pitcher_hit_rate / league_avg_hits_per_start: pass
+    in the caller's already-computed values to avoid redundant lookups
+    per pitcher - same "once per request, not once per row" reasoning
+    as every other prop in this system (get_hybrid_baselines is now
+    cached, so calling it twice per request is no longer expensive,
+    but passing values through keeps this consistent with how every
+    other prop already works).
 
     Returns None only if there's no pitcher data at all yet.
     """
@@ -181,7 +214,8 @@ def compute_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_t
         if not pitcher_hits or not pitcher_k:
             return None
 
-        league_pitcher_hit_rate, league_avg_hits_per_start = get_hybrid_baselines(db)
+        if league_pitcher_hit_rate is None or league_avg_hits_per_start is None:
+            league_pitcher_hit_rate, league_avg_hits_per_start = get_hybrid_baselines(db)
 
         pitcher_hits_allowed_index = get_pitcher_hits_allowed_index(pitcher_id, league_pitcher_hit_rate=league_pitcher_hit_rate)
 
