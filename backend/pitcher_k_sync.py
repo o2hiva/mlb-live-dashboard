@@ -25,14 +25,21 @@ guessed at:
      pitched in relief: "outs" is total season outs across EVERY
      appearance, while "games_started" only counts starts, so a
      swingman/rookie-callup's relief innings get misattributed as
-     extra innings-per-START. Confirmed with real data (Wilber Dotel,
-     2 starts but relief innings mixed in, computed to 18.67 "innings
-     per start" - impossible for any real start), which produced a
-     mean of 16.7 strikeouts and a probability rounding to 100%. Now
-     clamped to 3.0-7.5 innings (a range no genuine start falls outside
-     of) as a safety net, pending a real fix: fetching starts-only
-     innings needs a separate API call this basic season-stats
-     endpoint doesn't provide.
+     extra innings-per-START. Confirmed with real data TWICE: Wilber
+     Dotel (2 starts, relief innings mixed in, computed to an
+     impossible 18.67 "innings per start") and Drew Anderson (10
+     starts, computed to 10.2 - not physically impossible-looking the
+     way Dotel's was, but still unrealistic for a start). The first fix
+     clamped the raw value to 3.0-7.5 innings - but Anderson's case
+     showed that's itself still wrong: pinning an implausible estimate
+     to the boundary treats every such pitcher as a workhorse at the
+     edge of plausibility (his clamped-to-7.5 prediction was still
+     confirmed elevated). Now falls back to the neutral league-average
+     (5 innings) instead of the boundary whenever the raw estimate is
+     implausible (<3.0 or >7.5) - an honest "we can't trust this
+     number" default, not a best-case guess. A real starts-only innings
+     figure would fix this properly, pending a separate API call this
+     basic season-stats endpoint doesn't provide.
 
   2. Batters with under 30 real PA against this specific matchup
      context are treated as exactly league-average (shrunk rate = la_b13
@@ -251,26 +258,33 @@ def compute_pitcher_k_inputs(pitcher_id: int, game_pk: int, batting_team_side: s
 
             # "Med IP" stand-in: average innings per start from real
             # season outs, not a true median (see module docstring).
-            # Falls back to 5 innings, matching core.py's own blank-value
-            # fallback, if this pitcher hasn't started yet.
             #
-            # SAFETY CLAMP: "outs" is this pitcher's TOTAL season outs
-            # across EVERY appearance (starts AND relief), but
-            # "games_started" only counts starts - for a pitcher who's
-            # also worked in relief (a common swingman/rookie-callup
-            # pattern), dividing total outs by starts-only massively
-            # overstates innings-per-START. Confirmed with real data:
-            # Wilber Dotel (2 starts, but relief innings mixed into his
-            # season outs) computed to 18.67 "innings per start" -
-            # physically impossible (no starter throws 18+ innings in
-            # one game) - which fed a runaway mean (16.7 strikeouts) and
-            # a probability that rounded to 100%. Clamped to a range no
-            # genuine MLB start falls outside of, until a starts-only
-            # innings figure can be fetched (needs a separate API call
-            # this basic season-stats endpoint doesn't provide).
+            # SAFETY NET, REFINED WITH REAL EVIDENCE TWICE NOW: "outs" is
+            # this pitcher's TOTAL season outs across EVERY appearance
+            # (starts AND relief), but "games_started" only counts starts
+            # - for a pitcher who's also worked in relief (a common
+            # swingman/rookie-callup pattern), dividing total outs by
+            # starts-only overstates innings-per-START. First confirmed
+            # with Wilber Dotel (2 starts, computed to an impossible
+            # 18.67 "innings per start"). Originally fixed by clamping to
+            # 3.0-7.5 - but a SECOND real case, Drew Anderson (10 starts,
+            # raw calculation 10.2), showed that clamping to the boundary
+            # is itself still wrong: pinning to 7.5 treats every such
+            # pitcher as a workhorse at the edge of plausibility, when
+            # the honest situation is "we can't trust this pitcher's
+            # start-length estimate at all" (confirmed: Anderson's
+            # clamped-to-7.5 prediction was still elevated). Now falls
+            # back to the neutral league-average (5 innings) instead of
+            # the boundary value whenever the raw estimate is implausible
+            # - the same "don't trust a suspicious number, use the honest
+            # default" approach already used when a pitcher has zero
+            # starts. A real starts-only innings figure would fix this
+            # properly, but needs a separate API call this basic
+            # season-stats endpoint doesn't provide.
             if pitcher.games_started > 0:
                 med_ip = (pitcher.outs / 3) / pitcher.games_started
-                med_ip = max(3.0, min(med_ip, 7.5))
+                if med_ip < 3.0 or med_ip > 7.5:
+                    med_ip = 5.0
             else:
                 med_ip = 5
 
