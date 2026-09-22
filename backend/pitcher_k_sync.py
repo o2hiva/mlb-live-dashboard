@@ -165,7 +165,17 @@ def sync_pitcher_k_stat(pitcher_id: int, pitcher_name: str, force: bool = False)
 
 def get_pitcher_k_index(pitcher_id: int | None, la_b13: float | None = None) -> float | None:
     """This pitcher's own K rate (per batter faced) relative to league
-    average - shown regardless of sample size (purely informational)."""
+    average, SHRUNK the same way the actual mean calculation is -
+    verbatim DEFAULT_PITCHER_K_SHRINKAGE_K formula, not the raw rate.
+    Confirmed with real data (Brady Basso: raw rate showed 0.71, well
+    below league average, while his ACTUAL prediction used a shrunk
+    factor near 0.95 once his small sample - 178 batters faced - was
+    properly regressed toward the mean) that showing the raw rate here
+    made a real, correct prediction look contradictory: a below-average
+    displayed index next to a higher-than-a-better-pitcher's mean.
+    Shown regardless of sample size (purely informational either way -
+    the MIN_PITCHER_BATTERS_FACED gate still controls whether a
+    probability gets computed at all)."""
     if not pitcher_id:
         return None
     if la_b13 is None:
@@ -177,7 +187,9 @@ def get_pitcher_k_index(pitcher_id: int | None, la_b13: float | None = None) -> 
         pitcher = db.get(PitcherKStat, pitcher_id)
         if not pitcher or pitcher.batters_faced <= 0:
             return None
-        return (pitcher.strikeouts / pitcher.batters_faced) / la_b13
+        shrunk_rate = (pitcher.strikeouts + DEFAULT_PITCHER_K_SHRINKAGE_K * la_b13) / \
+            (pitcher.batters_faced + DEFAULT_PITCHER_K_SHRINKAGE_K)
+        return shrunk_rate / la_b13
     finally:
         db.close()
 
