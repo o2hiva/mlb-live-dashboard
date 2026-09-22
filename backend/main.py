@@ -704,6 +704,64 @@ def list_tracked_bets(db: Session = Depends(get_db)):
     return out
 
 
+@app.get("/api/debug/pitcher-hits-allowed-inputs/{pitcher_id}")
+def debug_pitcher_hits_allowed_inputs(pitcher_id: int, game_pk: int, batting_team_side: str, db: Session = Depends(get_db)):
+    """
+    Diagnostic: shows every raw value feeding into a Pitcher Hits
+    Allowed probability - the stored season stats, the hybrid league
+    baseline's CURRENT state (live-computed vs still the static
+    fallback, and its exact value), the opposing lineup factor, and the
+    final mean - so an implausible result can be traced to its actual
+    cause instead of guessed at. batting_team_side: the side this
+    pitcher FACES (e.g. "away" if he's the home starter).
+    """
+    from models_db import PitcherHitsStat, PitcherKStat
+    import pitcher_hits_allowed_sync
+    import hits_stats_sync
+
+    pitcher_hits = db.get(PitcherHitsStat, pitcher_id)
+    pitcher_k = db.get(PitcherKStat, pitcher_id)
+    if pitcher_hits is None or pitcher_k is None:
+        return {"error": f"Missing PitcherHitsStat or PitcherKStat row for pitcher_id {pitcher_id} - stats haven't fully synced for them yet"}
+
+    league_rate, league_avg_per_start = pitcher_hits_allowed_sync.get_hybrid_baselines(db)
+    qualifying_count = len([
+        1 for ph in db.query(PitcherHitsStat).all()
+        if (pk := db.get(PitcherKStat, ph.pitcher_id)) and pk.batters_faced >= pitcher_hits_allowed_sync.MIN_PITCHER_BATTERS_FACED and pk.games_started > 0
+    ])
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    lineup_hit_index, batters_with_data = pitcher_hits_allowed_sync._lineup_hit_factor(db, game_pk, batting_team_side, la_b9)
+
+    raw = {
+        "pitcher_id": pitcher_id,
+        "pitcher_name": pitcher_hits.pitcher_name,
+        "hits_allowed": pitcher_hits.hits_allowed,
+        "batters_faced": pitcher_k.batters_faced,
+        "games_started": pitcher_k.games_started,
+        "meets_min_batters_faced_50": pitcher_k.batters_faced >= pitcher_hits_allowed_sync.MIN_PITCHER_BATTERS_FACED,
+    }
+
+    baseline = {
+        "using_live_baseline": qualifying_count >= pitcher_hits_allowed_sync.MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE,
+        "qualifying_pitchers_in_pool": qualifying_count,
+        "min_needed_for_live": pitcher_hits_allowed_sync.MIN_QUALIFYING_PITCHERS_FOR_LIVE_BASELINE,
+        "static_fallback_rate": pitcher_hits_allowed_sync.LEAGUE_PITCHER_HIT_RATE_PER_BF,
+        "static_fallback_avg_per_start": pitcher_hits_allowed_sync.LEAGUE_AVG_HITS_ALLOWED_PER_START,
+        "actual_league_rate_used": league_rate,
+        "actual_league_avg_per_start_used": league_avg_per_start,
+    }
+
+    derived = {
+        "opposing_lineup_hit_index": lineup_hit_index,
+        "opposing_lineup_batters_with_data": batters_with_data,
+        "meets_min_lineup_batters_5": batters_with_data >= pitcher_hits_allowed_sync.MIN_LINEUP_BATTERS_WITH_DATA,
+    }
+
+    inputs = pitcher_hits_allowed_sync.compute_pitcher_hits_allowed_inputs(pitcher_id, game_pk, batting_team_side, la_b9=la_b9)
+
+    return {"raw_stats": raw, "hybrid_baseline": baseline, "derived_values": derived, "final_result": inputs}
+
+
 @app.get("/api/admin/grade-bets")
 def manual_grade_bets():
     """
