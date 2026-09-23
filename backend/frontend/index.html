@@ -1663,28 +1663,42 @@
     }
     container.innerHTML = `<div class="settings-hint">Loading every bet across ${confirmedGames.length} confirmed game(s)...</div>`;
 
-    // Fetch every game's every prop IN PARALLEL, not one at a time -
-    // 15 games x 5 props sequentially could mean 75 round-trips back
-    // to back, which is slow enough to look hung. Firing them all at
-    // once bounds the wait to the SLOWEST single request instead of
-    // the sum of all of them.
+    // Fetch every game's every prop with LIMITED concurrency, not fully
+    // sequential (75 round-trips back to back is slow enough to look
+    // hung) and not fully unbounded parallel either (firing all 75 at
+    // once overwhelms the backend's shared database connection pool -
+    // confirmed as the real cause of a worse problem: it was starving
+    // OTHER tabs' completely unrelated requests, like Bet Tracker's own
+    // settings/tracked-bets fetch, of a connection while this burst was
+    // in flight). A small fixed number of requests in flight at once
+    // gets most of the speedup without that side effect.
+    const CONCURRENCY = 6;
     const paths = { hits: "hits", hrr: "hrr", hr: "hr", k: "pitcher-k", pha: "pitcher-hits-allowed" };
     const data = {};
     for (const g of confirmedGames) data[g.game_pk] = {};
 
-    const fetchPromises = [];
+    const tasks = [];
     for (const g of confirmedGames) {
       const gamePk = g.game_pk;
       for (const [key, path] of Object.entries(paths)) {
-        fetchPromises.push(
-          fetch(`${API_BASE}/api/games/${gamePk}/${path}`)
-            .then(res => res.json())
-            .then(json => { data[gamePk][key] = json; })
-            .catch(() => { data[gamePk][key] = null; })
-        );
+        tasks.push({ gamePk, key, path });
       }
     }
-    await Promise.all(fetchPromises);
+
+    let nextIndex = 0;
+    async function worker() {
+      while (nextIndex < tasks.length) {
+        const { gamePk, key, path } = tasks[nextIndex++];
+        try {
+          const res = await fetch(`${API_BASE}/api/games/${gamePk}/${path}`);
+          data[gamePk][key] = await res.json();
+        } catch (e) {
+          data[gamePk][key] = null;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
+
     byBetsCache = { games: confirmedGames, data };
     renderByBetsTable();
   }
