@@ -57,13 +57,28 @@ log = logging.getLogger("nfl_passing_yards_sync")
 
 API_BASE = "https://api.nfldata.org/v1"
 
-# Verbatim from core_nfl.py.
+# Verbatim from core_nfl.py, EXCEPT the two minimums below - see
+# MIN_PRIOR_GAMES/MIN_OPPONENT_GAMES's own comments for why those were
+# lowered from the validated value.
 DEFAULT_SHRINKAGE_K = 5.0
-MIN_PRIOR_GAMES = 3
 MIN_GAME_ATTEMPTS = 10
-MIN_OPPONENT_GAMES = 3
 LIVE_MIN_SEASON_ATTEMPTS = 20
 DEFAULT_RESIDUAL_STD_DEV = 75.0
+
+# LOWERED FROM THE VALIDATED core_nfl.py VALUE (3), BY EXPLICIT REQUEST:
+# with an NFL team playing exactly one game per week, requiring 3 real
+# games is mathematically impossible before week 4 of the season - not
+# a sync bug, a hard wall. Lowered to 1 so predictions can start
+# showing from the season's first completed week onward, at the cost
+# of real added noise EARLY on - and asymmetrically so: the OPPONENT
+# side is shrinkage-protected (DEFAULT_SHRINKAGE_K blends a small
+# sample toward league average), but the QB's OWN side has NO
+# shrinkage in the validated formula (qb_avg is used raw) - a QB's
+# single-game average is exactly as noisy as that one game was. This
+# self-corrects as real weeks accumulate; there was no way to lower
+# the wall without accepting that early-week tradeoff somewhere.
+MIN_PRIOR_GAMES = 1
+MIN_OPPONENT_GAMES = 1
 
 CACHE_TTL = timedelta(hours=6)  # NFL games are weekly, not daily - no need to recompute the league average often
 _league_avg_cache = None
@@ -260,8 +275,8 @@ def compute_passing_yards_prediction(team: str, opponent: str, league_avg: float
     "qb_games_sample":, "opp_games_sample":, "starter_is_heuristic": True}
     for one team's real most-recent starter against their real current
     opponent. None if the starter or opponent doesn't have enough real
-    games yet (MIN_PRIOR_GAMES / MIN_OPPONENT_GAMES, verbatim from
-    core_nfl.py).
+    games yet (MIN_PRIOR_GAMES / MIN_OPPONENT_GAMES - lowered from the
+    validated value of 3, see their own comments for why).
 
     starter_is_heuristic is always True here - see module docstring's
     HONEST LIMITATION note. The frontend should let the person confirm
