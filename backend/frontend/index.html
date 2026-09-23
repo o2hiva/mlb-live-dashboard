@@ -107,6 +107,13 @@
   .bybets-sortable { cursor: pointer; user-select: none; }
   .bybets-sortable:hover { color: var(--text); }
   .bybets-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nfl-row {
+    display: grid; grid-template-columns: 140px 150px 150px 60px 46px 38px 38px 52px 58px 36px 66px 54px 46px;
+    gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;
+  }
+  .nfl-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nfl-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+  .nfl-row select, .nfl-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
   .bybets-row select, .bybets-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
   .bybets-row input[type="checkbox"] { width: auto; justify-self: center; }
   .weekly-row {
@@ -130,6 +137,24 @@
     <span id="tab-btn-live" class="tab-btn active" onclick="switchTab('live')">Live Games</span>
     <span id="tab-btn-bybets" class="tab-btn" onclick="switchTab('bybets')">By Bets</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+    <span id="tab-btn-nfl" class="tab-btn" onclick="switchTab('nfl')">NFL</span>
+  </div>
+
+  <div id="tab-content-nfl" style="display:none;">
+    <div class="sub">NFL Passing Yards - current week's real matchups, each team's most recent starter.</div>
+    <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+      <div>
+        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
+        <input id="nfl-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+      </div>
+      <div>
+        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+        <input id="nfl-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+      </div>
+      <span class="hits-toggle" onclick="refreshNflStats()" style="padding:6px 14px;">Refresh Stats</span>
+    </div>
+    <div id="nfl-refresh-status" class="settings-hint"></div>
+    <div id="nfl-content">Loading...</div>
   </div>
 
   <div id="tab-content-bybets" style="display:none;">
@@ -1581,14 +1606,18 @@
     document.getElementById("tab-content-live").style.display = tab === "live" ? "block" : "none";
     document.getElementById("tab-content-bybets").style.display = tab === "bybets" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
+    document.getElementById("tab-content-nfl").style.display = tab === "nfl" ? "block" : "none";
     document.getElementById("tab-btn-live").classList.toggle("active", tab === "live");
     document.getElementById("tab-btn-bybets").classList.toggle("active", tab === "bybets");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
+    document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
     if (tab === "bettracker") {
       loadBetTrackerSettings();
       loadTrackedBets();
     } else if (tab === "bybets") {
       loadByBetsTab();
+    } else if (tab === "nfl") {
+      loadNflTab();
     }
   }
 
@@ -2167,6 +2196,176 @@
       return;
     }
     container.innerHTML = byBetsHeaderHtml() + rows.map(r => r.html).join("");
+  }
+
+  // ---- NFL Passing Yards prop - first NFL prop in this dashboard.
+  // Normal distribution with a FIXED std dev (75.0 - core_nfl.py's own
+  // empirical, two-season-pooled residual spread), same pattern as
+  // Pitcher K's own Normal model but without a continuity correction
+  // (passing yards aren't a small discrete count the way strikeouts
+  // are - matches core_nfl.py's own prob_over_line, which treats the
+  // threshold as continuous). NOTE: bet grading for this prop isn't
+  // built yet - tracked NFL bets will show "Pending" indefinitely in
+  // the Bet Tracker tab until that's added as a follow-up. ----
+  const NFL_RESIDUAL_STD_DEV = 75.0;
+  const nflBetState = {};
+
+  function getNflBetState(team) {
+    if (!nflBetState[team]) {
+      nflBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 250 };
+    }
+    return nflBetState[team];
+  }
+
+  function probNflOverAtLeast(mean, line) {
+    if (mean == null) return null;
+    return Math.max(0, Math.min(1, 1 - normCdf(line, mean, NFL_RESIDUAL_STD_DEV)));
+  }
+
+  function updateNflThreshold(team, value) {
+    const state = getNflBetState(team);
+    state.threshold = Math.max(1, parseInt(value, 10) || 250);
+    renderNflFromCache();
+  }
+
+  function updateNflBetField(team, field, value) {
+    const state = getNflBetState(team);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflFromCache();
+  }
+
+  async function toggleNflTrack(team, checked, qbName, line, modelProb, marketPct, wager, profit) {
+    const state = getNflBetState(team);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: 0, bet_type: "nfl_passing_yards", batter_name: qbName,
+            team_side: team, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflFromCache();
+  }
+
+  let nflDataCache = null;
+
+  async function loadNflTab() {
+    const container = document.getElementById("nfl-content");
+    container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/nfl/games`);
+      nflDataCache = await res.json();
+      if (nflDataCache.season != null) document.getElementById("nfl-season-input").value = nflDataCache.season;
+      if (nflDataCache.week != null) document.getElementById("nfl-week-input").value = nflDataCache.week;
+      renderNflFromCache();
+    } catch (e) {
+      container.innerHTML = `<div class="settings-hint">Couldn't load NFL data.</div>`;
+    }
+  }
+
+  async function refreshNflStats() {
+    const season = document.getElementById("nfl-season-input").value;
+    const week = document.getElementById("nfl-week-input").value;
+    if (!season || !week) {
+      document.getElementById("nfl-refresh-status").textContent = "Enter both a season and a week first.";
+      return;
+    }
+    const statusEl = document.getElementById("nfl-refresh-status");
+    statusEl.textContent = `Refreshing NFL stats for ${season} week ${week} - this fetches real data and can take a little while...`;
+    try {
+      await fetch(`${API_BASE}/api/admin/refresh-nfl-stats?season=${season}&week=${week}`);
+      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
+      loadNflTab();
+    } catch (e) {
+      statusEl.textContent = "Refresh failed - check the season/week and try again.";
+    }
+  }
+
+  function renderNflFromCache() {
+    const container = document.getElementById("nfl-content");
+    if (!nflDataCache) return;
+    const games = nflDataCache.games || [];
+    if (!games.length) {
+      container.innerHTML = `<div class="settings-hint">No NFL data yet - enter a season/week above and click Refresh Stats.</div>`;
+      return;
+    }
+
+    const header = `
+      <div class="nfl-row nfl-row-header">
+        <span>Team</span><span>Opponent</span><span>QB (most recent starter)</span><span>Mean</span>
+        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
+        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+
+    const rows = games.map(g => {
+      if (g.predicted_mean == null) {
+        return `
+          <div class="nfl-row">
+            <span>${g.team}</span><span>${g.opponent}</span><span>${g.qb_name || "Not enough data"}</span>
+            <span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>`;
+      }
+      const state = getNflBetState(g.team);
+      const line = state.threshold;
+      const yesPct = probNflOverAtLeast(g.predicted_mean, line) * 100;
+      const noPct = 100 - yesPct;
+      const modelPct = state.yn === "yes" ? yesPct : noPct;
+      const modelProb = modelPct != null ? modelPct / 100 : null;
+      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+      const profit = profitIfWon(wager, state.market);
+      const marketVal = state.market != null ? state.market : "";
+      const wagerHtml = state.useKelly
+        ? `<span>$${wager.toFixed(2)}</span>`
+        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflBetField('${g.team}','manualWager',this.value)" />`;
+      const trackArgs = `'${g.team}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+      return `
+        <div class="nfl-row">
+          <span>${g.team}</span>
+          <span>${g.opponent}</span>
+          <span>${g.qb_name || "TBD"}</span>
+          <span>${g.predicted_mean.toFixed(1)}</span>
+          <input type="number" min="1" step="10" value="${line}" style="text-align:center;" onchange="updateNflThreshold('${g.team}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflBetField('${g.team}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflBetField('${g.team}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflBetField('${g.team}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTrack(${trackArgs})" />
+        </div>`;
+    }).join("");
+
+    container.innerHTML = header + rows;
   }
 </script>
 

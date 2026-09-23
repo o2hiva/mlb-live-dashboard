@@ -585,6 +585,57 @@ def game_lines(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/admin/refresh-nfl-stats")
+def manual_refresh_nfl_stats(season: int, week: int):
+    """
+    Manually triggers the NFL passing-yards sync for a given
+    season/current-week. No auto-detection of "the current NFL week"
+    exists (byes, Thursday/Monday games make that fragile to guess
+    reliably) - specify it explicitly, same safe pattern as every
+    other manual admin trigger in this dashboard. Rebuilds
+    NflQbStat/NflTeamAllowedStat from every completed week 1..week-1,
+    then refreshes NflGame with the given week's real matchups.
+    """
+    import nfl_passing_yards_sync
+    nfl_passing_yards_sync.refresh_nfl_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week}
+
+
+@app.get("/api/nfl/games")
+def nfl_games(db: Session = Depends(get_db)):
+    """
+    Every team's real current-week matchup and passing-yards
+    prediction for their most-recent starter, from whatever the last
+    /api/admin/refresh-nfl-stats call populated. starter_is_heuristic
+    is always true here (see nfl_passing_yards_sync.py's own honest
+    limitation note) - the person should confirm or override the
+    shown starter if they know about an injury or benching.
+    """
+    from models_db import NflGame
+    import nfl_passing_yards_sync
+
+    games = db.query(NflGame).all()
+    if not games:
+        return {"games": [], "season": None, "week": None}
+
+    league_avg = nfl_passing_yards_sync.get_league_avg_allowed(db)
+
+    rows = []
+    for g in games:
+        inputs = nfl_passing_yards_sync.compute_passing_yards_prediction(g.team, g.opponent, league_avg=league_avg)
+        rows.append({
+            "team": g.team,
+            "opponent": g.opponent,
+            "qb_name": inputs["qb_name"] if inputs else None,
+            "predicted_mean": inputs["predicted_mean"] if inputs else None,
+            "qb_games_sample": inputs["qb_games_sample"] if inputs else None,
+            "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+            "starter_is_heuristic": True,
+        })
+
+    return {"games": rows, "season": games[0].season, "week": games[0].week}
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """

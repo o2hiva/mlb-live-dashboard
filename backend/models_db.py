@@ -270,3 +270,59 @@ class PitcherHitsStat(Base):
     bb_allowed = Column(Integer, default=0)
     runs_allowed = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# NFL Passing Yards prop - first NFL prop in this dashboard, added
+# alongside the existing MLB props rather than as a separate app. Same
+# "running totals, not per-game logs" pattern as every MLB stat table
+# here - the validated formula (core_nfl.py's _log5_style_prediction)
+# only ever needs sum(yards) and count(games) for both the QB's own
+# side and the opposing team's allowed side, never individual games.
+# ---------------------------------------------------------------------------
+
+class NflQbStat(Base):
+    """One QB's real season-to-date passing yards total and game count
+    (only games with real attempts >= MIN_GAME_ATTEMPTS, matching
+    core_nfl.py's own gate) - qb_avg in the validated formula is just
+    total_yards/games, no shrinkage on this side (verbatim from
+    core_nfl.py: only the opponent-allowed side gets shrunk)."""
+    __tablename__ = "nfl_qb_stats"
+
+    gsis_id = Column(String, primary_key=True)
+    name = Column(String)
+    team = Column(String)  # most recent team on file - a QB can be traded/change teams
+    total_yards = Column(Integer, default=0)
+    games = Column(Integer, default=0)
+    last_game_week = Column(Integer, default=0)  # highest week seen - "most recent starter" tiebreak, verbatim from core_nfl.py's most_recent_starter logic
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflTeamAllowedStat(Base):
+    """One team's real season-to-date passing yards ALLOWED total and
+    game count - the opposing-team side of the validated formula, the
+    one that DOES get shrunk (DEFAULT_SHRINKAGE_K=5, verbatim from
+    core_nfl.py, validated across two real seasons: 2023 z=+0.05, 2022
+    z=-1.50, pooled z=-1.02)."""
+    __tablename__ = "nfl_team_allowed_stats"
+
+    team = Column(String, primary_key=True)
+    total_yards_allowed = Column(Integer, default=0)
+    games = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflGame(Base):
+    """This week's real matchups - team/opponent pairs for the CURRENT
+    week only (refreshed each sync, not accumulated like MLB's Game
+    table, since only the current week's live predictions matter for
+    betting - past weeks' matchups already got folded into
+    NflTeamAllowedStat's running totals and don't need to persist as
+    their own rows)."""
+    __tablename__ = "nfl_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
