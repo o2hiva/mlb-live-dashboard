@@ -863,6 +863,150 @@
     `;
   }
 
+  // ---- Game Lines prop: 3 rows per game (Away team, Home team,
+  // Combined total) - each team's own "at least N runs in the first 5
+  // innings" plus the combined O/U. Negative Binomial (see
+  // probRuns5InnAtLeast above). Unlike every other prop, this does NOT
+  // depend on lineup confirmation at all - only the two starting
+  // pitchers' and two teams' season data, so it's available as soon as
+  // probable pitchers are known. ----
+  const gameLinesDataCache = {};
+  const gameLinesBetState = {};
+
+  function getGameLinesBetState(gamePk, key) {
+    if (!gameLinesBetState[gamePk]) gameLinesBetState[gamePk] = {};
+    if (!gameLinesBetState[gamePk][key]) {
+      gameLinesBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: key === "combined" ? 5 : 3 };
+    }
+    return gameLinesBetState[gamePk][key];
+  }
+
+  function updateGameLinesThreshold(gamePk, key, value) {
+    const state = getGameLinesBetState(gamePk, key);
+    state.threshold = Math.max(1, parseInt(value, 10) || (key === "combined" ? 5 : 3));
+    rerenderGameLines(gamePk);
+  }
+
+  function updateGameLinesBetField(gamePk, key, field, value) {
+    const state = getGameLinesBetState(gamePk, key);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderGameLines(gamePk);
+  }
+
+  function rerenderGameLines(gamePk) {
+    if (activeLineupTab[gamePk] !== "gamelines") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && gameLinesDataCache[gamePk]) {
+      contentDiv.innerHTML = gameLinesSectionHtml(gamePk, gameLinesDataCache[gamePk]);
+    }
+  }
+
+  async function toggleGameLinesTrack(gamePk, key, checked, label, line, modelProb, marketPct, wager, profit) {
+    const state = getGameLinesBetState(gamePk, key);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "game_lines_" + key, batter_name: label,
+            team_side: key === "combined" ? null : key, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderGameLines(gamePk);
+  }
+
+  function gameLinesBetRowCellsHtml(gamePk, key, label, yesPct, noPct, line) {
+    const state = getGameLinesBetState(gamePk, key);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `gl-${gamePk}-${key}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateGameLinesBetField(${gamePk},'${key}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'${key}',this.checked,'${label.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updateGameLinesBetField(${gamePk},'${key}','yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateGameLinesBetField(${gamePk},'${key}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateGameLinesBetField(${gamePk},'${key}','useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleGameLinesTrack(${trackArgs})" />
+    `;
+  }
+
+  function gameLinesRowHtml(gamePk, key, label, mean) {
+    const state = getGameLinesBetState(gamePk, key);
+    const line = state.threshold;
+    const yesPct = mean != null ? probRuns5InnAtLeast(mean, line) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+    const meanStr = mean != null ? mean.toFixed(2) : "—";
+
+    return `
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
+        <span>${label}</span>
+        <span class="hits-index">${meanStr}</span>
+        <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateGameLinesThreshold(${gamePk},'${key}',this.value)" />
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${gameLinesBetRowCellsHtml(gamePk, key, label, yesPct, noPct, line)}
+      </div>
+    `;
+  }
+
+  function gameLinesSectionHtml(gamePk, data) {
+    const header = `
+      <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
+        <span>Team</span><span>Mean</span><span>O/U</span><span>Yes</span><span>No</span>
+        <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+
+    if (data.away_mean == null && data.home_mean == null && data.combined_mean == null) {
+      return header + `<div class="hits-side-label">Not enough real season data yet for both starting pitchers/teams.</div>`;
+    }
+
+    return `
+      ${header}
+      ${gameLinesRowHtml(gamePk, "away", `${data.away_team} (Away) - 5 Inn Runs`, data.away_mean)}
+      ${gameLinesRowHtml(gamePk, "home", `${data.home_team} (Home) - 5 Inn Runs`, data.home_mean)}
+      ${gameLinesRowHtml(gamePk, "combined", `Combined Total - 5 Inn Runs`, data.combined_mean)}
+    `;
+  }
+
   // ---- Pitcher Hits Allowed prop: same 2-rows-per-game structure as
   // Pitcher K, but Poisson-distributed (mean only, no sd/spread param).
   // See pitcher_hits_allowed_sync.py for the full formula. ----
@@ -1202,6 +1346,20 @@
     return nbinomSf(Math.ceil(line) - 1, r, p);
   }
 
+  // Game Lines: same Negative Binomial family as HRR, different fixed
+  // overdispersion (1.65 - verbatim core.py constant, validated for
+  // runs in the first 5 innings specifically, not the same value HRR
+  // uses). mean -> r/p conversion is the identical textbook formula
+  // already used for HRR/Pitcher K's own negative-binomial paths.
+  const RUNS5INN_OVERDISPERSION = 1.65;
+
+  function probRuns5InnAtLeast(mean, line) {
+    if (mean == null) return null;
+    const p = 1 / RUNS5INN_OVERDISPERSION;
+    const r = mean / (RUNS5INN_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
   function getHrrBetState(gamePk, side, batterId) {
     if (!hrrBetState[gamePk]) hrrBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
@@ -1362,6 +1520,7 @@
         <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
         <span class="lineup-tab ${tab === "pha" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'pha')">P-Hits</span>
+        <span class="lineup-tab ${tab === "gamelines" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'gamelines')">Game Lines</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
     `;
@@ -1373,6 +1532,7 @@
       hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
       k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
       pha: { cache: phaDataCache, render: phaSectionHtml, path: "pitcher-hits-allowed" },
+      gamelines: { cache: gameLinesDataCache, render: gameLinesSectionHtml, path: "game-lines" },
     };
     const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];
 

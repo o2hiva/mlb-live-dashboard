@@ -241,24 +241,14 @@ def manual_run_daily_updates():
 
 
 @app.get("/api/games/{game_pk}/hits")
-def game_hits(game_pk: int, db: Session = Depends(get_db)):
-    """
-    Confirmed batters (if any) for both sides of a game, each with
-    (n_ab, p, hit_index) - enough for the frontend to compute "at least
-    H hits" for any H instantly, client-side, without another request
-    per threshold change. Also includes each side's opposing starting
-    pitcher's own hit index (their hits-allowed rate vs. league
-    average). A side with no confirmed lineup yet returns an empty list
-    for that side - the frontend shows "Not Confirmed" rather than a
-    batter list in that case.
-    """
+def _build_hits_response(db, game):
+    """Shared by /api/games/{game_pk}/hits and the /api/bybets-data
+    aggregator - same logic, callable for one game at a time either way."""
     from models_db import LineupBatter
     import hits_stats_sync
     import platoon_stats_sync
 
-    game = db.get(Game, game_pk)
-    if game is None:
-        return {"error": "not found"}
+    game_pk = game.game_pk
 
     def batters_for_side(side: str, opposing_pitcher_id):
         rows = (
@@ -299,30 +289,35 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/games/{game_pk}/hrr")
-def game_hrr(game_pk: int, db: Session = Depends(get_db)):
+def game_hits(game_pk: int, db: Session = Depends(get_db)):
     """
-    Same shape as /api/games/{game_pk}/hits, but for the HRR (Hits+Runs+RBI)
-    market: each batter gets Negative Binomial parameters (r, p) instead
-    of (n_ab, p) - the frontend computes "P(HRR >= line)" for any line
-    instantly via a Negative Binomial survival function, the same
-    "compute once, adjust instantly client-side" pattern Hits uses.
+    Confirmed batters (if any) for both sides of a game, each with
+    (n_ab, p, hit_index) - enough for the frontend to compute "at least
+    H hits" for any H instantly, client-side, without another request
+    per threshold change. Also includes each side's opposing starting
+    pitcher's own hit index (their hits-allowed rate vs. league
+    average). A side with no confirmed lineup yet returns an empty list
+    for that side - the frontend shows "Not Confirmed" rather than a
+    batter list in that case.
     """
-    from models_db import LineupBatter
-    import hrr_stats_sync
-    import hits_stats_sync
-    import platoon_stats_sync
-
     game = db.get(Game, game_pk)
     if game is None:
         return {"error": "not found"}
+    return _build_hits_response(db, game)
 
-    # Computed ONCE per request, not once per batter - each of these can
-    # be a real MLB API round-trip on a cold cache (dozens of calls), so
-    # doing this per-batter instead (9-18 times) risks the whole request
-    # timing out. See hrr_stats_sync's docstrings for the same note.
-    la_b9 = hits_stats_sync.get_league_average_hit_rate()
-    hrr_rates = hrr_stats_sync.get_league_hrr_rates()
+
+@app.get("/api/games/{game_pk}/hrr")
+def _build_hrr_response(db, game, la_b9, hrr_rates):
+    """Shared by /api/games/{game_pk}/hrr and the /api/bybets-data
+    aggregator. la_b9/hrr_rates: caller's already-computed shared
+    values - the aggregator computes these ONCE for every game, not
+    once per game, avoiding the same redundant-recomputation class of
+    bug already fixed for Pitcher Hits Allowed's baseline."""
+    from models_db import LineupBatter
+    import hrr_stats_sync
+    import platoon_stats_sync
+
+    game_pk = game.game_pk
 
     def batters_for_side(side: str, opposing_pitcher_id):
         rows = (
@@ -364,26 +359,39 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/games/{game_pk}/hr")
-def game_hr(game_pk: int, db: Session = Depends(get_db)):
+def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     """
-    Same shape as /api/games/{game_pk}/hits, but for HR ("at least 1
-    home run" - always a fixed threshold, no adjustable line, matching
-    core.py's own hr_probability_for_row: Player model's HR formulas
-    never read an adjustable threshold cell the way Hits does).
+    Same shape as /api/games/{game_pk}/hits, but for the HRR (Hits+Runs+RBI)
+    market: each batter gets Negative Binomial parameters (r, p) instead
+    of (n_ab, p) - the frontend computes "P(HRR >= line)" for any line
+    instantly via a Negative Binomial survival function, the same
+    "compute once, adjust instantly client-side" pattern Hits uses.
     """
-    from models_db import LineupBatter
-    import hr_stats_sync
     import hrr_stats_sync
-    import platoon_stats_sync
+    import hits_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
         return {"error": "not found"}
 
-    # Computed ONCE per request, not once per batter - see hrr_stats_sync's
-    # docstrings for why (a cold cache is otherwise a real timeout risk).
-    la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
+    # Computed ONCE per request, not once per batter - each of these can
+    # be a real MLB API round-trip on a cold cache (dozens of calls), so
+    # doing this per-batter instead (9-18 times) risks the whole request
+    # timing out. See hrr_stats_sync's docstrings for the same note.
+    la_b9 = hits_stats_sync.get_league_average_hit_rate()
+    hrr_rates = hrr_stats_sync.get_league_hrr_rates()
+    return _build_hrr_response(db, game, la_b9, hrr_rates)
+
+
+@app.get("/api/games/{game_pk}/hr")
+def _build_hr_response(db, game, la_hr_rate):
+    """Shared by /api/games/{game_pk}/hr and the /api/bybets-data
+    aggregator. la_hr_rate: caller's already-computed shared value."""
+    from models_db import LineupBatter
+    import hr_stats_sync
+    import platoon_stats_sync
+
+    game_pk = game.game_pk
 
     def batters_for_side(side: str, opposing_pitcher_id):
         # Same "once per side, not once per batter" reasoning - all 9
@@ -428,24 +436,33 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/api/games/{game_pk}/pitcher-k")
-def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
+def game_hr(game_pk: int, db: Session = Depends(get_db)):
     """
-    Pitcher K prop - structurally different from Hits/HRR/HR: only 2
-    rows (the two starting pitchers), not one per batter, since a
-    strikeout total is a per-PITCHER stat. Each pitcher's probability
-    depends on the OPPOSING lineup being confirmed (the genuinely
-    lineup-specific batter blend - see pitcher_k_sync.py), not their
-    own team's.
+    Same shape as /api/games/{game_pk}/hits, but for HR ("at least 1
+    home run" - always a fixed threshold, no adjustable line, matching
+    core.py's own hr_probability_for_row: Player model's HR formulas
+    never read an adjustable threshold cell the way Hits does).
     """
-    import pitcher_k_sync
-    import platoon_stats_sync
+    import hrr_stats_sync
 
     game = db.get(Game, game_pk)
     if game is None:
         return {"error": "not found"}
 
-    la_b13 = pitcher_k_sync.get_league_k_rate()
+    # Computed ONCE per request, not once per batter - see hrr_stats_sync's
+    # docstrings for why (a cold cache is otherwise a real timeout risk).
+    la_hr_rate = hrr_stats_sync.get_league_hrr_rates()["hr_rate"]
+    return _build_hr_response(db, game, la_hr_rate)
+
+
+@app.get("/api/games/{game_pk}/pitcher-k")
+def _build_pitcher_k_response(db, game, la_b13):
+    """Shared by /api/games/{game_pk}/pitcher-k and the /api/bybets-data
+    aggregator. la_b13: caller's already-computed shared value."""
+    import pitcher_k_sync
+    import platoon_stats_sync
+
+    game_pk = game.game_pk
 
     def pitcher_row(pitcher_id, pitcher_name, batting_team_side):
         inputs = pitcher_k_sync.compute_pitcher_k_inputs(pitcher_id, game_pk, batting_team_side, la_b13=la_b13) \
@@ -468,6 +485,25 @@ def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
         "home_pitcher": pitcher_row(game.home_probable_pitcher_id, game.home_probable_pitcher, "away"),
         "away_pitcher": pitcher_row(game.away_probable_pitcher_id, game.away_probable_pitcher, "home"),
     }
+
+
+def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Pitcher K prop - structurally different from Hits/HRR/HR: only 2
+    rows (the two starting pitchers), not one per batter, since a
+    strikeout total is a per-PITCHER stat. Each pitcher's probability
+    depends on the OPPOSING lineup being confirmed (the genuinely
+    lineup-specific batter blend - see pitcher_k_sync.py), not their
+    own team's.
+    """
+    import pitcher_k_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    la_b13 = pitcher_k_sync.get_league_k_rate()
+    return _build_pitcher_k_response(db, game, la_b13)
 
 
 @app.get("/api/games/{game_pk}/pitcher-hits-allowed")
@@ -511,6 +547,41 @@ def game_pitcher_hits_allowed(game_pk: int, db: Session = Depends(get_db)):
         "away_lineup_confirmed": game.away_lineup_confirmed,
         "home_pitcher": pitcher_row(game.home_probable_pitcher_id, game.home_probable_pitcher, "away"),
         "away_pitcher": pitcher_row(game.away_probable_pitcher_id, game.away_probable_pitcher, "home"),
+    }
+
+
+@app.get("/api/games/{game_pk}/game-lines")
+def game_lines(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Game Lines prop - each team's own "at least N runs in the first 5
+    innings" probability, plus the combined-total O/U. Game-level (2
+    team rows + 1 combined row), not per-batter/pitcher. Needs no new
+    sync trigger for the CALLER - reuses PitcherHitsStat (already
+    synced at lineup confirmation) and TeamRuns5InnStat (populated by
+    the existing daily inning_stats_sync.py job). See
+    game_lines_sync.py for the full formula and its honest limitations
+    (the per-team split specifically is a disclosed extension of the
+    validated combined-total formula, not independently backtested).
+    """
+    import game_lines_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    league_avg_runs5inn = game_lines_sync.get_league_runs5inn_baseline(db)
+    inputs = game_lines_sync.compute_game_lines_inputs(
+        game.home_team, game.away_team, game.home_probable_pitcher_id, game.away_probable_pitcher_id,
+        league_avg_runs5inn=league_avg_runs5inn,
+    )
+
+    return {
+        "game_pk": game_pk,
+        "home_team": game.home_team,
+        "away_team": game.away_team,
+        "away_mean": inputs["away_mean"] if inputs else None,
+        "home_mean": inputs["home_mean"] if inputs else None,
+        "combined_mean": inputs["combined_mean"] if inputs else None,
     }
 
 

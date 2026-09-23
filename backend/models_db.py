@@ -60,6 +60,22 @@ class Prediction(Base):
     game = relationship("Game", back_populates="predictions")
 
 
+class TeamRuns5InnStat(Base):
+    """Real season-to-date RUNS SCORED (not just a scored/not-scored
+    boolean, unlike TeamInningStat) across innings 1-5 combined, for
+    one team. Kept in sync by the same daily inning_stats_sync.py job
+    that already iterates every final game - just summing the SAME
+    per-inning run data (mlb_client.get_inning_runs_from_raw_game) it
+    was already fetching, over innings 1-5 instead of just inning 1.
+    Feeds the Game Lines prop (each team's "at least 3 runs in the
+    first 5" probability, and the combined total O/U)."""
+    __tablename__ = "team_runs5inn_stats"
+
+    team_name = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    runs5inn = Column(Integer, default=0)
+
+
 class TeamInningStat(Base):
     """Real season-to-date per-inning scoring counts for one team, one
     inning. Kept in sync by inning_stats_sync.py - a live-dashboard port
