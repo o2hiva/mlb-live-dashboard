@@ -601,6 +601,60 @@ def manual_refresh_nfl_stats(season: int, week: int):
     return {"status": "refreshed", "season": season, "week": week}
 
 
+@app.get("/api/debug/nfl-raw")
+def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
+    """
+    Diagnostic: calls the raw NFL fetch functions directly (bypassing
+    refresh_nfl_stats' own try/except, which silently skips individual
+    failures) and shows exactly what api.nfldata.org actually returns -
+    or the real exception if a call fails outright - plus how many rows
+    are currently stored after the last sync. Needed because that
+    domain was never reachable from the sandbox this was built in, so
+    the real response shape could never be verified until now.
+    """
+    from models_db import NflQbStat, NflTeamAllowedStat, NflGame
+    import nfl_passing_yards_sync
+
+    result = {
+        "stored_row_counts": {
+            "NflQbStat": db.query(NflQbStat).count(),
+            "NflTeamAllowedStat": db.query(NflTeamAllowedStat).count(),
+            "NflGame": db.query(NflGame).count(),
+        },
+        "sample_qb_stat": None,
+        "sample_team_allowed_stat": None,
+    }
+    qb_sample = db.query(NflQbStat).first()
+    if qb_sample:
+        result["sample_qb_stat"] = {"gsis_id": qb_sample.gsis_id, "name": qb_sample.name, "team": qb_sample.team,
+                                     "total_yards": qb_sample.total_yards, "games": qb_sample.games}
+    team_sample = db.query(NflTeamAllowedStat).first()
+    if team_sample:
+        result["sample_team_allowed_stat"] = {"team": team_sample.team, "total_yards_allowed": team_sample.total_yards_allowed, "games": team_sample.games}
+
+    try:
+        qbs = nfl_passing_yards_sync.get_season_qbs(season)
+        result["get_season_qbs"] = {"count": len(qbs), "sample": qbs[:5]}
+    except Exception as e:
+        result["get_season_qbs"] = {"error": f"{type(e).__name__}: {e}"}
+
+    try:
+        matchups = nfl_passing_yards_sync.get_week_games(season, week)
+        result["get_week_games"] = {"count": len(matchups), "sample": dict(list(matchups.items())[:6])}
+    except Exception as e:
+        result["get_week_games"] = {"error": f"{type(e).__name__}: {e}"}
+
+    if isinstance(result.get("get_season_qbs"), dict) and result["get_season_qbs"].get("count", 0) > 0:
+        first_gsis_id = result["get_season_qbs"]["sample"][0][0]
+        try:
+            stats = nfl_passing_yards_sync.get_week_stats(first_gsis_id, season, 1)
+            result["get_week_stats_sample"] = stats
+        except Exception as e:
+            result["get_week_stats_sample"] = {"error": f"{type(e).__name__}: {e}"}
+
+    return result
+
+
 @app.get("/api/nfl/games")
 def nfl_games(db: Session = Depends(get_db)):
     """
