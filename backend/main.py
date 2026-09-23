@@ -652,6 +652,22 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
         except Exception as e:
             result["get_week_stats_sample"] = {"error": f"{type(e).__name__}: {e}"}
 
+        # get_week_stats applies filtering (empty data -> None,
+        # season_type != "REG" -> None) before returning - if the
+        # filtered result above came back null, this shows the RAW,
+        # UNFILTERED response so we can tell which filter (if any) is
+        # actually responsible, rather than guessing.
+        try:
+            import requests
+            raw_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/players/{first_gsis_id}/stats",
+                                     params={"season": season, "week": 1}, timeout=30)
+            result["raw_player_stats_response"] = {
+                "status_code": raw_resp.status_code,
+                "body": raw_resp.json() if raw_resp.headers.get("content-type", "").startswith("application/json") else raw_resp.text[:2000],
+            }
+        except Exception as e:
+            result["raw_player_stats_response"] = {"error": f"{type(e).__name__}: {e}"}
+
     return result
 
 
