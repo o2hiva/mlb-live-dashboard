@@ -240,7 +240,6 @@ def manual_run_daily_updates():
     return end_of_day.run_end_of_day_update()
 
 
-@app.get("/api/games/{game_pk}/hits")
 def _build_hits_response(db, game):
     """Shared by /api/games/{game_pk}/hits and the /api/bybets-data
     aggregator - same logic, callable for one game at a time either way."""
@@ -289,6 +288,7 @@ def _build_hits_response(db, game):
     }
 
 
+@app.get("/api/games/{game_pk}/hits")
 def game_hits(game_pk: int, db: Session = Depends(get_db)):
     """
     Confirmed batters (if any) for both sides of a game, each with
@@ -306,7 +306,6 @@ def game_hits(game_pk: int, db: Session = Depends(get_db)):
     return _build_hits_response(db, game)
 
 
-@app.get("/api/games/{game_pk}/hrr")
 def _build_hrr_response(db, game, la_b9, hrr_rates):
     """Shared by /api/games/{game_pk}/hrr and the /api/bybets-data
     aggregator. la_b9/hrr_rates: caller's already-computed shared
@@ -359,6 +358,7 @@ def _build_hrr_response(db, game, la_b9, hrr_rates):
     }
 
 
+@app.get("/api/games/{game_pk}/hrr")
 def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     """
     Same shape as /api/games/{game_pk}/hits, but for the HRR (Hits+Runs+RBI)
@@ -383,7 +383,6 @@ def game_hrr(game_pk: int, db: Session = Depends(get_db)):
     return _build_hrr_response(db, game, la_b9, hrr_rates)
 
 
-@app.get("/api/games/{game_pk}/hr")
 def _build_hr_response(db, game, la_hr_rate):
     """Shared by /api/games/{game_pk}/hr and the /api/bybets-data
     aggregator. la_hr_rate: caller's already-computed shared value."""
@@ -436,6 +435,7 @@ def _build_hr_response(db, game, la_hr_rate):
     }
 
 
+@app.get("/api/games/{game_pk}/hr")
 def game_hr(game_pk: int, db: Session = Depends(get_db)):
     """
     Same shape as /api/games/{game_pk}/hits, but for HR ("at least 1
@@ -455,7 +455,6 @@ def game_hr(game_pk: int, db: Session = Depends(get_db)):
     return _build_hr_response(db, game, la_hr_rate)
 
 
-@app.get("/api/games/{game_pk}/pitcher-k")
 def _build_pitcher_k_response(db, game, la_b13):
     """Shared by /api/games/{game_pk}/pitcher-k and the /api/bybets-data
     aggregator. la_b13: caller's already-computed shared value."""
@@ -487,6 +486,7 @@ def _build_pitcher_k_response(db, game, la_b13):
     }
 
 
+@app.get("/api/games/{game_pk}/pitcher-k")
 def game_pitcher_k(game_pk: int, db: Session = Depends(get_db)):
     """
     Pitcher K prop - structurally different from Hits/HRR/HR: only 2
