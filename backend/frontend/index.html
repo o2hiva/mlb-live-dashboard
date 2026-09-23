@@ -100,10 +100,12 @@
   .hit-rate-value { font-size: 1.3rem; font-weight: 600; margin-top: 4px; }
   .hit-rate-record { font-size: 0.7rem; color: var(--muted); }
   .bybets-row {
-    display: grid; grid-template-columns: 1fr 100px 60px 36px 40px 40px 52px 58px 36px 66px 52px 46px;
+    display: grid; grid-template-columns: 100px 1fr 60px 36px 40px 40px 52px 58px 36px 66px 52px 46px;
     gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;
   }
   .bybets-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
+  .bybets-sortable { cursor: pointer; user-select: none; }
+  .bybets-sortable:hover { color: var(--text); }
   .bybets-row select, .bybets-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
   .bybets-row input[type="checkbox"] { width: auto; justify-self: center; }
   .weekly-row {
@@ -1795,18 +1797,57 @@
   }
 
   // ---- "By Bets" tab: flattens every bettable row across every
-  // confirmed game and every prop type into one table, sorted by Yes
-  // probability. Reuses the SAME shared state objects and toggle/update
-  // functions each prop's own tab already uses (hitsBetState,
-  // hrrBetState, hrBetState, kBetState, phaBetState,
-  // firstInningBetState) - so Track/O-U/Market/Kelly changes made here
-  // stay perfectly synced with the Live Games tab, and vice versa. ----
-  const BYBETS_TABLE_HEADER = `
-    <div class="bybets-row bybets-row-header">
-      <span>Player</span><span>Bet Type</span><span>Index</span><span>O/U</span>
-      <span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
-      <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-    </div>`;
+  // confirmed game and every prop type into one table. Reuses the SAME
+  // shared state objects and toggle/update functions each prop's own
+  // tab already uses (hitsBetState, hrrBetState, hrBetState, kBetState,
+  // phaBetState, firstInningBetState) - so Track/O-U/Market/Kelly
+  // changes made here stay perfectly synced with the Live Games tab,
+  // and vice versa. ----
+  let byBetsSortColumn = "yes";
+  let byBetsSortDir = "desc";
+
+  function setByBetsSort(column) {
+    if (byBetsSortColumn === column) {
+      byBetsSortDir = byBetsSortDir === "asc" ? "desc" : "asc";
+    } else {
+      byBetsSortColumn = column;
+      byBetsSortDir = (column === "betType" || column === "player") ? "asc" : "desc";
+    }
+    renderByBetsTable();
+  }
+
+  function byBetsSortArrow(col) {
+    if (byBetsSortColumn !== col) return "";
+    return byBetsSortDir === "asc" ? " \u25B2" : " \u25BC";
+  }
+
+  function byBetsHeaderHtml() {
+    return `
+      <div class="bybets-row bybets-row-header">
+        <span class="bybets-sortable" onclick="setByBetsSort('betType')">Bet Type${byBetsSortArrow("betType")}</span>
+        <span class="bybets-sortable" onclick="setByBetsSort('player')">Player${byBetsSortArrow("player")}</span>
+        <span class="bybets-sortable" onclick="setByBetsSort('index')">Index${byBetsSortArrow("index")}</span>
+        <span>O/U</span>
+        <span class="bybets-sortable" onclick="setByBetsSort('yes')">Yes${byBetsSortArrow("yes")}</span>
+        <span class="bybets-sortable" onclick="setByBetsSort('no')">No${byBetsSortArrow("no")}</span>
+        <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+  }
+
+  function compareByBetsRows(a, b) {
+    const dir = byBetsSortDir === "asc" ? 1 : -1;
+    let primary = 0;
+    if (byBetsSortColumn === "betType") primary = a.betType.localeCompare(b.betType) * dir;
+    else if (byBetsSortColumn === "player") primary = a.player.localeCompare(b.player) * dir;
+    else if (byBetsSortColumn === "index") primary = ((a.indexVal ?? -Infinity) - (b.indexVal ?? -Infinity)) * dir;
+    else if (byBetsSortColumn === "yes") primary = ((a.yesPct ?? -Infinity) - (b.yesPct ?? -Infinity)) * dir;
+    else if (byBetsSortColumn === "no") primary = ((a.noPct ?? -Infinity) - (b.noPct ?? -Infinity)) * dir;
+    if (primary !== 0) return primary;
+    // Secondary tiebreaker - always highest Yes probability first, e.g.
+    // clicking "Bet Type" groups by type, then ranks each group by
+    // probability, matching the user's own stated example exactly.
+    return (b.yesPct ?? -Infinity) - (a.yesPct ?? -Infinity);
+  }
 
   let byBetsCache = null; // { games: [...], data: { [gamePk]: { hits, hrr, hr, k, pha } } }
 
@@ -1886,11 +1927,11 @@
     };
   }
 
-  function byBetsRowHtml(name, betType, indexStr, ouHtml, yesPct, cells) {
+  function byBetsRowHtml(betType, name, indexStr, ouHtml, yesPct, cells) {
     return `
       <div class="bybets-row">
-        <span>${name}</span>
         <span>${betType}</span>
+        <span>${name}</span>
         <span>${indexStr}</span>
         ${ouHtml}
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
@@ -1907,7 +1948,7 @@
   function renderByBetsTable() {
     const container = document.getElementById("bybets-content");
     if (!byBetsCache) return;
-    const rows = []; // { sortVal, html }
+    const rows = []; // { betType, player, indexVal, yesPct, noPct, html }
 
     for (const g of byBetsCache.games) {
       const gamePk = g.game_pk;
@@ -1931,7 +1972,10 @@
         // trackHtml above needs the REAL wager/profit, computed inside
         // byBetsGenericCells - rebuild the track onchange now that we have them.
         cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleFirstInningTrack(${gamePk},this.checked,${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
-        rows.push({ sortVal: yesPct, html: byBetsRowHtml("1st Inning", "YRFI/NRFI", "—", `<span>—</span>`, yesPct, cells) });
+        rows.push({
+          betType: "YRFI/NRFI", player: "1st Inning", indexVal: null, yesPct, noPct,
+          html: byBetsRowHtml("YRFI/NRFI", "1st Inning", "—", `<span>—</span>`, yesPct, cells),
+        });
       }
 
       // --- Hits ---
@@ -1958,7 +2002,11 @@
             const ouHtml = `<input type="number" min="1" step="1" value="${h}" style="text-align:center;" onchange="updateHitsThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
             const indexStr = b.hit_index != null ? b.hit_index.toFixed(2) : "—";
             if (yesPct != null) {
-              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "Hits", indexStr, ouHtml, yesPct, cells) });
+              const name = `${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`;
+              rows.push({
+                betType: "Hits", player: b.batter_name, indexVal: b.hit_index, yesPct, noPct,
+                html: byBetsRowHtml("Hits", name, indexStr, ouHtml, yesPct, cells),
+              });
             }
           }
         }
@@ -1987,7 +2035,11 @@
             const ouHtml = `<input type="number" min="0.5" step="0.5" value="${line}" style="text-align:center;" onchange="updateHrrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
             const indexStr = b.hrr_index != null ? b.hrr_index.toFixed(2) : "—";
             if (yesPct != null) {
-              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "HRR", indexStr, ouHtml, yesPct, cells) });
+              const name = `${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`;
+              rows.push({
+                betType: "HRR", player: b.batter_name, indexVal: b.hrr_index, yesPct, noPct,
+                html: byBetsRowHtml("HRR", name, indexStr, ouHtml, yesPct, cells),
+              });
             }
           }
         }
@@ -2016,7 +2068,11 @@
             const ouHtml = `<input type="number" min="1" step="1" value="${h}" style="text-align:center;" onchange="updateHrThreshold(${gamePk},'${side}',${b.batter_id},this.value)" />`;
             const indexStr = b.hr_index != null ? b.hr_index.toFixed(2) : "—";
             if (yesPct != null) {
-              rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`, "HR", indexStr, ouHtml, yesPct, cells) });
+              const name = `${b.batter_name}${b.bat_side ? " (" + b.bat_side + ")" : ""}`;
+              rows.push({
+                betType: "HR", player: b.batter_name, indexVal: b.hr_index, yesPct, noPct,
+                html: byBetsRowHtml("HR", name, indexStr, ouHtml, yesPct, cells),
+              });
             }
           }
         }
@@ -2046,7 +2102,11 @@
           const ouHtml = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateKThreshold(${gamePk},'${side}',this.value)" />`;
           const kiStr = pitcher.pitcher_k_index != null ? pitcher.pitcher_k_index.toFixed(2) : "—";
           const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
-          rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`, "K's", `${kiStr}/${oppStr}`, ouHtml, yesPct, cells) });
+          const name = `${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`;
+          rows.push({
+            betType: "K's", player: pitcher.pitcher_name || "TBD", indexVal: pitcher.pitcher_k_index, yesPct, noPct,
+            html: byBetsRowHtml("K's", name, `${kiStr}/${oppStr}`, ouHtml, yesPct, cells),
+          });
         }
       }
 
@@ -2074,18 +2134,22 @@
           const ouHtml = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updatePhaThreshold(${gamePk},'${side}',this.value)" />`;
           const piStr = pitcher.pitcher_hits_allowed_index != null ? pitcher.pitcher_hits_allowed_index.toFixed(2) : "—";
           const oppStr = pitcher.opposing_lineup_hit_index != null ? pitcher.opposing_lineup_hit_index.toFixed(2) : "—";
-          rows.push({ sortVal: yesPct, html: byBetsRowHtml(`${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`, "Hits Allowed", `${piStr}/${oppStr}`, ouHtml, yesPct, cells) });
+          const name = `${pitcher.pitcher_name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}`;
+          rows.push({
+            betType: "Hits Allowed", player: pitcher.pitcher_name || "TBD", indexVal: pitcher.pitcher_hits_allowed_index, yesPct, noPct,
+            html: byBetsRowHtml("Hits Allowed", name, `${piStr}/${oppStr}`, ouHtml, yesPct, cells),
+          });
         }
       }
     }
 
-    rows.sort((a, b) => (b.sortVal || 0) - (a.sortVal || 0));
+    rows.sort(compareByBetsRows);
 
     if (!rows.length) {
       container.innerHTML = `<div class="settings-hint">No gradeable bets yet - lineups may still be syncing stats.</div>`;
       return;
     }
-    container.innerHTML = BYBETS_TABLE_HEADER + rows.map(r => r.html).join("");
+    container.innerHTML = byBetsHeaderHtml() + rows.map(r => r.html).join("");
   }
 </script>
 
