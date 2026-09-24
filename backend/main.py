@@ -690,6 +690,24 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
         except Exception as e:
             result["same_player_season_totals"] = {"error": f"{type(e).__name__}: {e}"}
 
+        # Hypothesis: maybe /stats/season ITSELF returns per-week
+        # breakdowns when a week param is added, rather than there
+        # being a genuinely separate per-player weekly endpoint at all -
+        # a common pattern in sports-stats APIs. Testing this directly
+        # rather than guessing blindly at more URL variations.
+        try:
+            import requests
+            season_with_week_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
+                                                   params={"season": season, "week": 1, "limit": 50, "offset": 0}, timeout=30)
+            season_with_week_rows = season_with_week_resp.json().get("data", [])
+            week_match = next((r for r in season_with_week_rows if r.get("player_id") == first_gsis_id), None)
+            result["stats_season_with_week_param"] = {
+                "total_rows_returned": len(season_with_week_rows),
+                "this_player_row": week_match,
+            }
+        except Exception as e:
+            result["stats_season_with_week_param"] = {"error": f"{type(e).__name__}: {e}"}
+
     return result
 
 
