@@ -747,6 +747,22 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     except Exception as e:
         result["raw_completed_game_object"] = {"error": f"{type(e).__name__}: {e}"}
 
+    # New hypothesis: a per-GAME box score endpoint (accessed by the
+    # game's own id, e.g. "2026_01_DEN_KC" - a real id confirmed to
+    # exist from the completed game object above) rather than a per-
+    # PLAYER endpoint filtered by week. A different URL pattern than
+    # anything tried so far, worth one direct check.
+    if isinstance(result.get("raw_completed_game_object"), dict) and result["raw_completed_game_object"].get("game_id"):
+        game_id = result["raw_completed_game_object"]["game_id"]
+        for path in [f"/games/{game_id}/stats", f"/games/{game_id}/boxscore", f"/games/{game_id}"]:
+            try:
+                import requests
+                resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}{path}", timeout=30)
+                result[f"try{path.replace('/', '_')}"] = {"status_code": resp.status_code,
+                                                            "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
+            except Exception as e:
+                result[f"try{path.replace('/', '_')}"] = {"error": f"{type(e).__name__}: {e}"}
+
     return result
 
 
