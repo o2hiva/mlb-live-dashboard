@@ -329,14 +329,12 @@ class NflGame(Base):
 
 
 class NflQbSnapshot(Base):
-    """The LAST OBSERVED season-cumulative total for one QB - not a
-    running total itself (that's NflQbStat), purely the baseline used
-    to compute each new sync's DELTA. See nfl_passing_yards_sync.py's
-    module docstring: confirmed directly against the real API that
-    there is no working per-week/per-game breakdown endpoint, only a
-    continuously-updating season-cumulative one - so "this week's real
-    game" is computed as (today's cumulative total) minus (the last
-    stored snapshot), not fetched directly."""
+    """NO LONGER USED by nfl_passing_yards_sync.py, which now uses an
+    estimation approach (each faced opponent's own season average as a
+    proxy for a single game) instead of exact delta reconstruction -
+    see that module's docstring for why. Left defined here only so an
+    already-deployed Postgres table with this name doesn't orphan a
+    model reference; harmless if the underlying table still exists."""
     __tablename__ = "nfl_qb_snapshots"
 
     gsis_id = Column(String, primary_key=True)

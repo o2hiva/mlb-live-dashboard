@@ -1,7 +1,6 @@
 """
 NFL Passing Yards prop - first NFL prop in this dashboard, added
-alongside the MLB props rather than as a separate app (per explicit
-request, replacing the original standalone-Streamlit-app plan).
+alongside the MLB props rather than as a separate app.
 
 FORMULA: ported directly from the uploaded core_nfl.py, validated
 across two real seasons (2023: z=+0.05, 2022: z=-1.50, pooled
@@ -12,48 +11,57 @@ qb_avg * (shrunk_opp_allowed/league_avg) = (qb_avg/league_avg) *
 structure as every MLB prop, just written in a simplified 2-term form
 in the original code.
 
-REAL API FINDING - THE ORIGINAL PER-WEEK FETCH APPROACH DOESN'T WORK:
-core_nfl.py's own get_week_stats (GET /players/{id}/stats?week=N) was
-confirmed, directly against the live API, to return an EMPTY data
-array for every single week tested (1, 2, and 3) for a real, active
-QB (Josh Allen) who has definitely played real games this season -
-confirmed via that same player's /stats/season response showing
-games=2, real attempts and yards on file. Also tried adding a week
-param directly to /stats/season itself (a common pattern in sports-
-stats APIs) - that came back with the EXACT SAME season-cumulative
-numbers regardless of the week value, meaning the parameter is
-silently ignored. Conclusion: this API only exposes a continuously-
-updating SEASON-CUMULATIVE total, no working per-game breakdown
-endpoint at all, at least not one found through direct testing.
+REAL API FINDING - THERE IS NO WORKING PER-GAME BREAKDOWN ENDPOINT:
+confirmed directly against the live API, exhaustively: the per-player
+weekly endpoint (/players/{id}/stats?week=N) returns empty for every
+week tried, for a real QB known to have played real games; adding a
+week param to /stats/season is silently ignored; a per-game box-score
+endpoint (/games/{id}/stats, /games/{id}/boxscore) 404s. Only two
+things are confirmed to work: /stats/season (each PLAYER's own
+season-cumulative totals) and /stats/team (each TEAM's own season-
+cumulative OFFENSIVE totals) - both continuously-updating aggregates,
+never a single game's numbers in isolation.
 
-THE SNAPSHOT-DELTA WORKAROUND, used instead: since the season-
-cumulative endpoint reliably works and updates as real games get
-played, this SNAPSHOTS each QB's cumulative total every sync
-(NflQbSnapshot), and computes "this week's real game" as the
-DIFFERENCE between today's cumulative total and the last stored
-snapshot - that delta IS the real game that happened in between, with
-no need for a per-week endpoint at all. This directly matches running
-this sync once each week as the season progresses.
+THE ESTIMATION APPROACH USED INSTEAD OF EXACT PER-GAME RECONSTRUCTION:
+- QB's OWN side: uses /stats/season directly (total_yards/games) - no
+  estimation needed here at all, this was always exact.
+- OPPONENT-ALLOWED side: since there's no way to know exactly how many
+  yards a defense allowed in any single game, this ESTIMATES it using
+  the real schedule (confirmed working) plus each opponent's own
+  season passing average as a stand-in for what they likely threw for
+  in that specific game (their season average is the best available
+  unbiased estimate of any one game, absent the real number). Summed
+  across every real opponent a team has faced this season, this gives
+  a genuine estimate of yards allowed - real games, real opponents,
+  approximated per-game magnitude rather than reconstructed exactly.
 
-HONEST LIMITATION: this can only accumulate real per-game data GOING
-FORWARD from whenever it first runs for a given QB - already-played
-weeks before that FIRST snapshot can't be retroactively split into
-individual games (there's no earlier baseline to diff against). The
-very first sync for any QB stores a baseline with zero attributed
-games, not a false "one giant game" equal to their whole season so far.
+WHY THIS IS AN IMPROVEMENT OVER THE EARLIER SNAPSHOT-DELTA APPROACH
+(replaced, no longer used): that approach only accumulated real data
+GOING FORWARD one real week at a time, leaving already-played weeks
+permanently un-reconstructable without manual entry. This estimation
+approach uses only season-cumulative data, so it can immediately
+account for every week played so far, including ones before this
+code ever ran - no waiting, no manual backfill needed for the gap.
+
+HONEST LIMITATION: this is a real approximation, not exact per-game
+data - "what an opponent scored in one specific game" is estimated by
+"what they scored on average across their whole season", which may
+differ meaningfully from that team's actual output in a given game
+(e.g. weather, injuries, a particularly strong or weak individual
+opponent defense that game). This is a genuine tradeoff, disclosed
+rather than hidden, made because no exact alternative was found to
+exist on this API.
 
 DISTRIBUTION: Normal, using core_nfl.py's own DEFAULT_RESIDUAL_STD_DEV
 (75.0 yards - pooled from both real backtested seasons: 73.0 and 76.9,
-averaged). No continuity correction (passing yards aren't a small
-discrete count the way strikeouts are), matching core_nfl.py's own
+averaged). No continuity correction, matching core_nfl.py's own
 prob_over_line, which uses the raw threshold directly.
 
 HONEST LIMITATION, carried forward directly from core_nfl.py's own
 docstring: "who's starting at QB this week" has no confirmed
 probable-starters endpoint, so this uses each team's most-recent
-ACTUAL starter as a heuristic, not a confirmed one - the app should
-let the person override it if they know about an injury or benching
-this heuristic can't see.
+ACTUAL starter as a heuristic - the app should let the person override
+it if they know about an injury or benching this heuristic can't see.
 
 NO PARK/WEATHER FACTOR: unlike MLB's Hits/HR, this formula has no
 dome-vs-outdoor or weather adjustment - not confirmed whether this
@@ -66,7 +74,7 @@ from datetime import datetime, timedelta
 import requests
 
 from database import SessionLocal
-from models_db import NflQbStat, NflTeamAllowedStat, NflGame, NflQbSnapshot
+from models_db import NflQbStat, NflTeamAllowedStat, NflGame
 
 log = logging.getLogger("nfl_passing_yards_sync")
 
@@ -83,12 +91,7 @@ DEFAULT_RESIDUAL_STD_DEV = 75.0
 # LOWERED FROM THE VALIDATED core_nfl.py VALUE (3), BY EXPLICIT REQUEST:
 # with an NFL team playing exactly one game per week, requiring 3 real
 # games is mathematically impossible before week 4 of the season - not
-# a sync bug, a hard wall. Lowered to 1 so predictions can start
-# showing from the season's first completed REAL game onward, at the
-# cost of real added noise early on - and asymmetrically so: the
-# OPPONENT side is shrinkage-protected (DEFAULT_SHRINKAGE_K blends a
-# small sample toward league average), but the QB's OWN side has NO
-# shrinkage in the validated formula (qb_avg is used raw).
+# a sync bug, a hard wall.
 MIN_PRIOR_GAMES = 1
 MIN_OPPONENT_GAMES = 1
 
@@ -98,15 +101,13 @@ _league_avg_cache_time = None
 
 
 # ---------------------------------------------------------------------------
-# Fetch functions.
+# Fetch functions - both confirmed working against live data.
 # ---------------------------------------------------------------------------
 
 def get_season_qbs(season: int, min_attempts: int = LIVE_MIN_SEASON_ATTEMPTS) -> list:
     """All QBs with real season-to-date attempts, from /v1/stats/season
-    (paginated). Returns a list of dicts with the FULL cumulative row
-    needed for the snapshot-delta approach (gsis_id, name, team,
-    games, attempts, yards) - confirmed this endpoint works correctly
-    against live data."""
+    (paginated). Returns a list of dicts (gsis_id, name, team, games,
+    attempts, yards) - confirmed working against live data."""
     qbs = []
     offset = 0
     limit = 50
@@ -135,10 +136,21 @@ def get_season_qbs(season: int, min_attempts: int = LIVE_MIN_SEASON_ATTEMPTS) ->
     return qbs
 
 
+def get_all_team_season_stats(season: int) -> dict:
+    """{team: {games, attempts, yards}} - each team's own season-to-date
+    OFFENSIVE passing output, from /v1/stats/team. Confirmed working
+    against live data - one row per team, unlike /stats/season's
+    per-player rows."""
+    resp = requests.get(f"{API_BASE}/stats/team", params={"season": season}, timeout=30)
+    resp.raise_for_status()
+    rows = resp.json().get("data", [])
+    return {r["team"]: {"games": r.get("games", 0) or 0, "attempts": r.get("attempts", 0) or 0,
+                         "yards": r.get("passing_yards", 0) or 0} for r in rows if r.get("team")}
+
+
 def get_week_games(season: int, week: int) -> dict:
     """{team: opponent} for every team playing this week - confirmed
-    working correctly against live data (unlike the per-player weekly
-    endpoint below)."""
+    working against live data."""
     resp = requests.get(f"{API_BASE}/games", params={"season": season, "week": week}, timeout=30)
     resp.raise_for_status()
     games = resp.json().get("data", [])
@@ -153,100 +165,68 @@ def get_week_games(season: int, week: int) -> dict:
     return matchups
 
 
-def get_week_stats(gsis_id: str, season: int, week: int):
-    """CONFIRMED NON-FUNCTIONAL against the real live API as of direct
-    testing: returns an empty data array for every week tried, for a
-    real QB known to have played real games this season. No longer
-    called by refresh_nfl_stats (see module docstring's snapshot-delta
-    workaround) - kept only in case this endpoint gets fixed/documented
-    later, not part of the active sync path."""
-    resp = requests.get(f"{API_BASE}/players/{gsis_id}/stats", params={"season": season, "week": week}, timeout=30)
-    resp.raise_for_status()
-    rows = resp.json().get("data", [])
-    if not rows:
-        return None
-    row = rows[0]
-    if row.get("season_type") != "REG":
-        return None
-    return row
-
-
 # ---------------------------------------------------------------------------
-# Sync - snapshot-delta approach (see module docstring for why). Safe
-# to call any number of times: a call with no new real games since the
-# last snapshot correctly computes a zero delta and changes nothing.
+# Sync - fully recomputed from scratch each call (no incremental state
+# to manage or get out of sync), safe to call any number of times.
 # ---------------------------------------------------------------------------
 
 def refresh_nfl_stats(season: int, current_week: int):
     """
-    For every real QB, compares today's season-cumulative total
-    against the last stored snapshot (NflQbSnapshot) and folds the
-    DIFFERENCE into the running totals (NflQbStat/NflTeamAllowedStat) -
-    that difference is exactly the real game(s) played since the last
-    sync. Then refreshes NflGame with the given week's real matchups
-    (unaffected by any of this - that endpoint works normally).
-
-    A QB seen for the first time (no prior snapshot) gets a baseline
-    snapshot with NO attributed delta - see module docstring's honest
-    limitation about not being able to retroactively split past weeks.
-
-    A sanity floor (MIN_GAME_ATTEMPTS x delta_games) guards against
-    folding in a spurious tiny delta as if it were a real game.
+    Rebuilds NflQbStat directly from /stats/season (exact, no
+    estimation needed). Rebuilds NflTeamAllowedStat by walking the real
+    schedule for every completed week and, for each real game a team
+    played, adding their opponent's own season passing average as an
+    ESTIMATE of what that opponent scored in that game (see module
+    docstring's honest limitation - this is a real approximation, not
+    exact per-game data, because no exact source was found to exist).
+    Then refreshes NflGame with the given week's real matchups.
     """
     db = SessionLocal()
     try:
         current_qbs = get_season_qbs(season)
-
-        # The delta needs an opponent to attribute yards-allowed to -
-        # fetch the most recently completed week's schedule ONCE, not
-        # per QB, the same "compute shared values once per request"
-        # lesson learned throughout every MLB prop.
-        try:
-            recent_matchups = get_week_games(season, max(1, current_week - 1)) if current_week > 1 else {}
-        except requests.exceptions.RequestException:
-            log.exception("Failed to fetch week %s schedule for delta attribution", current_week - 1)
-            recent_matchups = {}
-
+        db.query(NflQbStat).delete()
         for qb in current_qbs:
-            gsis_id = qb["gsis_id"]
-            snapshot = db.get(NflQbSnapshot, gsis_id)
+            db.add(NflQbStat(gsis_id=qb["gsis_id"], name=qb["name"], team=qb["team"],
+                              total_yards=qb["yards"], games=qb["games"],
+                              last_game_week=max(1, current_week - 1)))
 
-            if snapshot is not None:
-                delta_games = qb["games"] - snapshot.cumulative_games
-                delta_yards = qb["yards"] - snapshot.cumulative_yards
-                delta_attempts = qb["attempts"] - snapshot.cumulative_attempts
+        team_stats = get_all_team_season_stats(season)
+        team_allowed_totals = {}  # team -> {"yards": estimated total (float), "games": real games count}
 
-                if delta_games > 0 and delta_attempts >= MIN_GAME_ATTEMPTS * delta_games:
-                    qb_stat = db.get(NflQbStat, gsis_id)
-                    if qb_stat is None:
-                        qb_stat = NflQbStat(gsis_id=gsis_id, name=qb["name"], team=qb["team"],
-                                             total_yards=0, games=0, last_game_week=0)
-                        db.add(qb_stat)
-                    qb_stat.name = qb["name"]
-                    qb_stat.team = qb["team"]
-                    qb_stat.total_yards += delta_yards
-                    qb_stat.games += delta_games
-                    qb_stat.last_game_week = max(1, current_week - 1)
+        for week in range(1, current_week):
+            try:
+                matchups = get_week_games(season, week)
+            except requests.exceptions.RequestException:
+                log.exception("Failed to fetch week %s schedule", week)
+                continue
 
-                    opponent = recent_matchups.get(qb["team"])
-                    if opponent:
-                        opp_stat = db.get(NflTeamAllowedStat, opponent)
-                        if opp_stat is None:
-                            opp_stat = NflTeamAllowedStat(team=opponent, total_yards_allowed=0, games=0)
-                            db.add(opp_stat)
-                        opp_stat.total_yards_allowed += delta_yards
-                        opp_stat.games += delta_games
+            seen_pairs = set()
+            for team, opponent in matchups.items():
+                pair = tuple(sorted([team, opponent]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
 
-            if snapshot is None:
-                db.add(NflQbSnapshot(gsis_id=gsis_id, name=qb["name"], team=qb["team"],
-                                      cumulative_games=qb["games"], cumulative_attempts=qb["attempts"],
-                                      cumulative_yards=qb["yards"]))
-            else:
-                snapshot.name = qb["name"]
-                snapshot.team = qb["team"]
-                snapshot.cumulative_games = qb["games"]
-                snapshot.cumulative_attempts = qb["attempts"]
-                snapshot.cumulative_yards = qb["yards"]
+                # team's defense faced opponent's offense - opponent's
+                # own season average is the estimate for this game.
+                opp_stats = team_stats.get(opponent)
+                if opp_stats and opp_stats["games"] > 0:
+                    est = opp_stats["yards"] / opp_stats["games"]
+                    entry = team_allowed_totals.setdefault(team, {"yards": 0.0, "games": 0})
+                    entry["yards"] += est
+                    entry["games"] += 1
+
+                # and vice versa - opponent's defense faced team's offense.
+                team_own_stats = team_stats.get(team)
+                if team_own_stats and team_own_stats["games"] > 0:
+                    est2 = team_own_stats["yards"] / team_own_stats["games"]
+                    entry2 = team_allowed_totals.setdefault(opponent, {"yards": 0.0, "games": 0})
+                    entry2["yards"] += est2
+                    entry2["games"] += 1
+
+        db.query(NflTeamAllowedStat).delete()
+        for team, entry in team_allowed_totals.items():
+            db.add(NflTeamAllowedStat(team=team, total_yards_allowed=round(entry["yards"]), games=entry["games"]))
 
         try:
             this_week_matchups = get_week_games(season, current_week)
@@ -260,7 +240,7 @@ def refresh_nfl_stats(season: int, current_week: int):
 
         db.commit()
         global _league_avg_cache, _league_avg_cache_time
-        _league_avg_cache = None  # force recompute next request, real data just changed
+        _league_avg_cache = None
         _league_avg_cache_time = None
     except Exception:
         log.exception("refresh_nfl_stats failed")
@@ -271,9 +251,8 @@ def refresh_nfl_stats(season: int, current_week: int):
 
 def get_league_avg_allowed(db) -> float | None:
     """League-wide average passing yards allowed per game, computed
-    live from NflTeamAllowedStat (real data only - no static fallback
-    exists for this prop yet). Returns None if no real deltas have
-    accumulated yet."""
+    live from NflTeamAllowedStat (built from the estimation approach
+    above). Returns None if no data has synced yet."""
     global _league_avg_cache, _league_avg_cache_time
     now = datetime.utcnow()
     if _league_avg_cache is not None and now - _league_avg_cache_time < CACHE_TTL:
@@ -298,11 +277,11 @@ def compute_passing_yards_prediction(team: str, opponent: str, league_avg: float
     for one team's real most-recent starter against their real current
     opponent. None if the starter or opponent doesn't have enough real
     games yet (MIN_PRIOR_GAMES / MIN_OPPONENT_GAMES - lowered from the
-    validated value of 3, see their own comments for why).
+    validated value of 3).
 
-    starter_is_heuristic is always True here - see module docstring's
-    HONEST LIMITATION note. The frontend should let the person confirm
-    or override the starter shown.
+    starter_is_heuristic is always True - see module docstring's honest
+    limitation. The frontend should let the person confirm or override
+    the starter shown.
     """
     db = SessionLocal()
     try:

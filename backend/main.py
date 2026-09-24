@@ -684,15 +684,15 @@ def nfl_manual_backfill(payload: NflManualBackfillRequest, db: Session = Depends
 @app.get("/api/debug/nfl-raw")
 def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     """
-    Diagnostic for the snapshot-delta sync (see nfl_passing_yards_sync.py's
-    module docstring for why this approach exists - the original
-    per-week fetch was confirmed, directly against live data, to
-    return nothing at all). Shows current row counts, sample stored
-    data, and a live call to the two CONFIRMED-WORKING fetch functions
-    (get_season_qbs, get_week_games) so any future issue can be traced
-    the same way this one was: against real responses, not guesses.
+    Diagnostic for the estimation-based sync (see
+    nfl_passing_yards_sync.py's module docstring for the full story:
+    no working per-game breakdown endpoint exists on this API, so the
+    opponent-allowed side is estimated from each real opponent's own
+    season average rather than reconstructed exactly). Shows current
+    row counts, sample stored data, and live calls to the three
+    confirmed-working fetch functions.
     """
-    from models_db import NflQbStat, NflTeamAllowedStat, NflGame, NflQbSnapshot
+    from models_db import NflQbStat, NflTeamAllowedStat, NflGame
     import nfl_passing_yards_sync
 
     result = {
@@ -700,11 +700,9 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
             "NflQbStat": db.query(NflQbStat).count(),
             "NflTeamAllowedStat": db.query(NflTeamAllowedStat).count(),
             "NflGame": db.query(NflGame).count(),
-            "NflQbSnapshot": db.query(NflQbSnapshot).count(),
         },
         "sample_qb_stat": None,
         "sample_team_allowed_stat": None,
-        "sample_snapshot": None,
     }
     qb_sample = db.query(NflQbStat).first()
     if qb_sample:
@@ -713,10 +711,6 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     team_sample = db.query(NflTeamAllowedStat).first()
     if team_sample:
         result["sample_team_allowed_stat"] = {"team": team_sample.team, "total_yards_allowed": team_sample.total_yards_allowed, "games": team_sample.games}
-    snapshot_sample = db.query(NflQbSnapshot).first()
-    if snapshot_sample:
-        result["sample_snapshot"] = {"gsis_id": snapshot_sample.gsis_id, "name": snapshot_sample.name,
-                                      "cumulative_games": snapshot_sample.cumulative_games, "cumulative_yards": snapshot_sample.cumulative_yards}
 
     try:
         qbs = nfl_passing_yards_sync.get_season_qbs(season)
@@ -725,68 +719,16 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
         result["get_season_qbs"] = {"error": f"{type(e).__name__}: {e}"}
 
     try:
+        team_stats = nfl_passing_yards_sync.get_all_team_season_stats(season)
+        result["get_all_team_season_stats"] = {"count": len(team_stats), "sample": dict(list(team_stats.items())[:5])}
+    except Exception as e:
+        result["get_all_team_season_stats"] = {"error": f"{type(e).__name__}: {e}"}
+
+    try:
         matchups = nfl_passing_yards_sync.get_week_games(season, week)
         result["get_week_games"] = {"count": len(matchups), "sample": dict(list(matchups.items())[:6])}
     except Exception as e:
         result["get_week_games"] = {"error": f"{type(e).__name__}: {e}"}
-
-    # Checking whether the /games endpoint itself has more embedded in
-    # each raw game object than the team names get_week_games extracts -
-    # some APIs bundle box-score/player-stat data directly on the game
-    # record rather than exposing a separate per-player weekly endpoint.
-    # Checked against WEEK 1 specifically (not the passed-in week),
-    # since an upcoming/future game has null scores and a null
-    # boxscore_url by definition - only an already-completed game can
-    # tell us whether that field is ever populated.
-    try:
-        import requests
-        raw_games_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/games",
-                                       params={"season": season, "week": 1}, timeout=30)
-        raw_games = raw_games_resp.json().get("data", [])
-        result["raw_completed_game_object"] = raw_games[0] if raw_games else None
-    except Exception as e:
-        result["raw_completed_game_object"] = {"error": f"{type(e).__name__}: {e}"}
-
-    # New hypothesis: a per-GAME box score endpoint (accessed by the
-    # game's own id, e.g. "2026_01_DEN_KC" - a real id confirmed to
-    # exist from the completed game object above) rather than a per-
-    # PLAYER endpoint filtered by week. A different URL pattern than
-    # anything tried so far, worth one direct check.
-    if isinstance(result.get("raw_completed_game_object"), dict) and result["raw_completed_game_object"].get("game_id"):
-        game_id = result["raw_completed_game_object"]["game_id"]
-        for path in [f"/games/{game_id}/stats", f"/games/{game_id}/boxscore", f"/games/{game_id}"]:
-            try:
-                import requests
-                resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}{path}", timeout=30)
-                result[f"try{path.replace('/', '_')}"] = {"status_code": resp.status_code,
-                                                            "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
-            except Exception as e:
-                result[f"try{path.replace('/', '_')}"] = {"error": f"{type(e).__name__}: {e}"}
-
-    # New question: does /stats/season have TEAM-LEVEL defensive rows
-    # (passing yards allowed) directly, rather than only individual
-    # offensive players? If so, the opponent side of the formula could
-    # use simple season-total/games averaging too, the same way the
-    # QB's own side already does - no per-game reconstruction needed
-    # for the opponent side at all.
-    try:
-        import requests
-        all_positions_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
-                                           params={"season": season, "limit": 50, "offset": 0}, timeout=30)
-        all_rows = all_positions_resp.json().get("data", [])
-        distinct_positions = sorted(set(r.get("position") for r in all_rows if r.get("position")))
-        result["distinct_positions_in_stats_season"] = distinct_positions
-    except Exception as e:
-        result["distinct_positions_in_stats_season"] = {"error": f"{type(e).__name__}: {e}"}
-
-    for path in ["/stats/team", "/teams/KC/stats", "/stats/defense"]:
-        try:
-            import requests
-            resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}{path}", params={"season": season}, timeout=30)
-            result[f"try{path.replace('/', '_')}"] = {"status_code": resp.status_code,
-                                                        "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
-        except Exception as e:
-            result[f"try{path.replace('/', '_')}"] = {"error": f"{type(e).__name__}: {e}"}
 
     return result
 
