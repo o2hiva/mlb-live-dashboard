@@ -197,7 +197,7 @@ class TrackedBet(Base):
     __tablename__ = "tracked_bets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    game_pk = Column(Integer, ForeignKey("games.game_pk"), index=True)
+    game_pk = Column(Integer, ForeignKey("games.game_pk"), index=True, nullable=True)  # nullable for non-MLB bets (e.g. NFL), which have no MLB game to reference
     bet_type = Column(String, default="hits")  # "hits" or "first_inning_run"
     batter_id = Column(Integer, nullable=True)
     batter_name = Column(String)  # batter's name for "hits" bets, a display label (e.g. "1st Inning Run") otherwise

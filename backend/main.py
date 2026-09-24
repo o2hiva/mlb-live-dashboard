@@ -880,8 +880,8 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
 
 
 class TrackedBetCreate(BaseModel):
-    game_pk: int
-    bet_type: str = "hits"  # "hits", "first_inning_run", or "hrr"
+    game_pk: int | None = None  # null for non-MLB bets (e.g. NFL), which have no MLB game to reference
+    bet_type: str = "hits"  # "hits", "first_inning_run", "hrr", etc.
     batter_id: int | None = None
     batter_name: str
     team_side: str | None = None
