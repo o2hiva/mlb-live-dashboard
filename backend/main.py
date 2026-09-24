@@ -646,11 +646,17 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
 
     if isinstance(result.get("get_season_qbs"), dict) and result["get_season_qbs"].get("count", 0) > 0:
         first_gsis_id = result["get_season_qbs"]["sample"][0][0]
-        try:
-            stats = nfl_passing_yards_sync.get_week_stats(first_gsis_id, season, 1)
-            result["get_week_stats_sample"] = stats
-        except Exception as e:
-            result["get_week_stats_sample"] = {"error": f"{type(e).__name__}: {e}"}
+
+        # Check every completed week, not just week 1 - tells us whether
+        # the per-week endpoint is empty across the board (a real data-
+        # availability gap) or only for specific weeks.
+        result["get_week_stats_by_week"] = {}
+        for wk in range(1, week + 1):
+            try:
+                stats = nfl_passing_yards_sync.get_week_stats(first_gsis_id, season, wk)
+                result["get_week_stats_by_week"][wk] = stats
+            except Exception as e:
+                result["get_week_stats_by_week"][wk] = {"error": f"{type(e).__name__}: {e}"}
 
         # get_week_stats applies filtering (empty data -> None,
         # season_type != "REG" -> None) before returning - if the
@@ -667,6 +673,22 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
             }
         except Exception as e:
             result["raw_player_stats_response"] = {"error": f"{type(e).__name__}: {e}"}
+
+        # Also check the same player's overall SEASON stats (already
+        # known to be non-empty, since get_season_qbs filtered on real
+        # attempts) - confirms the season-level data genuinely has real
+        # attempts/yards on file, isolating the problem specifically to
+        # the per-week breakdown endpoint rather than this player having
+        # no real data at all this season.
+        try:
+            import requests
+            season_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
+                                        params={"season": season, "limit": 50, "offset": 0}, timeout=30)
+            season_rows = season_resp.json().get("data", [])
+            match = next((r for r in season_rows if r.get("player_id") == first_gsis_id), None)
+            result["same_player_season_totals"] = match
+        except Exception as e:
+            result["same_player_season_totals"] = {"error": f"{type(e).__name__}: {e}"}
 
     return result
 
