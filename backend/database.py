@@ -18,6 +18,18 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./mlb_dashboard.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# Force the psycopg2 driver explicitly -- that's the only Postgres driver
+# installed via requirements.txt (psycopg2-binary). Some hosts (e.g. Railway)
+# hand back DATABASE_URL as "postgresql+psycopg://..." (naming psycopg v3,
+# which isn't installed) or as a bare "postgresql://..." which newer
+# SQLAlchemy/host combos can also resolve to psycopg v3. Rewriting the prefix
+# here pins it to the driver that's actually available, so deploys don't
+# crash with "ModuleNotFoundError: No module named 'psycopg'".
+if DATABASE_URL.startswith("postgresql+psycopg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
