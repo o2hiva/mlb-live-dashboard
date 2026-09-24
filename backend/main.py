@@ -763,6 +763,31 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
             except Exception as e:
                 result[f"try{path.replace('/', '_')}"] = {"error": f"{type(e).__name__}: {e}"}
 
+    # New question: does /stats/season have TEAM-LEVEL defensive rows
+    # (passing yards allowed) directly, rather than only individual
+    # offensive players? If so, the opponent side of the formula could
+    # use simple season-total/games averaging too, the same way the
+    # QB's own side already does - no per-game reconstruction needed
+    # for the opponent side at all.
+    try:
+        import requests
+        all_positions_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
+                                           params={"season": season, "limit": 50, "offset": 0}, timeout=30)
+        all_rows = all_positions_resp.json().get("data", [])
+        distinct_positions = sorted(set(r.get("position") for r in all_rows if r.get("position")))
+        result["distinct_positions_in_stats_season"] = distinct_positions
+    except Exception as e:
+        result["distinct_positions_in_stats_season"] = {"error": f"{type(e).__name__}: {e}"}
+
+    for path in ["/stats/team", "/teams/KC/stats", "/stats/defense"]:
+        try:
+            import requests
+            resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}{path}", params={"season": season}, timeout=30)
+            result[f"try{path.replace('/', '_')}"] = {"status_code": resp.status_code,
+                                                        "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
+        except Exception as e:
+            result[f"try{path.replace('/', '_')}"] = {"error": f"{type(e).__name__}: {e}"}
+
     return result
 
 
