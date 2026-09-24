@@ -734,14 +734,18 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     # each raw game object than the team names get_week_games extracts -
     # some APIs bundle box-score/player-stat data directly on the game
     # record rather than exposing a separate per-player weekly endpoint.
+    # Checked against WEEK 1 specifically (not the passed-in week),
+    # since an upcoming/future game has null scores and a null
+    # boxscore_url by definition - only an already-completed game can
+    # tell us whether that field is ever populated.
     try:
         import requests
         raw_games_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/games",
-                                       params={"season": season, "week": week}, timeout=30)
+                                       params={"season": season, "week": 1}, timeout=30)
         raw_games = raw_games_resp.json().get("data", [])
-        result["raw_single_game_object"] = raw_games[0] if raw_games else None
+        result["raw_completed_game_object"] = raw_games[0] if raw_games else None
     except Exception as e:
-        result["raw_single_game_object"] = {"error": f"{type(e).__name__}: {e}"}
+        result["raw_completed_game_object"] = {"error": f"{type(e).__name__}: {e}"}
 
     return result
 
