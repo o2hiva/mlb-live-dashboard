@@ -592,13 +592,93 @@ def manual_refresh_nfl_stats(season: int, week: int):
     season/current-week. No auto-detection of "the current NFL week"
     exists (byes, Thursday/Monday games make that fragile to guess
     reliably) - specify it explicitly, same safe pattern as every
-    other manual admin trigger in this dashboard. Rebuilds
-    NflQbStat/NflTeamAllowedStat from every completed week 1..week-1,
+    other manual admin trigger in this dashboard. Compares every QB's
+    current season-cumulative total against their last stored snapshot
+    and folds the difference into NflQbStat/NflTeamAllowedStat (see
+    nfl_passing_yards_sync.py's module docstring for why - the
+    original per-week fetch approach doesn't work against this API),
     then refreshes NflGame with the given week's real matchups.
     """
     import nfl_passing_yards_sync
     nfl_passing_yards_sync.refresh_nfl_stats(season, week)
     return {"status": "refreshed", "season": season, "week": week}
+
+
+class NflManualStatEntry(BaseModel):
+    gsis_id: str
+    name: str
+    team: str
+    week: int
+    attempts: int
+    yards: int
+
+
+class NflManualBackfillRequest(BaseModel):
+    season: int
+    entries: list[NflManualStatEntry]
+
+
+@app.post("/api/admin/nfl-manual-backfill")
+def nfl_manual_backfill(payload: NflManualBackfillRequest, db: Session = Depends(get_db)):
+    """
+    One-time manual backfill for weeks the automated snapshot-delta
+    sync can never retroactively reconstruct (see
+    nfl_passing_yards_sync.py's module docstring's honest limitation -
+    there's no earlier baseline to diff against for weeks before the
+    first real snapshot). Lets the person supply real per-game stats
+    for those already-played weeks directly (easily looked up from any
+    public NFL stats source), folded into the SAME running totals the
+    automated sync uses - this only touches NflQbStat/
+    NflTeamAllowedStat, never NflQbSnapshot, so it doesn't interfere
+    with the ongoing automated delta computation going forward.
+
+    NOT IDEMPOTENT, unlike the automated sync - submitting the same
+    entry twice will double-count it. This is a deliberate one-time
+    admin action, not something meant to be re-run repeatedly.
+    """
+    from models_db import NflQbStat, NflTeamAllowedStat
+    import nfl_passing_yards_sync
+
+    schedule_cache = {}
+    results = []
+
+    for entry in payload.entries:
+        if entry.week not in schedule_cache:
+            try:
+                schedule_cache[entry.week] = nfl_passing_yards_sync.get_week_games(payload.season, entry.week)
+            except Exception as e:
+                results.append({"gsis_id": entry.gsis_id, "week": entry.week, "status": "failed", "reason": f"couldn't fetch week {entry.week} schedule: {e}"})
+                continue
+
+        opponent = schedule_cache[entry.week].get(entry.team)
+        if opponent is None:
+            results.append({"gsis_id": entry.gsis_id, "week": entry.week, "status": "failed", "reason": f"no opponent found for {entry.team} in week {entry.week}"})
+            continue
+
+        qb_stat = db.get(NflQbStat, entry.gsis_id)
+        if qb_stat is None:
+            qb_stat = NflQbStat(gsis_id=entry.gsis_id, name=entry.name, team=entry.team, total_yards=0, games=0, last_game_week=0)
+            db.add(qb_stat)
+        qb_stat.name = entry.name
+        qb_stat.team = entry.team
+        qb_stat.total_yards += entry.yards
+        qb_stat.games += 1
+        qb_stat.last_game_week = max(qb_stat.last_game_week, entry.week)
+
+        opp_stat = db.get(NflTeamAllowedStat, opponent)
+        if opp_stat is None:
+            opp_stat = NflTeamAllowedStat(team=opponent, total_yards_allowed=0, games=0)
+            db.add(opp_stat)
+        opp_stat.total_yards_allowed += entry.yards
+        opp_stat.games += 1
+
+        results.append({"gsis_id": entry.gsis_id, "week": entry.week, "status": "added", "opponent": opponent, "yards": entry.yards})
+
+    db.commit()
+    nfl_passing_yards_sync._league_avg_cache = None
+    nfl_passing_yards_sync._league_avg_cache_time = None
+
+    return {"results": results}
 
 
 @app.get("/api/debug/nfl-raw")
@@ -649,6 +729,19 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
         result["get_week_games"] = {"count": len(matchups), "sample": dict(list(matchups.items())[:6])}
     except Exception as e:
         result["get_week_games"] = {"error": f"{type(e).__name__}: {e}"}
+
+    # Checking whether the /games endpoint itself has more embedded in
+    # each raw game object than the team names get_week_games extracts -
+    # some APIs bundle box-score/player-stat data directly on the game
+    # record rather than exposing a separate per-player weekly endpoint.
+    try:
+        import requests
+        raw_games_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/games",
+                                       params={"season": season, "week": week}, timeout=30)
+        raw_games = raw_games_resp.json().get("data", [])
+        result["raw_single_game_object"] = raw_games[0] if raw_games else None
+    except Exception as e:
+        result["raw_single_game_object"] = {"error": f"{type(e).__name__}: {e}"}
 
     return result
 
