@@ -108,7 +108,7 @@
   .bybets-sortable:hover { color: var(--text); }
   .bybets-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nfl-row {
-    display: grid; grid-template-columns: 140px 150px 150px 60px 46px 38px 38px 52px 58px 36px 66px 54px 46px;
+    display: grid; grid-template-columns: 150px 140px 150px 60px 46px 38px 38px 52px 58px 36px 66px 54px 46px;
     gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;
   }
   .nfl-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2345,7 +2345,7 @@
 
     const header = `
       <div class="nfl-row nfl-row-header">
-        <span>Team</span><span>Opponent</span><span>QB (most recent starter)</span><span>Mean</span>
+        <span>QB (most recent starter)</span><span>Team</span><span>Opponent</span><span>Mean</span>
         <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
         <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
       </div>`;
@@ -2354,7 +2354,7 @@
       if (g.predicted_mean == null) {
         return `
           <div class="nfl-row">
-            <span>${g.team}</span><span>${g.opponent}</span><span>${g.qb_name || "Not enough data"}</span>
+            <span>${g.qb_name || "Not enough data"}</span><span>${g.team}</span><span>${g.opponent}</span>
             <span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>
           </div>`;
       }
@@ -2374,9 +2374,9 @@
 
       return `
         <div class="nfl-row">
+          <span>${g.qb_name || "TBD"}</span>
           <span>${g.team}</span>
           <span>${g.opponent}</span>
-          <span>${g.qb_name || "TBD"}</span>
           <span>${g.predicted_mean.toFixed(1)}</span>
           <input type="number" min="1" step="10" value="${line}" style="text-align:center;" onchange="updateNflThreshold('${g.team}',this.value)" />
           <span class="prob-yes">${Math.round(yesPct)}%</span>
