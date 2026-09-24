@@ -132,72 +132,84 @@
 </style>
 </head>
 <body>
-  <h1>MLB Live Dashboard</h1>
+  <h1>Live Dashboard</h1>
   <div class="tabs">
-    <span id="tab-btn-live" class="tab-btn active" onclick="switchTab('live')">Live Games</span>
-    <span id="tab-btn-bybets" class="tab-btn" onclick="switchTab('bybets')">By Bets</span>
-    <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+    <span id="tab-btn-mlb" class="tab-btn active" onclick="switchTab('mlb')">MLB</span>
     <span id="tab-btn-nfl" class="tab-btn" onclick="switchTab('nfl')">NFL</span>
+    <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+  </div>
+
+  <div id="tab-content-mlb">
+    <div class="tabs">
+      <span id="subtab-btn-mlb-live" class="tab-btn active" onclick="switchMlbSubTab('live')">Live Games</span>
+      <span id="subtab-btn-mlb-bybets" class="tab-btn" onclick="switchMlbSubTab('bybets')">By Bets</span>
+    </div>
+
+    <div id="subtab-content-mlb-bybets" style="display:none;">
+      <div class="sub">Every bet across every confirmed game, ranked highest to lowest Yes probability.</div>
+      <div id="bybets-content">Loading...</div>
+    </div>
+
+    <div id="subtab-content-mlb-live">
+      <div class="sub">First-inning run probability, updated live during games.</div>
+      <div style="margin-bottom:16px;">
+        <label for="date-picker" style="font-size:0.8rem; color:var(--muted); margin-right:8px;">Date:</label>
+        <input id="date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" />
+      </div>
+      <div id="status-line">Loading...</div>
+      <div id="grid" class="grid"></div>
+    </div>
   </div>
 
   <div id="tab-content-nfl" style="display:none;">
-    <div class="sub">NFL Passing Yards - current week's real matchups, each team's most recent starter.</div>
-    <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-      <div>
-        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
-        <input id="nfl-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
-      </div>
-      <div>
-        <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
-        <input id="nfl-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
-      </div>
-      <span class="hits-toggle" onclick="refreshNflStats()" style="padding:6px 14px;">Refresh Stats</span>
-      <span class="hits-toggle" onclick="toggleNflBackfillForm()" style="padding:6px 14px;">Manual Backfill</span>
-    </div>
-    <div id="nfl-refresh-status" class="settings-hint"></div>
-
-    <div id="nfl-backfill-form" style="display:none; background:var(--card); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:14px; margin-bottom:16px;">
-      <div class="settings-hint" style="margin-bottom:10px;">
-        For weeks the automated sync can't get real per-game data for (see notes above) - look up a QB's actual stats for one game on any public source (ESPN, Pro Football Reference, NFL.com) and add it here. Add as many rows as you like, then submit them all at once.
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;">
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">GSIS ID</label>
-          <input id="nfl-bf-gsis" type="text" placeholder="00-0034857" style="width:120px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Name</label>
-          <input id="nfl-bf-name" type="text" placeholder="Josh Allen" style="width:130px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Team</label>
-          <input id="nfl-bf-team" type="text" placeholder="BUF" style="width:60px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Week</label>
-          <input id="nfl-bf-week" type="number" step="1" min="1" style="width:60px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Attempts</label>
-          <input id="nfl-bf-attempts" type="number" step="1" min="0" style="width:70px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Yards</label>
-          <input id="nfl-bf-yards" type="number" step="1" style="width:70px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
-        <span class="hits-toggle" onclick="addNflBackfillRow()" style="padding:5px 12px;">Add Row</span>
-      </div>
-      <div id="nfl-backfill-batch"></div>
-      <div style="margin-top:10px;">
-        <span class="hits-toggle" onclick="submitNflBackfill()" style="padding:6px 14px;">Submit Backfill</span>
-      </div>
-      <div id="nfl-backfill-status" class="settings-hint" style="margin-top:8px;"></div>
+    <div class="tabs">
+      <span id="subtab-btn-nfl-passing" class="tab-btn active" onclick="switchNflSubTab('passing')">Passing Yards</span>
     </div>
 
-    <div id="nfl-content">Loading...</div>
-  </div>
+    <div id="subtab-content-nfl-passing">
+      <div class="sub">NFL Passing Yards - current week's real matchups, each team's most recent starter.</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
+          <input id="nfl-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+        </div>
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+          <input id="nfl-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+        </div>
+        <span class="hits-toggle" onclick="refreshNflStats()" style="padding:6px 14px;">Refresh Stats</span>
+        <span class="hits-toggle" onclick="toggleNflBackfillForm()" style="padding:6px 14px;">Manual Backfill</span>
+      </div>
+      <div id="nfl-refresh-status" class="settings-hint"></div>
 
-  <div id="tab-content-bybets" style="display:none;">
-    <div class="sub">Every bet across every confirmed game, ranked highest to lowest Yes probability.</div>
-    <div id="bybets-content">Loading...</div>
-  </div>
+      <div id="nfl-backfill-form" style="display:none; background:var(--card); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:14px; margin-bottom:16px;">
+        <div class="settings-hint" style="margin-bottom:10px;">
+          For weeks the automated sync can't get real per-game data for (see notes above) - look up a QB's actual stats for one game on any public source (ESPN, Pro Football Reference, NFL.com) and add it here. Add as many rows as you like, then submit them all at once.
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;">
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">GSIS ID</label>
+            <input id="nfl-bf-gsis" type="text" placeholder="00-0034857" style="width:120px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Name</label>
+            <input id="nfl-bf-name" type="text" placeholder="Josh Allen" style="width:130px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Team</label>
+            <input id="nfl-bf-team" type="text" placeholder="BUF" style="width:60px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Week</label>
+            <input id="nfl-bf-week" type="number" step="1" min="1" style="width:60px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Attempts</label>
+            <input id="nfl-bf-attempts" type="number" step="1" min="0" style="width:70px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <div><label style="font-size:0.75rem; color:var(--muted); display:block;">Yards</label>
+            <input id="nfl-bf-yards" type="number" step="1" style="width:70px; background:var(--bg); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:4px 6px;" /></div>
+          <span class="hits-toggle" onclick="addNflBackfillRow()" style="padding:5px 12px;">Add Row</span>
+        </div>
+        <div id="nfl-backfill-batch"></div>
+        <div style="margin-top:10px;">
+          <span class="hits-toggle" onclick="submitNflBackfill()" style="padding:6px 14px;">Submit Backfill</span>
+        </div>
+        <div id="nfl-backfill-status" class="settings-hint" style="margin-top:8px;"></div>
+      </div>
 
-  <div id="tab-content-live">
-    <div class="sub">First-inning run probability, updated live during games.</div>
-    <div style="margin-bottom:16px;">
-      <label for="date-picker" style="font-size:0.8rem; color:var(--muted); margin-right:8px;">Date:</label>
-      <input id="date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" />
+      <div id="nfl-content">Loading...</div>
     </div>
-    <div id="status-line">Loading...</div>
-    <div id="grid" class="grid"></div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -1631,22 +1643,38 @@
   const PLATFORM_FIELDS = ["kalshi", "polymarket", "novig", "fanduel", "draftkings"];
 
   function switchTab(tab) {
-    document.getElementById("tab-content-live").style.display = tab === "live" ? "block" : "none";
-    document.getElementById("tab-content-bybets").style.display = tab === "bybets" ? "block" : "none";
-    document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
+    document.getElementById("tab-content-mlb").style.display = tab === "mlb" ? "block" : "none";
     document.getElementById("tab-content-nfl").style.display = tab === "nfl" ? "block" : "none";
-    document.getElementById("tab-btn-live").classList.toggle("active", tab === "live");
-    document.getElementById("tab-btn-bybets").classList.toggle("active", tab === "bybets");
-    document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
+    document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
+    document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
+    document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     if (tab === "bettracker") {
       loadBetTrackerSettings();
       loadTrackedBets();
-    } else if (tab === "bybets") {
-      loadByBetsTab();
     } else if (tab === "nfl") {
       loadNflTab();
     }
+    // "mlb" needs nothing extra here - its own sub-tabs (switchMlbSubTab)
+    // handle their own loading, and "Live Games" (the default MLB
+    // sub-tab) already polls unconditionally from page load.
+  }
+
+  function switchMlbSubTab(subtab) {
+    document.getElementById("subtab-content-mlb-live").style.display = subtab === "live" ? "block" : "none";
+    document.getElementById("subtab-content-mlb-bybets").style.display = subtab === "bybets" ? "block" : "none";
+    document.getElementById("subtab-btn-mlb-live").classList.toggle("active", subtab === "live");
+    document.getElementById("subtab-btn-mlb-bybets").classList.toggle("active", subtab === "bybets");
+    if (subtab === "bybets") {
+      loadByBetsTab();
+    }
+  }
+
+  function switchNflSubTab(subtab) {
+    document.getElementById("subtab-content-nfl-passing").style.display = subtab === "passing" ? "block" : "none";
+    document.getElementById("subtab-btn-nfl-passing").classList.toggle("active", subtab === "passing");
+    // Only one NFL sub-tab exists today - this stays ready for when
+    // more NFL props get added, matching MLB's own sub-tab structure.
   }
 
   const HIT_RATE_CATEGORIES = [
