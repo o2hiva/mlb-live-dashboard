@@ -326,3 +326,23 @@ class NflGame(Base):
     season = Column(Integer)
     week = Column(Integer)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflQbSnapshot(Base):
+    """The LAST OBSERVED season-cumulative total for one QB - not a
+    running total itself (that's NflQbStat), purely the baseline used
+    to compute each new sync's DELTA. See nfl_passing_yards_sync.py's
+    module docstring: confirmed directly against the real API that
+    there is no working per-week/per-game breakdown endpoint, only a
+    continuously-updating season-cumulative one - so "this week's real
+    game" is computed as (today's cumulative total) minus (the last
+    stored snapshot), not fetched directly."""
+    __tablename__ = "nfl_qb_snapshots"
+
+    gsis_id = Column(String, primary_key=True)
+    name = Column(String)
+    team = Column(String)
+    cumulative_games = Column(Integer, default=0)
+    cumulative_attempts = Column(Integer, default=0)
+    cumulative_yards = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

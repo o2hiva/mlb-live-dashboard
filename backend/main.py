@@ -604,15 +604,15 @@ def manual_refresh_nfl_stats(season: int, week: int):
 @app.get("/api/debug/nfl-raw")
 def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     """
-    Diagnostic: calls the raw NFL fetch functions directly (bypassing
-    refresh_nfl_stats' own try/except, which silently skips individual
-    failures) and shows exactly what api.nfldata.org actually returns -
-    or the real exception if a call fails outright - plus how many rows
-    are currently stored after the last sync. Needed because that
-    domain was never reachable from the sandbox this was built in, so
-    the real response shape could never be verified until now.
+    Diagnostic for the snapshot-delta sync (see nfl_passing_yards_sync.py's
+    module docstring for why this approach exists - the original
+    per-week fetch was confirmed, directly against live data, to
+    return nothing at all). Shows current row counts, sample stored
+    data, and a live call to the two CONFIRMED-WORKING fetch functions
+    (get_season_qbs, get_week_games) so any future issue can be traced
+    the same way this one was: against real responses, not guesses.
     """
-    from models_db import NflQbStat, NflTeamAllowedStat, NflGame
+    from models_db import NflQbStat, NflTeamAllowedStat, NflGame, NflQbSnapshot
     import nfl_passing_yards_sync
 
     result = {
@@ -620,9 +620,11 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
             "NflQbStat": db.query(NflQbStat).count(),
             "NflTeamAllowedStat": db.query(NflTeamAllowedStat).count(),
             "NflGame": db.query(NflGame).count(),
+            "NflQbSnapshot": db.query(NflQbSnapshot).count(),
         },
         "sample_qb_stat": None,
         "sample_team_allowed_stat": None,
+        "sample_snapshot": None,
     }
     qb_sample = db.query(NflQbStat).first()
     if qb_sample:
@@ -631,6 +633,10 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
     team_sample = db.query(NflTeamAllowedStat).first()
     if team_sample:
         result["sample_team_allowed_stat"] = {"team": team_sample.team, "total_yards_allowed": team_sample.total_yards_allowed, "games": team_sample.games}
+    snapshot_sample = db.query(NflQbSnapshot).first()
+    if snapshot_sample:
+        result["sample_snapshot"] = {"gsis_id": snapshot_sample.gsis_id, "name": snapshot_sample.name,
+                                      "cumulative_games": snapshot_sample.cumulative_games, "cumulative_yards": snapshot_sample.cumulative_yards}
 
     try:
         qbs = nfl_passing_yards_sync.get_season_qbs(season)
@@ -643,70 +649,6 @@ def debug_nfl_raw(season: int, week: int, db: Session = Depends(get_db)):
         result["get_week_games"] = {"count": len(matchups), "sample": dict(list(matchups.items())[:6])}
     except Exception as e:
         result["get_week_games"] = {"error": f"{type(e).__name__}: {e}"}
-
-    if isinstance(result.get("get_season_qbs"), dict) and result["get_season_qbs"].get("count", 0) > 0:
-        first_gsis_id = result["get_season_qbs"]["sample"][0][0]
-
-        # Check every completed week, not just week 1 - tells us whether
-        # the per-week endpoint is empty across the board (a real data-
-        # availability gap) or only for specific weeks.
-        result["get_week_stats_by_week"] = {}
-        for wk in range(1, week + 1):
-            try:
-                stats = nfl_passing_yards_sync.get_week_stats(first_gsis_id, season, wk)
-                result["get_week_stats_by_week"][wk] = stats
-            except Exception as e:
-                result["get_week_stats_by_week"][wk] = {"error": f"{type(e).__name__}: {e}"}
-
-        # get_week_stats applies filtering (empty data -> None,
-        # season_type != "REG" -> None) before returning - if the
-        # filtered result above came back null, this shows the RAW,
-        # UNFILTERED response so we can tell which filter (if any) is
-        # actually responsible, rather than guessing.
-        try:
-            import requests
-            raw_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/players/{first_gsis_id}/stats",
-                                     params={"season": season, "week": 1}, timeout=30)
-            result["raw_player_stats_response"] = {
-                "status_code": raw_resp.status_code,
-                "body": raw_resp.json() if raw_resp.headers.get("content-type", "").startswith("application/json") else raw_resp.text[:2000],
-            }
-        except Exception as e:
-            result["raw_player_stats_response"] = {"error": f"{type(e).__name__}: {e}"}
-
-        # Also check the same player's overall SEASON stats (already
-        # known to be non-empty, since get_season_qbs filtered on real
-        # attempts) - confirms the season-level data genuinely has real
-        # attempts/yards on file, isolating the problem specifically to
-        # the per-week breakdown endpoint rather than this player having
-        # no real data at all this season.
-        try:
-            import requests
-            season_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
-                                        params={"season": season, "limit": 50, "offset": 0}, timeout=30)
-            season_rows = season_resp.json().get("data", [])
-            match = next((r for r in season_rows if r.get("player_id") == first_gsis_id), None)
-            result["same_player_season_totals"] = match
-        except Exception as e:
-            result["same_player_season_totals"] = {"error": f"{type(e).__name__}: {e}"}
-
-        # Hypothesis: maybe /stats/season ITSELF returns per-week
-        # breakdowns when a week param is added, rather than there
-        # being a genuinely separate per-player weekly endpoint at all -
-        # a common pattern in sports-stats APIs. Testing this directly
-        # rather than guessing blindly at more URL variations.
-        try:
-            import requests
-            season_with_week_resp = requests.get(f"{nfl_passing_yards_sync.API_BASE}/stats/season",
-                                                   params={"season": season, "week": 1, "limit": 50, "offset": 0}, timeout=30)
-            season_with_week_rows = season_with_week_resp.json().get("data", [])
-            week_match = next((r for r in season_with_week_rows if r.get("player_id") == first_gsis_id), None)
-            result["stats_season_with_week_param"] = {
-                "total_rows_returned": len(season_with_week_rows),
-                "this_player_row": week_match,
-            }
-        except Exception as e:
-            result["stats_season_with_week_param"] = {"error": f"{type(e).__name__}: {e}"}
 
     return result
 
