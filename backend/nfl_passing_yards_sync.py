@@ -272,12 +272,18 @@ def get_league_avg_allowed(db) -> float | None:
 
 def compute_passing_yards_prediction(team: str, opponent: str, league_avg: float | None = None) -> dict | None:
     """
-    Returns {"qb_name":, "qb_gsis_id":, "predicted_mean":,
-    "qb_games_sample":, "opp_games_sample":, "starter_is_heuristic": True}
-    for one team's real most-recent starter against their real current
-    opponent. None if the starter or opponent doesn't have enough real
-    games yet (MIN_PRIOR_GAMES / MIN_OPPONENT_GAMES - lowered from the
-    validated value of 3).
+    Returns {"qb_name":, "qb_gsis_id":, "predicted_mean":, "qb_index":,
+    "opp_index":, "qb_games_sample":, "opp_games_sample":,
+    "starter_is_heuristic": True} for one team's real most-recent
+    starter against their real current opponent. None if the starter
+    or opponent doesn't have enough real games yet (MIN_PRIOR_GAMES /
+    MIN_OPPONENT_GAMES - lowered from the validated value of 3).
+
+    qb_index / opp_index: the same two factors predicted_mean is built
+    from (qb_index * opp_index * league_avg = predicted_mean) - shown
+    separately so the person can see the QB's own strength and the
+    opponent's pass defense strength independently, the same "index"
+    pattern used throughout the MLB side of this dashboard.
 
     starter_is_heuristic is always True - see module docstring's honest
     limitation. The frontend should let the person confirm or override
@@ -300,12 +306,16 @@ def compute_passing_yards_prediction(team: str, opponent: str, league_avg: float
 
         qb_avg = qb.total_yards / qb.games
         shrunk_opp_allowed = (opp.total_yards_allowed + DEFAULT_SHRINKAGE_K * league_avg) / (opp.games + DEFAULT_SHRINKAGE_K)
-        predicted_mean = qb_avg * (shrunk_opp_allowed / league_avg)
+        qb_index = qb_avg / league_avg
+        opp_index = shrunk_opp_allowed / league_avg
+        predicted_mean = qb_avg * opp_index
 
         return {
             "qb_name": qb.name,
             "qb_gsis_id": qb.gsis_id,
             "predicted_mean": predicted_mean,
+            "qb_index": qb_index,
+            "opp_index": opp_index,
             "qb_games_sample": qb.games,
             "opp_games_sample": opp.games,
             "starter_is_heuristic": True,

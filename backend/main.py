@@ -760,6 +760,8 @@ def nfl_games(db: Session = Depends(get_db)):
             "opponent": g.opponent,
             "qb_name": inputs["qb_name"] if inputs else None,
             "predicted_mean": inputs["predicted_mean"] if inputs else None,
+            "qb_index": inputs["qb_index"] if inputs else None,
+            "opp_index": inputs["opp_index"] if inputs else None,
             "qb_games_sample": inputs["qb_games_sample"] if inputs else None,
             "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
             "starter_is_heuristic": True,
