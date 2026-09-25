@@ -248,6 +248,9 @@
     <h2 style="margin-top:32px;">Hit Rates</h2>
     <div class="platform-grid" id="hit-rate-boxes">Loading...</div>
 
+    <h2 style="margin-top:32px;">Group Hit rates by sport</h2>
+    <div class="platform-grid" id="sport-hit-rate-boxes">Loading...</div>
+
     <h2 style="margin-top:32px;">Hit Rates by Week</h2>
     <div id="weekly-hit-rate-table">Loading...</div>
 
@@ -1716,6 +1719,25 @@
     container.innerHTML = html;
   }
 
+  // Every NFL bet_type is "nfl_passing_yards"; everything else tracked so
+  // far ("hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed",
+  // "first_inning_run", "game_lines_*") is MLB. Add new sports here as
+  // they're wired into the tracker.
+  const SPORT_CATEGORIES = [
+    { label: "MLB", filter: b => b.bet_type !== "nfl_passing_yards" },
+    { label: "NFL", filter: b => b.bet_type === "nfl_passing_yards" },
+  ];
+
+  function renderSportHitRateBoxes(bets) {
+    const container = document.getElementById("sport-hit-rate-boxes");
+    let html = "";
+    for (const cat of SPORT_CATEGORIES) {
+      const rate = hitRateFor(bets.filter(cat.filter));
+      html += hitRateBoxHtml(cat.label, rate);
+    }
+    container.innerHTML = html;
+  }
+
   function getMondayOfWeek(dateStr) {
     // dateStr like "2026-09-17" - returns the YYYY-MM-DD of that week's
     // Monday (weeks run Monday-Sunday, matching the user's own request).
@@ -1785,6 +1807,7 @@
       const res = await fetch(`${API_BASE}/api/bet-tracker/tracked`);
       const bets = await res.json();
       renderHitRateBoxes(bets);
+      renderSportHitRateBoxes(bets);
       renderWeeklyHitRateTable(bets);
       if (!bets.length) {
         container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
