@@ -2603,6 +2603,78 @@
     }
   }
 
+  // ---- CFB team box (one per side within a matchup card) - mirrors the
+  // MLB tab's .card/.teams/.meta box look instead of NFL's flat table
+  // rows, since /api/cfb/games returns one row PER TEAM PER GAME (home +
+  // away), grouped below by game_id into a single card per matchup. ----
+  function cfbTeamBlockHtml(row, isSecondInCard) {
+    if (!row) return "";
+    const side = row.is_home ? "home" : "away";
+    const sideLabel = row.is_home ? "Home" : "Away";
+
+    if (row.predicted_mean == null) {
+      return `
+        <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+          <div class="teams">
+            <span>${row.team} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
+          </div>
+          <div class="meta">vs ${row.opponent}</div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const state = getCfbBetState(row.team);
+    const line = state.threshold;
+    const yesPct = probCfbPointsAtLeast(row.predicted_mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbBetField('${row.team}','manualWager',this.value)" />`;
+    const trackArgs = `'${row.team}',this.checked,'${(row.opponent || "").replace(/'/g, "\\'")}','${side}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const teamIndexStr = row.team_index != null ? row.team_index.toFixed(2) : "—";
+    const oppIndexStr = row.opp_index != null ? row.opp_index.toFixed(2) : "—";
+
+    return `
+      <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+        <div class="teams">
+          <span>${row.team} (${sideLabel})</span>
+          <span class="score">${row.predicted_mean.toFixed(1)}</span>
+        </div>
+        <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbThreshold('${row.team}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateCfbBetField('${row.team}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbBetField('${row.team}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbBetField('${row.team}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  function cfbCardHtml(pair, season, week) {
+    return `
+      <div class="card">
+        <div class="meta">Season ${season} · Week ${week}</div>
+        ${cfbTeamBlockHtml(pair.away, false)}
+        ${cfbTeamBlockHtml(pair.home, true)}
+      </div>`;
+  }
+
   function renderCfbFromCache() {
     const container = document.getElementById("cfb-content");
     if (!cfbDataCache) return;
@@ -2612,63 +2684,20 @@
       return;
     }
 
-    const header = `
-      <div class="nfl-row nfl-row-header">
-        <span>Team</span><span>Opponent</span><span>Mean</span><span>Index</span>
-        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
-        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-      </div>`;
+    // Group the flat team-perspective rows (one per team per game, home +
+    // away) into a single box per game_id - same "one card per matchup"
+    // layout the MLB tab uses, instead of a flat table of team rows.
+    const byGame = new Map();
+    for (const g of games) {
+      if (!byGame.has(g.game_id)) byGame.set(g.game_id, {});
+      byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
+    }
 
-    const rows = games.map(g => {
-      if (g.predicted_mean == null) {
-        return `
-          <div class="nfl-row" style="grid-template-columns: 150px 150px 60px 92px 46px 38px 38px 52px 58px 36px 66px 54px 46px;">
-            <span>${g.team}</span><span>${g.opponent}</span>
-            <span>Not enough data</span><span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span>
-          </div>`;
-      }
-      // Which side of game_id this team was on - sent as team_side so
-      // bet_grading.py knows whether to read homePoints or awayPoints
-      // back from CFBD when grading this bet later.
-      const side = g.is_home ? "home" : "away";
-      const state = getCfbBetState(g.team);
-      const line = state.threshold;
-      const yesPct = probCfbPointsAtLeast(g.predicted_mean, line) * 100;
-      const noPct = 100 - yesPct;
-      const modelPct = state.yn === "yes" ? yesPct : noPct;
-      const modelProb = modelPct != null ? modelPct / 100 : null;
-      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-      const profit = profitIfWon(wager, state.market);
-      const marketVal = state.market != null ? state.market : "";
-      const wagerHtml = state.useKelly
-        ? `<span>$${wager.toFixed(2)}</span>`
-        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbBetField('${g.team}','manualWager',this.value)" />`;
-      const trackArgs = `'${g.team}',this.checked,'${(g.opponent || "").replace(/'/g, "\\'")}','${side}',${line},${modelProb},${state.market},${wager},${profit}`;
-      const teamIndexStr = g.team_index != null ? g.team_index.toFixed(2) : "—";
-      const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
+    const cards = Array.from(byGame.values())
+      .map(pair => cfbCardHtml(pair, cfbDataCache.season, cfbDataCache.week))
+      .join("");
 
-      return `
-        <div class="nfl-row" style="grid-template-columns: 150px 150px 60px 92px 46px 38px 38px 52px 58px 36px 66px 54px 46px;">
-          <span>${g.team}</span>
-          <span>${g.opponent}</span>
-          <span>${g.predicted_mean.toFixed(1)}</span>
-          <span>${teamIndexStr} vs ${oppIndexStr}</span>
-          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbThreshold('${g.team}',this.value)" />
-          <span class="prob-yes">${Math.round(yesPct)}%</span>
-          <span class="prob-no">${Math.round(noPct)}%</span>
-          <select onchange="updateCfbBetField('${g.team}','yn',this.value)">
-            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
-            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
-          </select>
-          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbBetField('${g.team}','market',this.value)" />
-          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbBetField('${g.team}','useKelly',this.checked)" />
-          ${wagerHtml}
-          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
-          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTrack(${trackArgs})" />
-        </div>`;
-    }).join("");
-
-    container.innerHTML = header + rows;
+    container.innerHTML = `<div class="grid">${cards}</div>`;
   }
 
   // ---- NFL manual backfill form - a small local batch built up with
