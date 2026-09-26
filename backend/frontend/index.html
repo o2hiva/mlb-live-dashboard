@@ -165,6 +165,7 @@
   <div id="tab-content-nfl" style="display:none;">
     <div class="tabs">
       <span id="subtab-btn-nfl-passing" class="tab-btn active" onclick="switchNflSubTab('passing')">Passing Yards</span>
+      <span id="subtab-btn-nfl-points" class="tab-btn" onclick="switchNflSubTab('points')">Team Points</span>
     </div>
 
     <div id="subtab-content-nfl-passing">
@@ -210,6 +211,24 @@
       </div>
 
       <div id="nfl-content">Loading...</div>
+    </div>
+
+    <div id="subtab-content-nfl-points" style="display:none;">
+      <div class="sub">NFL Team Points - current week's real matchups, each team's predicted points scored, plus the combined game total.</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
+          <input id="nfl-points-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+        </div>
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+          <input id="nfl-points-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+        </div>
+        <span class="hits-toggle" onclick="refreshNflPointsStats()" style="padding:6px 14px;">Refresh Stats</span>
+      </div>
+      <div id="nfl-points-refresh-status" class="settings-hint"></div>
+
+      <div id="nfl-points-content">Loading...</div>
     </div>
   </div>
 
@@ -1704,9 +1723,12 @@
 
   function switchNflSubTab(subtab) {
     document.getElementById("subtab-content-nfl-passing").style.display = subtab === "passing" ? "block" : "none";
+    document.getElementById("subtab-content-nfl-points").style.display = subtab === "points" ? "block" : "none";
     document.getElementById("subtab-btn-nfl-passing").classList.toggle("active", subtab === "passing");
-    // Only one NFL sub-tab exists today - this stays ready for when
-    // more NFL props get added, matching MLB's own sub-tab structure.
+    document.getElementById("subtab-btn-nfl-points").classList.toggle("active", subtab === "points");
+    if (subtab === "points") {
+      loadNflPointsTab();
+    }
   }
 
   function switchCfbSubTab(subtab) {
@@ -1727,6 +1749,8 @@
     { label: "NFL Pass Yds", filter: b => b.bet_type === "nfl_passing_yards" },
     { label: "CFB Points", filter: b => b.bet_type === "cfb_team_points" },
     { label: "CFB Total", filter: b => b.bet_type === "cfb_game_total" },
+    { label: "NFL Points", filter: b => b.bet_type === "nfl_team_points" },
+    { label: "NFL Total", filter: b => b.bet_type === "nfl_game_total" },
   ];
 
   function hitRateFor(bets) {
@@ -1764,7 +1788,7 @@
   // right sport's filter here whenever a new prop ships.
   const SPORT_CATEGORIES = [
     { label: "MLB", filter: b => ["hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed", "first_inning_run"].includes(b.bet_type) || b.bet_type.startsWith("game_lines_") },
-    { label: "NFL", filter: b => b.bet_type === "nfl_passing_yards" },
+    { label: "NFL", filter: b => b.bet_type === "nfl_passing_yards" || b.bet_type === "nfl_team_points" || b.bet_type === "nfl_game_total" },
     { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
   ];
 
@@ -2835,6 +2859,348 @@
 
     const cards = Array.from(byGame.entries())
       .map(([gameId, pair]) => cfbCardHtml(gameId, pair, cfbDataCache.season, cfbDataCache.week))
+      .join("");
+
+    container.innerHTML = `<div class="grid">${cards}</div>`;
+  }
+
+  // ---- NFL Team Points / Game Total - ported from core_nfl_points.py,
+  // same log5-style index-multiplication + Negative Binomial pattern as
+  // CFB's team-points prop (cfbTeamBlockHtml/cfbTotalRowHtml above),
+  // just with NFL's own validated constants: shrinkage_k=8 (flat curve,
+  // chosen as a single round value across k=5..20), team overdispersion
+  // AND game-total overdispersion BOTH = 4.4 (landed on almost the same
+  // value here, unlike CFB's team=5.2/game=4.6 split - not assumed,
+  // that's just what the real 2023 NFL backtest showed).
+  //
+  // GRADING DIFFERENCE FROM CFB: api.nfldata.org's /v1/games has no
+  // per-game numeric id (unlike CFBD), so there's nothing to store in
+  // batter_id the way CFB stores CFBD's game_id. Instead, team_side
+  // holds the actual TEAM NAME for a team-points bet (e.g. "KC") or an
+  // "AWAY@HOME" pair string for a game-total bet (e.g. "BUF@KC") -
+  // bet_grading.py re-fetches that week's real games and matches by
+  // team name(s) directly, no numeric id needed. See
+  // _nfl_team_points_actual / _nfl_game_total_actual.
+  const NFL_TEAM_POINTS_OVERDISPERSION = 4.4;
+  const NFL_GAME_TOTAL_OVERDISPERSION = 4.4;
+  const nflPointsBetState = {};
+  const nflTotalBetState = {};
+
+  function getNflPointsBetState(team) {
+    if (!nflPointsBetState[team]) {
+      nflPointsBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 21 };
+    }
+    return nflPointsBetState[team];
+  }
+
+  function getNflTotalBetState(gameId) {
+    if (!nflTotalBetState[gameId]) {
+      nflTotalBetState[gameId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 44 };
+    }
+    return nflTotalBetState[gameId];
+  }
+
+  function probNflPointsAtLeast(mean, line) {
+    if (mean == null) return null;
+    const p = 1 / NFL_TEAM_POINTS_OVERDISPERSION;
+    const r = mean / (NFL_TEAM_POINTS_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
+  function probNflTotalAtLeast(mean, line) {
+    if (mean == null) return null;
+    const p = 1 / NFL_GAME_TOTAL_OVERDISPERSION;
+    const r = mean / (NFL_GAME_TOTAL_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
+  function updateNflPointsThreshold(team, value) {
+    const state = getNflPointsBetState(team);
+    state.threshold = Math.max(1, parseInt(value, 10) || 21);
+    renderNflPointsFromCache();
+  }
+
+  function updateNflPointsBetField(team, field, value) {
+    const state = getNflPointsBetState(team);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflPointsFromCache();
+  }
+
+  function updateNflTotalThreshold(gameId, value) {
+    const state = getNflTotalBetState(gameId);
+    state.threshold = Math.max(1, parseInt(value, 10) || 44);
+    renderNflPointsFromCache();
+  }
+
+  function updateNflTotalBetField(gameId, field, value) {
+    const state = getNflTotalBetState(gameId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflPointsFromCache();
+  }
+
+  async function toggleNflPointsTrack(team, checked, opponent, line, modelProb, marketPct, wager, profit) {
+    const state = getNflPointsBetState(team);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "nfl_team_points",
+            batter_name: `${team} (vs ${opponent}) - Team Points`,
+            team_side: team, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            nfl_season: nflPointsDataCache ? nflPointsDataCache.season : null,
+            nfl_week: nflPointsDataCache ? nflPointsDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflPointsFromCache();
+  }
+
+  async function toggleNflTotalTrack(gameId, checked, homeTeam, awayTeam, line, modelProb, marketPct, wager, profit) {
+    const state = getNflTotalBetState(gameId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "nfl_game_total",
+            batter_name: `${awayTeam} @ ${homeTeam} - Total Points`,
+            team_side: `${awayTeam}@${homeTeam}`, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            nfl_season: nflPointsDataCache ? nflPointsDataCache.season : null,
+            nfl_week: nflPointsDataCache ? nflPointsDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflPointsFromCache();
+  }
+
+  let nflPointsDataCache = null;
+
+  async function loadNflPointsTab() {
+    const container = document.getElementById("nfl-points-content");
+    container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/nfl/points-games`);
+      nflPointsDataCache = await res.json();
+      if (nflPointsDataCache.season != null) document.getElementById("nfl-points-season-input").value = nflPointsDataCache.season;
+      if (nflPointsDataCache.week != null) document.getElementById("nfl-points-week-input").value = nflPointsDataCache.week;
+      renderNflPointsFromCache();
+    } catch (e) {
+      container.innerHTML = `<div class="settings-hint">Couldn't load NFL Team Points data.</div>`;
+    }
+  }
+
+  async function refreshNflPointsStats() {
+    const season = document.getElementById("nfl-points-season-input").value;
+    const week = document.getElementById("nfl-points-week-input").value;
+    if (!season || !week) {
+      document.getElementById("nfl-points-refresh-status").textContent = "Enter both a season and a week first.";
+      return;
+    }
+    const statusEl = document.getElementById("nfl-points-refresh-status");
+    statusEl.textContent = `Refreshing NFL Team Points stats for ${season} week ${week} - this fetches real data and can take a little while...`;
+    try {
+      await fetch(`${API_BASE}/api/admin/refresh-nfl-points-stats?season=${season}&week=${week}`);
+      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
+      loadNflPointsTab();
+    } catch (e) {
+      statusEl.textContent = "Refresh failed - check the season/week and try again.";
+    }
+  }
+
+  // ---- NFL team box (one per side within a matchup card) - identical
+  // structure to cfbTeamBlockHtml above, just NFL's own overdispersion
+  // and bet-tracking wiring (team name in team_side, no home/away side
+  // needed for grading - see module comment above). ----
+  function nflTeamBlockHtml(row, isSecondInCard) {
+    if (!row) return "";
+    const sideLabel = row.is_home ? "Home" : "Away";
+
+    if (row.predicted_mean == null) {
+      return `
+        <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+          <div class="teams">
+            <span>${row.team} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
+          </div>
+          <div class="meta">vs ${row.opponent}</div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const state = getNflPointsBetState(row.team);
+    const line = state.threshold;
+    const yesPct = probNflPointsAtLeast(row.predicted_mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflPointsBetField('${row.team}','manualWager',this.value)" />`;
+    const trackArgs = `'${row.team}',this.checked,'${(row.opponent || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const teamIndexStr = row.team_index != null ? row.team_index.toFixed(2) : "—";
+    const oppIndexStr = row.opp_index != null ? row.opp_index.toFixed(2) : "—";
+
+    return `
+      <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+        <div class="teams">
+          <span>${row.team} (${sideLabel})</span>
+          <span class="score">${Math.round(row.predicted_mean)}</span>
+        </div>
+        <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateNflPointsThreshold('${row.team}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflPointsBetField('${row.team}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflPointsBetField('${row.team}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflPointsBetField('${row.team}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflPointsTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  // ---- Combined NFL game total - same sum-of-two-predictions approach
+  // as cfbTotalRowHtml, using the SEPARATE (though numerically equal
+  // here, 4.4 vs 4.4) validated game-total overdispersion. ----
+  function nflTotalRowHtml(gameId, homeRow, awayRow) {
+    if (!homeRow || !awayRow || homeRow.predicted_mean == null || awayRow.predicted_mean == null) {
+      return `
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+          <div class="teams"><span>Total Points</span></div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const totalMean = homeRow.predicted_mean + awayRow.predicted_mean;
+    const state = getNflTotalBetState(gameId);
+    const line = state.threshold;
+    const yesPct = probNflTotalAtLeast(totalMean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflTotalBetField('${gameId}','manualWager',this.value)" />`;
+    const trackArgs = `'${gameId}',this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+        <div class="teams">
+          <span>Total Points</span>
+          <span class="score">${Math.round(totalMean)}</span>
+        </div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateNflTotalThreshold('${gameId}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflTotalBetField('${gameId}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflTotalBetField('${gameId}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflTotalBetField('${gameId}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTotalTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  function nflPointsCardHtml(gameId, pair, season, week) {
+    return `
+      <div class="card">
+        <div class="meta">Season ${season} · Week ${week}</div>
+        ${nflTeamBlockHtml(pair.away, false)}
+        ${nflTeamBlockHtml(pair.home, true)}
+        ${nflTotalRowHtml(gameId, pair.home, pair.away)}
+      </div>`;
+  }
+
+  function renderNflPointsFromCache() {
+    const container = document.getElementById("nfl-points-content");
+    if (!nflPointsDataCache) return;
+    const games = nflPointsDataCache.games || [];
+    if (!games.length) {
+      container.innerHTML = `<div class="settings-hint">No NFL Team Points data yet - enter a season/week above and click Refresh Stats.</div>`;
+      return;
+    }
+
+    // Group the flat team-perspective rows into one box per game_id -
+    // same pattern as CFB's renderCfbFromCache. NFL has no numeric game
+    // id from the API, so the backend sends a deterministic string key
+    // (sorted team pair) as game_id instead - works identically as a
+    // Map key here.
+    const byGame = new Map();
+    for (const g of games) {
+      if (!byGame.has(g.game_id)) byGame.set(g.game_id, {});
+      byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
+    }
+
+    const cards = Array.from(byGame.entries())
+      .map(([gameId, pair]) => nflPointsCardHtml(gameId, pair, nflPointsDataCache.season, nflPointsDataCache.week))
       .join("");
 
     container.innerHTML = `<div class="grid">${cards}</div>`;

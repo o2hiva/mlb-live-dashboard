@@ -55,6 +55,22 @@ DATA SOURCES, one per bet_type:
     against. These bets are intentionally left pending forever unless
     graded by hand (there is no automated grading path for them yet).
 
+  - "nfl_team_points": fetches that bet's own season/week schedule
+    fresh from api.nfldata.org (nfl_points_sync.get_week_games) and
+    reads the real final home_score/away_score for whichever team
+    (stored by NAME in team_side, since api.nfldata.org has no numeric
+    per-game id the way CFBD does - see models_db.py's TrackedBet
+    docstring and nfl_points_sync.py's module docstring) played that
+    week, matched by comparing team_side against home_team/away_team
+    directly. None (still pending) until that game shows both scores
+    and game_type == "REG". One fetch per (season, week) pair, cached
+    and reused across every bet sharing it - same pattern as CFB.
+
+  - "nfl_game_total": same fetch/cache as nfl_team_points, but
+    team_side instead holds an "AWAY@HOME" pair string (e.g. "BUF@KC")
+    identifying the whole game - both real final scores are summed
+    once that exact away/home pair is found completed.
+
 GRADING RULE for every bet_type: "yes" wins if actual >= line (or, for
 first_inning_run, if a run actually scored); "no" wins the opposite.
 HR/Hits/HRR/Pitcher-Hits-Allowed/Game-Lines lines are always whole
@@ -67,6 +83,7 @@ from datetime import datetime
 
 import mlb_client
 import cfb_points_sync
+import nfl_points_sync
 from database import SessionLocal
 from models_db import TrackedBet, Game, InningLine
 
@@ -76,9 +93,11 @@ log = logging.getLogger("bet_grading")
 # these, by design - see models_db.py's TrackedBet docstring). These must
 # skip the Game/abstract_status check entirely and go straight to
 # _actual_value_for_bet, which handles their own real-world "is this
-# actually final yet" check itself (CFBD's own "completed" flag, or -
-# for NFL - the permanent "not gradeable" case).
-NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "cfb_team_points", "cfb_game_total"}
+# actually final yet" check itself (CFBD's own "completed" flag, api.
+# nfldata.org's own game_type+scores check, or - for NFL Passing Yards -
+# the permanent "not gradeable" case).
+NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "cfb_team_points", "cfb_game_total",
+                          "nfl_team_points", "nfl_game_total"}
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -189,6 +208,64 @@ def _cfb_game_total_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | No
     return None
 
 
+def _nfl_week_games(bet_season: int, bet_week: int, nfl_games_cache: dict) -> list | None:
+    """Shared fetch+cache helper for both NFL Team Points and NFL Game
+    Total grading - keyed the same way as CFB's cache, just against
+    nfl_points_sync's own get_week_games. None means the fetch failed."""
+    cache_key = (bet_season, bet_week)
+    if cache_key not in nfl_games_cache:
+        try:
+            nfl_games_cache[cache_key] = nfl_points_sync.get_week_games(bet_season, bet_week)
+        except Exception:
+            log.exception("Failed to fetch NFL week %s/%s games for grading", bet_season, bet_week)
+            nfl_games_cache[cache_key] = None
+    return nfl_games_cache[cache_key]
+
+
+def _nfl_team_points_actual(bet: TrackedBet, nfl_games_cache: dict) -> float | None:
+    """Real final points for this NFL Team Points bet's team, fetched
+    fresh from api.nfldata.org for the bet's own recorded season/week -
+    see module docstring. team_side holds the team's own NAME (there's
+    no numeric game id to match by, unlike CFB - see models_db.py's
+    TrackedBet docstring). None if the season/week weren't recorded, the
+    team can't be found in that week's real schedule, or that game isn't
+    a completed REG game yet."""
+    if bet.nfl_season is None or bet.nfl_week is None or not bet.team_side:
+        return None
+    games = _nfl_week_games(bet.nfl_season, bet.nfl_week, nfl_games_cache)
+    if games is None:
+        return None
+    for game in games:
+        if not nfl_points_sync.is_completed_reg(game):
+            continue
+        if game.get("home_team") == bet.team_side:
+            return float(game["home_score"])
+        if game.get("away_team") == bet.team_side:
+            return float(game["away_score"])
+    return None
+
+
+def _nfl_game_total_actual(bet: TrackedBet, nfl_games_cache: dict) -> float | None:
+    """Real final COMBINED points (home + away) for this NFL Game Total
+    bet, fetched fresh from api.nfldata.org for the bet's own recorded
+    season/week - same cache/fetch as _nfl_team_points_actual, but this
+    bet type's team_side instead holds an "AWAY@HOME" pair string (e.g.
+    "BUF@KC" - see models_db.py's TrackedBet docstring), matched against
+    that exact away_team/home_team pair rather than a single team name."""
+    if bet.nfl_season is None or bet.nfl_week is None or not bet.team_side or "@" not in bet.team_side:
+        return None
+    away_team, home_team = bet.team_side.split("@", 1)
+    games = _nfl_week_games(bet.nfl_season, bet.nfl_week, nfl_games_cache)
+    if games is None:
+        return None
+    for game in games:
+        if not nfl_points_sync.is_completed_reg(game):
+            continue
+        if game.get("home_team") == home_team and game.get("away_team") == away_team:
+            return float(game["home_score"] + game["away_score"])
+    return None
+
+
 def _player_game_stats(boxscore: dict, team_side: str, player_id: int) -> dict | None:
     """This player's own per-game stats from a boxscore response - the
     same 'players' dict extract_boxscore_lineup already reads for
@@ -202,7 +279,7 @@ def _player_game_stats(boxscore: dict, team_side: str, player_id: int) -> dict |
     return stats if stats else None
 
 
-def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_cache: dict) -> float | None:
+def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_cache: dict, nfl_games_cache: dict) -> float | None:
     """Returns the real outcome for one bet, in whatever unit its
     bet_type uses. None means "can't grade yet" (data not available),
     NOT "the outcome was zero" - callers must check for None explicitly."""
@@ -224,6 +301,12 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
         # No working per-game data source exists for this - see module
         # docstring. Left pending indefinitely rather than guessed at.
         return None
+
+    if bet.bet_type == "nfl_team_points":
+        return _nfl_team_points_actual(bet, nfl_games_cache)
+
+    if bet.bet_type == "nfl_game_total":
+        return _nfl_game_total_actual(bet, nfl_games_cache)
 
     # Self-heal: a bug (now fixed) in the Pitcher K tracking UI never
     # sent the pitcher's id, only their name - any bet caught by that
@@ -299,6 +382,7 @@ def grade_pending_bets() -> dict:
         pending = db.query(TrackedBet).filter_by(resolved=False).all()
         boxscore_cache = {}
         cfb_games_cache = {}
+        nfl_games_cache = {}
         graded, wins, losses, still_pending = 0, 0, 0, 0
 
         for bet in pending:
@@ -324,7 +408,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            actual = _actual_value_for_bet(db, bet, boxscore_cache, cfb_games_cache)
+            actual = _actual_value_for_bet(db, bet, boxscore_cache, cfb_games_cache, nfl_games_cache)
             if actual is None:
                 still_pending += 1
                 continue

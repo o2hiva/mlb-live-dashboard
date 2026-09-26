@@ -227,6 +227,16 @@ class TrackedBet(Base):
     cfb_season = Column(Integer, nullable=True)
     cfb_week = Column(Integer, nullable=True)
 
+    # NFL Team Points / Game Total only: season/week needed to re-fetch this
+    # week's real games from api.nfldata.org at grading time (that API has no
+    # per-game numeric id to store the way CFBD's game_id does above) - see
+    # bet_grading.py's _nfl_team_points_actual / _nfl_game_total_actual.
+    # team_side is repurposed here too: holds the team's own name (e.g. "KC")
+    # for nfl_team_points, or an "AWAY@HOME" pair string (e.g. "BUF@KC") for
+    # nfl_game_total - not "home"/"away" like the MLB/CFB bet types use it.
+    nfl_season = Column(Integer, nullable=True)
+    nfl_week = Column(Integer, nullable=True)
+
 
 class LineupBatter(Base):
     """One confirmed starting batter for one game/side, in real batting
@@ -370,6 +380,42 @@ class CfbGame(Base):
     opponent = Column(String)
     game_id = Column(Integer, nullable=True)
     is_home = Column(Boolean, default=False)  # was `team` the home side of game_id - needed so a tracked bet can send the correct team_side for grading
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflTeamPointsStat(Base):
+    """One NFL team's real season-to-date points-scored and points-allowed
+    totals, rebuilt from scratch by nfl_points_sync.refresh_nfl_points_stats
+    every time it's called - exact, same as CfbTeamPointsStat (api.nfldata.org's
+    /v1/games gives real completed-game scores directly, same as CFBD - this
+    prop needs no per-game estimation, unlike NFL Passing Yards' NflTeamAllowedStat
+    above, which DOES estimate because no exact per-game passing breakdown exists).
+    Kept as its OWN table (not reusing NflTeamAllowedStat) since that one tracks
+    passing yards allowed, a completely different stat, for a different prop."""
+    __tablename__ = "nfl_team_points_stats"
+
+    team = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    points_scored_sum = Column(Integer, default=0)
+    points_allowed_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflPointsGame(Base):
+    """This week's real matchups for the NFL Team Points / Game Total prop -
+    same pattern as CfbGame, kept as its OWN table (not reusing the existing
+    NflGame, which the Passing Yards prop already refreshes independently and
+    doesn't carry is_home). Unlike CfbGame, there's no numeric game_id here -
+    api.nfldata.org's /v1/games has no per-game id field, so grading instead
+    re-fetches the week's games and matches by team name directly (see
+    bet_grading.py's _nfl_team_points_actual / _nfl_game_total_actual)."""
+    __tablename__ = "nfl_points_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    is_home = Column(Boolean, default=False)
     season = Column(Integer)
     week = Column(Integer)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

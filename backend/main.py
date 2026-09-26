@@ -67,6 +67,8 @@ _ensure_column("batter_platoon_splits", "bat_side", "VARCHAR")
 _ensure_column("batter_platoon_splits", "bat_side_updated_at", "TIMESTAMP")
 _ensure_column("tracked_bets", "cfb_season", "INTEGER")
 _ensure_column("tracked_bets", "cfb_week", "INTEGER")
+_ensure_column("tracked_bets", "nfl_season", "INTEGER")
+_ensure_column("tracked_bets", "nfl_week", "INTEGER")
 
 _scheduler = None
 
@@ -822,6 +824,60 @@ def cfb_games(db: Session = Depends(get_db)):
     return {"games": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/refresh-nfl-points-stats")
+def manual_refresh_nfl_points_stats(season: int, week: int):
+    """
+    Manually triggers the NFL Team Points sync for a given season/
+    current-week - same "no auto-detection of the current week"
+    reasoning as CFB's refresh endpoint (byes/irregular schedules make
+    that fragile to guess). Rebuilds every team's real season-to-date
+    scored/allowed totals from api.nfldata.org directly (weeks
+    1..week), then refreshes this week's real matchups.
+    """
+    import nfl_points_sync
+    summary = nfl_points_sync.refresh_nfl_points_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/nfl/points-games")
+def nfl_points_games(db: Session = Depends(get_db)):
+    """
+    Every team's real current-week matchup and predicted points, from
+    whatever the last /api/admin/refresh-nfl-points-stats call
+    populated. Mirrors /api/cfb/games's shape exactly (same frontend
+    card-grouping code handles both), except NFL has no numeric
+    per-game id from the API - so each row's "game_id" here is a
+    synthetic sorted-team-pair string (e.g. "BUF|KC"), stable and
+    identical for both sides of the same matchup either way it's
+    computed, which is all the frontend's grouping-by-game_id needs.
+    """
+    from models_db import NflPointsGame
+    import nfl_points_sync
+
+    games = db.query(NflPointsGame).all()
+    if not games:
+        return {"games": [], "season": None, "week": None}
+
+    league_avg = nfl_points_sync.get_league_avg_points(db)
+
+    rows = []
+    for g in games:
+        inputs = nfl_points_sync.compute_nfl_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
+        rows.append({
+            "team": g.team,
+            "opponent": g.opponent,
+            "game_id": "|".join(sorted([g.team, g.opponent])),
+            "is_home": g.is_home,
+            "predicted_mean": inputs["mean"] if inputs else None,
+            "team_index": inputs["team_index"] if inputs else None,
+            "opp_index": inputs["opp_index"] if inputs else None,
+            "team_games_sample": inputs["team_games_sample"] if inputs else None,
+            "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+        })
+
+    return {"games": rows, "season": games[0].season, "week": games[0].week}
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """
@@ -947,6 +1003,8 @@ class TrackedBetCreate(BaseModel):
     potential_profit: float | None = None
     cfb_season: int | None = None  # CFB team-points bets only - needed to re-fetch the real final score at grading time
     cfb_week: int | None = None
+    nfl_season: int | None = None  # NFL team-points/game-total bets only - needed to re-fetch that week's real games at grading time (no numeric id to store, see nfl_points_sync.py)
+    nfl_week: int | None = None
 
 
 @app.post("/api/bet-tracker/track")
