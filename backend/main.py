@@ -2,7 +2,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 from datetime import date
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -976,6 +976,32 @@ def untrack_bet(tracked_bet_id: int, db: Session = Depends(get_db)):
         db.delete(row)
         db.commit()
     return {"status": "removed"}
+
+
+@app.post("/api/admin/manual-resolve-bet/{tracked_bet_id}")
+def manual_resolve_bet(tracked_bet_id: int, result: str, actual_value: float | None = None, db: Session = Depends(get_db)):
+    """
+    Manually marks a tracked bet win/loss/push - an escape hatch for bets
+    the automated grader can never reach (e.g. nfl_passing_yards, which
+    has no working per-game data source at all - see bet_grading.py's
+    module docstring) or any other one-off case that needs a human call.
+    Once resolved=True here, grade_pending_bets() will never touch this
+    row again (it only queries resolved=False), so this is a one-way,
+    permanent override - there's no "undo" endpoint, just re-run this
+    with a different result if a mistake needs correcting.
+    """
+    if result not in ("win", "loss", "push"):
+        raise HTTPException(status_code=400, detail="result must be 'win', 'loss', or 'push'")
+    from models_db import TrackedBet
+    row = db.get(TrackedBet, tracked_bet_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="tracked bet not found")
+    row.resolved = True
+    row.result = result
+    if actual_value is not None:
+        row.actual_value = actual_value
+    db.commit()
+    return {"id": row.id, "resolved": row.resolved, "result": row.result, "actual_value": row.actual_value}
 
 
 @app.get("/api/bet-tracker/tracked")
