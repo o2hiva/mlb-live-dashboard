@@ -78,7 +78,7 @@ log = logging.getLogger("bet_grading")
 # _actual_value_for_bet, which handles their own real-world "is this
 # actually final yet" check itself (CFBD's own "completed" flag, or -
 # for NFL - the permanent "not gradeable" case).
-NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "cfb_team_points"}
+NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "cfb_team_points", "cfb_game_total"}
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -162,6 +162,33 @@ def _cfb_team_points_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | N
     return None
 
 
+def _cfb_game_total_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | None:
+    """Real final COMBINED points (home + away) for this CFB Game Total
+    bet, fetched fresh from CFBD for the bet's own recorded season/week -
+    same cache and lookup-by-game-id as _cfb_team_points_actual, but this
+    bet type has no team_side (it's a whole-game total, not one side's
+    score), so both homePoints and awayPoints are summed directly."""
+    if bet.cfb_season is None or bet.cfb_week is None or bet.batter_id is None:
+        return None
+    cache_key = (bet.cfb_season, bet.cfb_week)
+    if cache_key not in cfb_games_cache:
+        try:
+            cfb_games_cache[cache_key] = cfb_points_sync.get_week_games(bet.cfb_season, bet.cfb_week)
+        except Exception:
+            log.exception("Failed to fetch CFB week %s/%s games for grading", bet.cfb_season, bet.cfb_week)
+            cfb_games_cache[cache_key] = None
+    games = cfb_games_cache[cache_key]
+    if games is None:
+        return None
+    for game in games:
+        if game.get("id") == bet.batter_id:
+            if not game.get("completed"):
+                return None
+            home_pts, away_pts = game.get("homePoints"), game.get("awayPoints")
+            return None if home_pts is None or away_pts is None else float(home_pts + away_pts)
+    return None
+
+
 def _player_game_stats(boxscore: dict, team_side: str, player_id: int) -> dict | None:
     """This player's own per-game stats from a boxscore response - the
     same 'players' dict extract_boxscore_lineup already reads for
@@ -189,6 +216,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
 
     if bet.bet_type == "cfb_team_points":
         return _cfb_team_points_actual(bet, cfb_games_cache)
+
+    if bet.bet_type == "cfb_game_total":
+        return _cfb_game_total_actual(bet, cfb_games_cache)
 
     if bet.bet_type == "nfl_passing_yards":
         # No working per-game data source exists for this - see module

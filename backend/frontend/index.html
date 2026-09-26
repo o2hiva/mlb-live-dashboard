@@ -1725,6 +1725,7 @@
     { label: "Pitcher K's", filter: b => b.bet_type === "pitcher_k" },
     { label: "P-Hits", filter: b => b.bet_type === "pitcher_hits_allowed" },
     { label: "CFB Points", filter: b => b.bet_type === "cfb_team_points" },
+    { label: "CFB Total", filter: b => b.bet_type === "cfb_game_total" },
   ];
 
   function hitRateFor(bets) {
@@ -2499,7 +2500,15 @@
   // ">=" grading rule - NOT core_ncaa_points.py's raw "strictly over"
   // semantics, so the displayed Yes% always matches how the bet is graded. ----
   const CFB_TEAM_POINTS_OVERDISPERSION = 5.2;
+  // Game-total overdispersion is DIFFERENT from the single-team value above
+  // - validated separately in core_ncaa_points.py (DEFAULT_GAME_TOTAL_OVERDISPERSION)
+  // via a direct sweep of standardized residuals on 540 real 2025 full games
+  // (sd_z = 1.007), NOT assumed from summing two independent team
+  // distributions - the two markets need different overdispersion because a
+  // game total sums two teams' variance, which changes its shape.
+  const CFB_GAME_TOTAL_OVERDISPERSION = 4.6;
   const cfbBetState = {};
+  const cfbTotalBetState = {};
 
   function getCfbBetState(team) {
     if (!cfbBetState[team]) {
@@ -2513,6 +2522,77 @@
     const p = 1 / CFB_TEAM_POINTS_OVERDISPERSION;
     const r = mean / (CFB_TEAM_POINTS_OVERDISPERSION - 1);
     return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
+  function getCfbTotalBetState(gameId) {
+    if (!cfbTotalBetState[gameId]) {
+      cfbTotalBetState[gameId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 50 };
+    }
+    return cfbTotalBetState[gameId];
+  }
+
+  function probCfbTotalAtLeast(mean, line) {
+    if (mean == null) return null;
+    // Same r/p Negative Binomial conversion as probCfbPointsAtLeast, just
+    // with the game-total-specific overdispersion (4.6, not 5.2) - see the
+    // constant's comment above for why they differ.
+    const p = 1 / CFB_GAME_TOTAL_OVERDISPERSION;
+    const r = mean / (CFB_GAME_TOTAL_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
+  function updateCfbTotalThreshold(gameId, value) {
+    const state = getCfbTotalBetState(gameId);
+    state.threshold = Math.max(1, parseInt(value, 10) || 50);
+    renderCfbFromCache();
+  }
+
+  function updateCfbTotalBetField(gameId, field, value) {
+    const state = getCfbTotalBetState(gameId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderCfbFromCache();
+  }
+
+  async function toggleCfbTotalTrack(gameId, checked, homeTeam, awayTeam, line, modelProb, marketPct, wager, profit) {
+    const state = getCfbTotalBetState(gameId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "cfb_game_total",
+            batter_id: gameId,
+            batter_name: `${awayTeam} @ ${homeTeam} - Total Points`,
+            line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            cfb_season: cfbDataCache ? cfbDataCache.season : null,
+            cfb_week: cfbDataCache ? cfbDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderCfbFromCache();
   }
 
   function updateCfbThreshold(team, value) {
@@ -2666,12 +2746,71 @@
       </div>`;
   }
 
-  function cfbCardHtml(pair, season, week) {
+  // ---- Combined game total (home + away predicted points) - the sum of
+  // the two already-computed team predictions above, using the SEPARATE
+  // validated game-total overdispersion (see CFB_GAME_TOTAL_OVERDISPERSION).
+  // predicted_home + predicted_away here is exactly core_ncaa_points.py's
+  // own ncaa_game_total_probability() predicted_total (predict_team_points
+  // called once per side, cross-multiplying each team's own scoring index
+  // against the other's allowed index) - no separate backend endpoint
+  // needed since /api/cfb/games already returns both sides' predicted_mean. ----
+  function cfbTotalRowHtml(gameId, homeRow, awayRow) {
+    if (!homeRow || !awayRow || homeRow.predicted_mean == null || awayRow.predicted_mean == null) {
+      return `
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+          <div class="teams"><span>Total Points</span></div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const totalMean = homeRow.predicted_mean + awayRow.predicted_mean;
+    const state = getCfbTotalBetState(gameId);
+    const line = state.threshold;
+    const yesPct = probCfbTotalAtLeast(totalMean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbTotalBetField(${gameId},'manualWager',this.value)" />`;
+    const trackArgs = `${gameId},this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+        <div class="teams">
+          <span>Total Points</span>
+          <span class="score">${Math.round(totalMean)}</span>
+        </div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbTotalThreshold(${gameId},this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateCfbTotalBetField(${gameId},'yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbTotalBetField(${gameId},'market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbTotalBetField(${gameId},'useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTotalTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  function cfbCardHtml(gameId, pair, season, week) {
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week}</div>
         ${cfbTeamBlockHtml(pair.away, false)}
         ${cfbTeamBlockHtml(pair.home, true)}
+        ${cfbTotalRowHtml(gameId, pair.home, pair.away)}
       </div>`;
   }
 
@@ -2693,8 +2832,8 @@
       byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
     }
 
-    const cards = Array.from(byGame.values())
-      .map(pair => cfbCardHtml(pair, cfbDataCache.season, cfbDataCache.week))
+    const cards = Array.from(byGame.entries())
+      .map(([gameId, pair]) => cfbCardHtml(gameId, pair, cfbDataCache.season, cfbDataCache.week))
       .join("");
 
     container.innerHTML = `<div class="grid">${cards}</div>`;
