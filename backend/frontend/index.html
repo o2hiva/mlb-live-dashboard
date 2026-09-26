@@ -136,6 +136,7 @@
   <div class="tabs">
     <span id="tab-btn-mlb" class="tab-btn active" onclick="switchTab('mlb')">MLB</span>
     <span id="tab-btn-nfl" class="tab-btn" onclick="switchTab('nfl')">NFL</span>
+    <span id="tab-btn-cfb" class="tab-btn" onclick="switchTab('cfb')">CFB</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
   </div>
 
@@ -210,6 +211,10 @@
 
       <div id="nfl-content">Loading...</div>
     </div>
+  </div>
+
+  <div id="tab-content-cfb" style="display:none;">
+    <div class="sub">College Football props are coming soon.</div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -1648,9 +1653,11 @@
   function switchTab(tab) {
     document.getElementById("tab-content-mlb").style.display = tab === "mlb" ? "block" : "none";
     document.getElementById("tab-content-nfl").style.display = tab === "nfl" ? "block" : "none";
+    document.getElementById("tab-content-cfb").style.display = tab === "cfb" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
+    document.getElementById("tab-btn-cfb").classList.toggle("active", tab === "cfb");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     if (tab === "bettracker") {
       loadBetTrackerSettings();
