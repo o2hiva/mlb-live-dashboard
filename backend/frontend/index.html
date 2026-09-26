@@ -2643,7 +2643,7 @@
       <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
         <div class="teams">
           <span>${row.team} (${sideLabel})</span>
-          <span class="score">${row.predicted_mean.toFixed(1)}</span>
+          <span class="score">${Math.round(row.predicted_mean)}</span>
         </div>
         <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
