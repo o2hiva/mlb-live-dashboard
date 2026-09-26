@@ -218,6 +218,15 @@ class TrackedBet(Base):
     actual_value = Column(Float, nullable=True)  # the real outcome, in whatever unit this bet_type uses (hits count, HRR total, HR count 0/1, strikeouts, or 1.0/0.0 for first_inning_run)
     result = Column(String, nullable=True)  # "win" / "loss" / "push"
 
+    # CFB-only: season/week needed to re-fetch this specific game's real
+    # final score from CFBD at grading time (CFBD's /games endpoint is
+    # queried by year+week, not by a single game id - see bet_grading.py's
+    # _cfb_team_points_actual). batter_id holds CFBD's own game_id and
+    # team_side holds "home"/"away" for which side of that game this bet's
+    # team was on - reusing existing columns rather than adding more.
+    cfb_season = Column(Integer, nullable=True)
+    cfb_week = Column(Integer, nullable=True)
+
 
 class LineupBatter(Base):
     """One confirmed starting batter for one game/side, in real batting
@@ -323,6 +332,44 @@ class NflGame(Base):
 
     team = Column(String, primary_key=True)
     opponent = Column(String)
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# CFB Team Points prop - second non-MLB prop in this dashboard. Unlike NFL,
+# CFBD's /games endpoint gives real per-game final scores directly, so no
+# estimation workaround is needed - see cfb_points_sync.py's module docstring.
+# ---------------------------------------------------------------------------
+
+class CfbTeamPointsStat(Base):
+    """One FBS team's real season-to-date points-scored and points-allowed
+    totals (FBS-vs-FBS games only), rebuilt from scratch by
+    cfb_points_sync.refresh_cfb_points_stats every time it's called -
+    always exact, since CFBD gives real completed-game scores directly
+    (no per-game reconstruction/estimation needed, unlike NFL)."""
+    __tablename__ = "cfb_team_points_stats"
+
+    team = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    points_scored_sum = Column(Integer, default=0)
+    points_allowed_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CfbGame(Base):
+    """This week's real matchups - team/opponent pairs for the CURRENT
+    week only (refreshed each sync, not accumulated - same pattern as
+    NflGame). game_id is CFBD's own numeric game id, kept here so a
+    tracked bet on this game can be graded later by refetching that
+    exact game's final score from CFBD (see bet_grading.py)."""
+    __tablename__ = "cfb_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    game_id = Column(Integer, nullable=True)
+    is_home = Column(Boolean, default=False)  # was `team` the home side of game_id - needed so a tracked bet can send the correct team_side for grading
     season = Column(Integer)
     week = Column(Integer)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

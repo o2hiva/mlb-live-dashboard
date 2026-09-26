@@ -214,7 +214,27 @@
   </div>
 
   <div id="tab-content-cfb" style="display:none;">
-    <div class="sub">College Football props are coming soon.</div>
+    <div class="tabs">
+      <span id="subtab-btn-cfb-points" class="tab-btn active" onclick="switchCfbSubTab('points')">Team Points</span>
+    </div>
+
+    <div id="subtab-content-cfb-points">
+      <div class="sub">CFB Team Points - current week's real matchups, each team's predicted points scored (FBS-vs-FBS only).</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
+          <input id="cfb-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+        </div>
+        <div>
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+          <input id="cfb-week-input" type="number" step="1" min="1" max="15" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+        </div>
+        <span class="hits-toggle" onclick="refreshCfbStats()" style="padding:6px 14px;">Refresh Stats</span>
+      </div>
+      <div id="cfb-refresh-status" class="settings-hint"></div>
+
+      <div id="cfb-content">Loading...</div>
+    </div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -1664,6 +1684,8 @@
       loadTrackedBets();
     } else if (tab === "nfl") {
       loadNflTab();
+    } else if (tab === "cfb") {
+      loadCfbTab();
     }
     // "mlb" needs nothing extra here - its own sub-tabs (switchMlbSubTab)
     // handle their own loading, and "Live Games" (the default MLB
@@ -1687,6 +1709,13 @@
     // more NFL props get added, matching MLB's own sub-tab structure.
   }
 
+  function switchCfbSubTab(subtab) {
+    document.getElementById("subtab-content-cfb-points").style.display = subtab === "points" ? "block" : "none";
+    document.getElementById("subtab-btn-cfb-points").classList.toggle("active", subtab === "points");
+    // Only one CFB sub-tab exists today - stays ready for Combined
+    // Total / Passing Yards, matching NFL's own sub-tab structure.
+  }
+
   const HIT_RATE_CATEGORIES = [
     { label: "YRFI", filter: b => b.bet_type === "first_inning_run" && b.yn === "yes" },
     { label: "NRFI", filter: b => b.bet_type === "first_inning_run" && b.yn === "no" },
@@ -1695,6 +1724,7 @@
     { label: "HR", filter: b => b.bet_type === "hr" },
     { label: "Pitcher K's", filter: b => b.bet_type === "pitcher_k" },
     { label: "P-Hits", filter: b => b.bet_type === "pitcher_hits_allowed" },
+    { label: "CFB Points", filter: b => b.bet_type === "cfb_team_points" },
   ];
 
   function hitRateFor(bets) {
@@ -1726,13 +1756,14 @@
     container.innerHTML = html;
   }
 
-  // Every NFL bet_type is "nfl_passing_yards"; everything else tracked so
-  // far ("hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed",
-  // "first_inning_run", "game_lines_*") is MLB. Add new sports here as
-  // they're wired into the tracker.
+  // Explicit per-sport bet_type lists, NOT "everything else is MLB" -
+  // that fallback silently mis-bucketed any new sport added later (bit
+  // us once already when CFB was added). Add new bet_types to the
+  // right sport's filter here whenever a new prop ships.
   const SPORT_CATEGORIES = [
-    { label: "MLB", filter: b => b.bet_type !== "nfl_passing_yards" },
+    { label: "MLB", filter: b => ["hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed", "first_inning_run"].includes(b.bet_type) || b.bet_type.startsWith("game_lines_") },
     { label: "NFL", filter: b => b.bet_type === "nfl_passing_yards" },
+    { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
   ];
 
   function renderSportHitRateBoxes(bets) {
@@ -2451,6 +2482,189 @@
           ${wagerHtml}
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
           <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTrack(${trackArgs})" />
+        </div>`;
+    }).join("");
+
+    container.innerHTML = header + rows;
+  }
+
+  // ---- CFB Team Points prop - second non-MLB prop in this dashboard.
+  // Negative Binomial (overdispersion 5.2, verbatim from
+  // core_ncaa_points.py, validated on the full 2025 season), same r/p
+  // conversion + nbinomSf reuse as HRR/Game Lines. UNLIKE NFL, this IS
+  // gradeable - CFBD's /games endpoint gives real final scores directly,
+  // so cfb_season/cfb_week are sent along with the track request for
+  // bet_grading.py to look the game back up later. "At least N" convention
+  // (Math.ceil(line)-1), matching every other prop and bet_grading's own
+  // ">=" grading rule - NOT core_ncaa_points.py's raw "strictly over"
+  // semantics, so the displayed Yes% always matches how the bet is graded. ----
+  const CFB_TEAM_POINTS_OVERDISPERSION = 5.2;
+  const cfbBetState = {};
+
+  function getCfbBetState(team) {
+    if (!cfbBetState[team]) {
+      cfbBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 24 };
+    }
+    return cfbBetState[team];
+  }
+
+  function probCfbPointsAtLeast(mean, line) {
+    if (mean == null) return null;
+    const p = 1 / CFB_TEAM_POINTS_OVERDISPERSION;
+    const r = mean / (CFB_TEAM_POINTS_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
+  function updateCfbThreshold(team, value) {
+    const state = getCfbBetState(team);
+    state.threshold = Math.max(1, parseInt(value, 10) || 24);
+    renderCfbFromCache();
+  }
+
+  function updateCfbBetField(team, field, value) {
+    const state = getCfbBetState(team);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderCfbFromCache();
+  }
+
+  async function toggleCfbTrack(team, checked, opponent, side, line, modelProb, marketPct, wager, profit) {
+    const state = getCfbBetState(team);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "cfb_team_points",
+            batter_id: cfbDataCache ? cfbDataCache.games.find(g => g.team === team)?.game_id : null,
+            batter_name: `${team} (vs ${opponent}) - Team Points`,
+            team_side: side, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            cfb_season: cfbDataCache ? cfbDataCache.season : null,
+            cfb_week: cfbDataCache ? cfbDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderCfbFromCache();
+  }
+
+  let cfbDataCache = null;
+
+  async function loadCfbTab() {
+    const container = document.getElementById("cfb-content");
+    container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/cfb/games`);
+      cfbDataCache = await res.json();
+      if (cfbDataCache.season != null) document.getElementById("cfb-season-input").value = cfbDataCache.season;
+      if (cfbDataCache.week != null) document.getElementById("cfb-week-input").value = cfbDataCache.week;
+      renderCfbFromCache();
+    } catch (e) {
+      container.innerHTML = `<div class="settings-hint">Couldn't load CFB data.</div>`;
+    }
+  }
+
+  async function refreshCfbStats() {
+    const season = document.getElementById("cfb-season-input").value;
+    const week = document.getElementById("cfb-week-input").value;
+    if (!season || !week) {
+      document.getElementById("cfb-refresh-status").textContent = "Enter both a season and a week first.";
+      return;
+    }
+    const statusEl = document.getElementById("cfb-refresh-status");
+    statusEl.textContent = `Refreshing CFB stats for ${season} week ${week} - this fetches real data and can take a little while...`;
+    try {
+      await fetch(`${API_BASE}/api/admin/refresh-cfb-stats?season=${season}&week=${week}`);
+      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
+      loadCfbTab();
+    } catch (e) {
+      statusEl.textContent = "Refresh failed - check the season/week and try again.";
+    }
+  }
+
+  function renderCfbFromCache() {
+    const container = document.getElementById("cfb-content");
+    if (!cfbDataCache) return;
+    const games = cfbDataCache.games || [];
+    if (!games.length) {
+      container.innerHTML = `<div class="settings-hint">No CFB data yet - enter a season/week above and click Refresh Stats.</div>`;
+      return;
+    }
+
+    const header = `
+      <div class="nfl-row nfl-row-header">
+        <span>Team</span><span>Opponent</span><span>Mean</span><span>Index</span>
+        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
+        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+
+    const rows = games.map(g => {
+      if (g.predicted_mean == null) {
+        return `
+          <div class="nfl-row" style="grid-template-columns: 150px 150px 60px 92px 46px 38px 38px 52px 58px 36px 66px 54px 46px;">
+            <span>${g.team}</span><span>${g.opponent}</span>
+            <span>Not enough data</span><span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span>
+          </div>`;
+      }
+      // Which side of game_id this team was on - sent as team_side so
+      // bet_grading.py knows whether to read homePoints or awayPoints
+      // back from CFBD when grading this bet later.
+      const side = g.is_home ? "home" : "away";
+      const state = getCfbBetState(g.team);
+      const line = state.threshold;
+      const yesPct = probCfbPointsAtLeast(g.predicted_mean, line) * 100;
+      const noPct = 100 - yesPct;
+      const modelPct = state.yn === "yes" ? yesPct : noPct;
+      const modelProb = modelPct != null ? modelPct / 100 : null;
+      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+      const profit = profitIfWon(wager, state.market);
+      const marketVal = state.market != null ? state.market : "";
+      const wagerHtml = state.useKelly
+        ? `<span>$${wager.toFixed(2)}</span>`
+        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbBetField('${g.team}','manualWager',this.value)" />`;
+      const trackArgs = `'${g.team}',this.checked,'${(g.opponent || "").replace(/'/g, "\\'")}','${side}',${line},${modelProb},${state.market},${wager},${profit}`;
+      const teamIndexStr = g.team_index != null ? g.team_index.toFixed(2) : "—";
+      const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
+
+      return `
+        <div class="nfl-row" style="grid-template-columns: 150px 150px 60px 92px 46px 38px 38px 52px 58px 36px 66px 54px 46px;">
+          <span>${g.team}</span>
+          <span>${g.opponent}</span>
+          <span>${g.predicted_mean.toFixed(1)}</span>
+          <span>${teamIndexStr} vs ${oppIndexStr}</span>
+          <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbThreshold('${g.team}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateCfbBetField('${g.team}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbBetField('${g.team}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbBetField('${g.team}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTrack(${trackArgs})" />
         </div>`;
     }).join("");
 

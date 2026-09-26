@@ -65,6 +65,8 @@ _ensure_column("pitcher_hits_stats", "bb_allowed", "INTEGER DEFAULT 0")
 _ensure_column("pitcher_hits_stats", "runs_allowed", "INTEGER DEFAULT 0")
 _ensure_column("batter_platoon_splits", "bat_side", "VARCHAR")
 _ensure_column("batter_platoon_splits", "bat_side_updated_at", "TIMESTAMP")
+_ensure_column("tracked_bets", "cfb_season", "INTEGER")
+_ensure_column("tracked_bets", "cfb_week", "INTEGER")
 
 _scheduler = None
 
@@ -770,6 +772,56 @@ def nfl_games(db: Session = Depends(get_db)):
     return {"games": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/refresh-cfb-stats")
+def manual_refresh_cfb_stats(season: int, week: int):
+    """
+    Manually triggers the CFB Team Points sync for a given season/
+    current-week - same "no auto-detection of the current week"
+    reasoning as the NFL refresh endpoint (byes and irregular schedules
+    make that fragile to guess). Rebuilds every FBS team's real
+    season-to-date scored/allowed totals from CFBD directly (weeks
+    1..week), then refreshes this week's real matchups.
+    """
+    import cfb_points_sync
+    summary = cfb_points_sync.refresh_cfb_points_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/cfb/games")
+def cfb_games(db: Session = Depends(get_db)):
+    """
+    Every team's real current-week matchup and predicted points, from
+    whatever the last /api/admin/refresh-cfb-stats call populated.
+    Unlike NFL, this is exact (not an estimation) - CFBD's real
+    per-game final scores feed the history directly.
+    """
+    from models_db import CfbGame
+    import cfb_points_sync
+
+    games = db.query(CfbGame).all()
+    if not games:
+        return {"games": [], "season": None, "week": None}
+
+    league_avg = cfb_points_sync.get_league_avg_points(db)
+
+    rows = []
+    for g in games:
+        inputs = cfb_points_sync.compute_cfb_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
+        rows.append({
+            "team": g.team,
+            "opponent": g.opponent,
+            "game_id": g.game_id,
+            "is_home": g.is_home,
+            "predicted_mean": inputs["mean"] if inputs else None,
+            "team_index": inputs["team_index"] if inputs else None,
+            "opp_index": inputs["opp_index"] if inputs else None,
+            "team_games_sample": inputs["team_games_sample"] if inputs else None,
+            "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+        })
+
+    return {"games": rows, "season": games[0].season, "week": games[0].week}
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """
@@ -893,6 +945,8 @@ class TrackedBetCreate(BaseModel):
     market_probability: float | None = None
     wager: float | None = None
     potential_profit: float | None = None
+    cfb_season: int | None = None  # CFB team-points bets only - needed to re-fetch the real final score at grading time
+    cfb_week: int | None = None
 
 
 @app.post("/api/bet-tracker/track")
