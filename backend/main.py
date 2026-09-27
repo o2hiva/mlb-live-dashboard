@@ -774,6 +774,65 @@ def nfl_games(db: Session = Depends(get_db)):
     return {"games": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/refresh-nfl-rushing-stats")
+def manual_refresh_nfl_rushing_stats(season: int, week: int):
+    """
+    Manually triggers the NFL Rushing Yards sync for a given
+    season/current-week - same "no auto-detection of the current week"
+    reasoning as every other NFL admin trigger. Rebuilds every
+    qualifying RB's real season-to-date carries/yards/games from
+    api.nfldata.org directly (exact, no estimation needed - see
+    nfl_rushing_yards_sync.py's module docstring), then refreshes this
+    week's real matchups for display.
+    """
+    import nfl_rushing_yards_sync
+    summary = nfl_rushing_yards_sync.refresh_nfl_rushing_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/nfl/rushing-games")
+def nfl_rushing_games(db: Session = Depends(get_db)):
+    """
+    Every qualifying RB's real season-to-date rushing average and this
+    week's real opponent, from whatever the last
+    /api/admin/refresh-nfl-rushing-stats call populated. Unlike
+    /api/nfl/games (one row per team, guessing a single starter), this
+    returns one row per RB - a committee backfield naturally shows up
+    as multiple rows for the same team, by design (see
+    nfl_rushing_yards_sync.py's module docstring). An RB whose team
+    isn't in this week's schedule (bye week) is omitted, not guessed at.
+    """
+    from models_db import NflRbStat, NflRbGame
+    import nfl_rushing_yards_sync
+
+    rbs = db.query(NflRbStat).filter(NflRbStat.games >= nfl_rushing_yards_sync.MIN_PRIOR_GAMES).all()
+    if not rbs:
+        return {"rbs": [], "season": None, "week": None}
+
+    schedule = {g.team: g for g in db.query(NflRbGame).all()}
+
+    rows = []
+    season = week = None
+    for rb in rbs:
+        game = schedule.get(rb.team)
+        if game is None:
+            continue  # bye week, or team not in this week's real schedule
+        if season is None:
+            season, week = game.season, game.week
+        predicted_mean = (rb.total_yards / rb.games) if rb.games else None
+        rows.append({
+            "rb_name": rb.name,
+            "gsis_id": rb.gsis_id,
+            "team": rb.team,
+            "opponent": game.opponent,
+            "predicted_mean": predicted_mean,
+            "games_sample": rb.games,
+            "carries": rb.carries,
+        })
+
+    return {"rbs": rows, "season": season, "week": week}
+
+
 @app.get("/api/admin/refresh-cfb-stats")
 def manual_refresh_cfb_stats(season: int, week: int):
     """

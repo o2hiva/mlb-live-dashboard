@@ -347,6 +347,40 @@ class NflGame(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class NflRbStat(Base):
+    """One RB's real season-to-date rushing yards/carries/games total,
+    rebuilt from scratch by nfl_rushing_yards_sync.refresh_nfl_rushing_stats
+    every time it's called - exact (no estimation needed, same as
+    NflQbStat's own side), straight from /v1/stats/season. Kept as its
+    OWN table (not reusing NflQbStat) since this tracks a different
+    position/stat entirely and multiple RBs can qualify per team,
+    unlike the single-starter-per-team QB table."""
+    __tablename__ = "nfl_rb_stats"
+
+    gsis_id = Column(String, primary_key=True)
+    name = Column(String)
+    team = Column(String)  # most recent team on file - a traded/waived RB's most recent team is the relevant one
+    total_yards = Column(Integer, default=0)
+    carries = Column(Integer, default=0)
+    games = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflRbGame(Base):
+    """This week's real matchups - team/opponent pairs for the CURRENT
+    week only, same pattern as NflGame. Display-only here: the Rushing
+    Yards formula has no opponent adjustment (see
+    nfl_rushing_yards_sync.py's module docstring), so this table exists
+    only so each RB's card/row can show who their team is playing."""
+    __tablename__ = "nfl_rb_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ---------------------------------------------------------------------------
 # CFB Team Points prop - second non-MLB prop in this dashboard. Unlike NFL,
 # CFBD's /games endpoint gives real per-game final scores directly, so no

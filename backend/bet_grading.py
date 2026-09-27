@@ -55,6 +55,12 @@ DATA SOURCES, one per bet_type:
     against. These bets are intentionally left pending forever unless
     graded by hand (there is no automated grading path for them yet).
 
+  - "nfl_rushing_yards": NOT gradeable by this module, same reason and
+    same permanent status as nfl_passing_yards - re-confirmed dead
+    directly against the live API while building this prop (see
+    nfl_rushing_yards_sync.py's module docstring). Left pending
+    indefinitely unless graded by hand.
+
   - "nfl_team_points": fetches that bet's own season/week schedule
     fresh from api.nfldata.org (nfl_points_sync.get_week_games) and
     reads the real final home_score/away_score for whichever team
@@ -96,7 +102,7 @@ log = logging.getLogger("bet_grading")
 # actually final yet" check itself (CFBD's own "completed" flag, api.
 # nfldata.org's own game_type+scores check, or - for NFL Passing Yards -
 # the permanent "not gradeable" case).
-NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "cfb_team_points", "cfb_game_total",
+NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
                           "nfl_team_points", "nfl_game_total"}
 
 
@@ -299,6 +305,11 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
 
     if bet.bet_type == "nfl_passing_yards":
         # No working per-game data source exists for this - see module
+        # docstring. Left pending indefinitely rather than guessed at.
+        return None
+
+    if bet.bet_type == "nfl_rushing_yards":
+        # Same permanent limitation as nfl_passing_yards - see module
         # docstring. Left pending indefinitely rather than guessed at.
         return None
 
