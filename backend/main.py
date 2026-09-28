@@ -890,6 +890,70 @@ def nfl_qb_defense_props(db: Session = Depends(get_db)):
     return {"qbs": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/refresh-nfl-rb-defense-props-stats")
+def manual_refresh_nfl_rb_defense_props_stats(season: int, week: int):
+    """
+    Manually triggers the NFL "By Position" RB props sync (rushing
+    yards, rushing TDs, receiving yards, receiving TDs, total yards,
+    total TDs vs. each defense's RB-position-allowed history) for a
+    given season/current-week - same pattern as the QB version. See
+    nfl_rb_defense_props_sync.py's module docstring for the two-
+    separate-league-averages estimation approach this uses.
+    """
+    import nfl_rb_defense_props_sync
+    summary = nfl_rb_defense_props_sync.refresh_nfl_rb_defense_props_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/nfl/rb-defense-props")
+def nfl_rb_defense_props(db: Session = Depends(get_db)):
+    """
+    Every QUALIFYING RB's real current-week matchup and predicted
+    values for all six RB Defense-vs-Position props, from whatever the
+    last /api/admin/refresh-nfl-rb-defense-props-stats call populated.
+    Unlike the QB version, this returns ONE ROW PER QUALIFYING RB, not
+    one per team - committee backfields show up as more than one row
+    for the same team/opponent matchup, same "every real back, not just
+    a guessed starter" choice NFL Rushing Yards already made. A row can
+    have some props populated and others null depending on real games
+    played so far (MIN_PRIOR_GAMES == 3, not lowered).
+    """
+    from models_db import NflRbDefensePropGame, NflRbDefensePropStat
+    import nfl_rb_defense_props_sync
+
+    games = db.query(NflRbDefensePropGame).all()
+    if not games:
+        return {"rbs": [], "season": None, "week": None}
+
+    league_avgs = nfl_rb_defense_props_sync.get_league_avgs(db)
+
+    rows = []
+    for g in games:
+        rbs_on_team = (
+            db.query(NflRbDefensePropStat)
+            .filter_by(team=g.team)
+            .order_by(NflRbDefensePropStat.touches.desc())
+            .all()
+        )
+        for rb in rbs_on_team:
+            inputs = nfl_rb_defense_props_sync.compute_rb_defense_props_prediction(rb, g.opponent, db, league_avgs=league_avgs)
+            row = {
+                "team": g.team,
+                "opponent": g.opponent,
+                "rb_name": inputs["rb_name"],
+                "rb_gsis_id": inputs["rb_gsis_id"],
+                "rb_games_sample": inputs["rb_games_sample"],
+                "opp_games_sample": inputs["opp_games_sample"],
+            }
+            for prop in nfl_rb_defense_props_sync.PROP_FIELDS:
+                row[f"{prop}_mean"] = inputs[f"{prop}_mean"]
+                row[f"{prop}_rb_index"] = inputs[f"{prop}_rb_index"]
+                row[f"{prop}_opp_index"] = inputs[f"{prop}_opp_index"]
+            rows.append(row)
+
+    return {"rbs": rows, "season": games[0].season, "week": games[0].week}
+
+
 @app.get("/api/admin/refresh-cfb-stats")
 def manual_refresh_cfb_stats(season: int, week: int):
     """

@@ -67,6 +67,14 @@ DATA SOURCES, one per bet_type:
     reason as nfl_passing_yards/nfl_rushing_yards - see
     nfl_qb_defense_props_sync.py's module docstring.
 
+  - "nfl_rb_dvp_rushing_yards" / "nfl_rb_dvp_rushing_tds" /
+    "nfl_rb_dvp_receiving_yards" / "nfl_rb_dvp_receiving_tds" /
+    "nfl_rb_dvp_total_yards" / "nfl_rb_dvp_total_tds" /
+    "nfl_rb_dvp_anytime_td" (the "By Position" RB tab's six props plus
+    the derived anytime-TD probability): NOT gradeable, same permanent
+    reason as every other By-Position/estimation-based NFL prop - see
+    nfl_rb_defense_props_sync.py's module docstring.
+
   - "nfl_team_points": fetches that bet's own season/week schedule
     fresh from api.nfldata.org (nfl_points_sync.get_week_games) and
     reads the real final home_score/away_score for whichever team
@@ -111,7 +119,10 @@ log = logging.getLogger("bet_grading")
 NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
                           "nfl_team_points", "nfl_game_total",
                           "nfl_qb_dvp_passing_yards", "nfl_qb_dvp_passing_tds",
-                          "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds"}
+                          "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds",
+                          "nfl_rb_dvp_rushing_yards", "nfl_rb_dvp_rushing_tds",
+                          "nfl_rb_dvp_receiving_yards", "nfl_rb_dvp_receiving_tds",
+                          "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td"}
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -325,6 +336,12 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
         # Same permanent limitation as nfl_passing_yards/nfl_rushing_yards
         # - see module docstring. Left pending indefinitely rather than
         # guessed at.
+        return None
+
+    if bet.bet_type.startswith("nfl_rb_dvp_"):
+        # Same permanent limitation as every other By-Position/estimation
+        # based NFL prop - see module docstring. Left pending indefinitely
+        # rather than guessed at.
         return None
 
     if bet.bet_type == "nfl_team_points":

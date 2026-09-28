@@ -302,7 +302,21 @@
       </div>
 
       <div id="subtab-content-nfl-pos-rb" style="display:none;">
-        <div class="settings-hint">RB props by defense-vs-position - coming soon.</div>
+        <div class="sub">NFL RB Defense-vs-Position - current week's real matchups, every qualifying RB (committee backfields show up as more than one card per team) against the opponent's RB-position-allowed history, across six props plus anytime-TD.</div>
+        <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+          <div>
+            <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
+            <input id="nfl-rb-dvp-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+          </div>
+          <div>
+            <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+            <input id="nfl-rb-dvp-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+          </div>
+          <span class="hits-toggle" onclick="refreshNflRbDvpStats()" style="padding:6px 14px;">Refresh Stats</span>
+        </div>
+        <div id="nfl-rb-dvp-refresh-status" class="settings-hint"></div>
+
+        <div id="nfl-rb-dvp-content">Loading...</div>
       </div>
 
       <div id="subtab-content-nfl-pos-wr" style="display:none;">
@@ -1833,8 +1847,13 @@
     document.getElementById("subtab-btn-nfl-pos-rb").classList.toggle("active", pos === "rb");
     document.getElementById("subtab-btn-nfl-pos-wr").classList.toggle("active", pos === "wr");
     document.getElementById("subtab-btn-nfl-pos-te").classList.toggle("active", pos === "te");
-    // Only QB has real data/endpoints today - RB/WR/TE are placeholders
-    // ready for the same pattern once their own props are built.
+    // QB loads automatically when the byposition tab itself is opened
+    // (switchNflSubTab). RB has its own real data now too, loaded here
+    // instead since it isn't the default position sub-tab. WR/TE remain
+    // placeholders ready for the same pattern once their own props exist.
+    if (pos === "rb") {
+      loadNflRbDvpTab();
+    }
   }
 
   function switchCfbSubTab(subtab) {
@@ -1858,6 +1877,13 @@
     { label: "NFL DvP Pass TDs", filter: b => b.bet_type === "nfl_qb_dvp_passing_tds" },
     { label: "NFL DvP Rush Yds", filter: b => b.bet_type === "nfl_qb_dvp_rushing_yards" },
     { label: "NFL DvP Rush TDs", filter: b => b.bet_type === "nfl_qb_dvp_rushing_tds" },
+    { label: "NFL RB DvP Rush Yds", filter: b => b.bet_type === "nfl_rb_dvp_rushing_yards" },
+    { label: "NFL RB DvP Rush TDs", filter: b => b.bet_type === "nfl_rb_dvp_rushing_tds" },
+    { label: "NFL RB DvP Rec Yds", filter: b => b.bet_type === "nfl_rb_dvp_receiving_yards" },
+    { label: "NFL RB DvP Rec TDs", filter: b => b.bet_type === "nfl_rb_dvp_receiving_tds" },
+    { label: "NFL RB DvP Total Yds", filter: b => b.bet_type === "nfl_rb_dvp_total_yards" },
+    { label: "NFL RB DvP Total TDs", filter: b => b.bet_type === "nfl_rb_dvp_total_tds" },
+    { label: "NFL RB Anytime TD", filter: b => b.bet_type === "nfl_rb_dvp_anytime_td" },
     { label: "CFB Points", filter: b => b.bet_type === "cfb_team_points" },
     { label: "CFB Total", filter: b => b.bet_type === "cfb_game_total" },
     { label: "NFL Points", filter: b => b.bet_type === "nfl_team_points" },
@@ -1916,7 +1942,7 @@
   // right sport's filter here whenever a new prop ships.
   const SPORT_CATEGORIES = [
     { label: "MLB", filter: b => ["hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed", "first_inning_run"].includes(b.bet_type) || b.bet_type.startsWith("game_lines_") },
-    { label: "NFL", filter: b => ["nfl_passing_yards", "nfl_rushing_yards", "nfl_team_points", "nfl_game_total"].includes(b.bet_type) || b.bet_type.startsWith("nfl_qb_dvp_") },
+    { label: "NFL", filter: b => ["nfl_passing_yards", "nfl_rushing_yards", "nfl_team_points", "nfl_game_total"].includes(b.bet_type) || b.bet_type.startsWith("nfl_qb_dvp_") || b.bet_type.startsWith("nfl_rb_dvp_") },
     { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
   ];
 
@@ -3125,6 +3151,398 @@
 
     const ordered = orderNflDvpByMatchup(games);
     const cards = ordered.map(g => nflDvpCardHtml(g)).join("");
+    container.innerHTML = `<div class="nfl-dvp-grid">${cards}</div>`;
+  }
+
+  // ---- NFL "By Position" -> RB Defense-vs-Position props (rushing
+  // yards, rushing TDs, receiving yards, receiving TDs, total yards,
+  // total TDs, plus a derived anytime-TD row) - ported from
+  // core_nfl_rb_defense_props.py via nfl_rb_defense_props_sync.py. Same
+  // card-per-player/O-U-controls-per-prop pattern as the QB tab above,
+  // just with six props instead of four and one extra row (Anytime TD)
+  // that has no adjustable O/U line - it's a fixed P(total TDs > 0)
+  // read straight off the total_tds prop's own Poisson distribution
+  // (core_nfl_rb_defense_props.py's rb_anytime_td_probability is a thin
+  // wrapper around exactly that, not a separate formula). Multiple
+  // qualifying RBs can share one team (committee backfields), unlike
+  // the QB tab's one-card-per-team shape - see nfl_rb_defense_props_
+  // sync.py's module docstring. ----
+  const NFL_RB_DVP_PROPS = ["rushing_yards", "rushing_tds", "receiving_yards", "receiving_tds", "total_yards", "total_tds"];
+  const NFL_RB_DVP_LABELS = {
+    rushing_yards: "Rushing Yards", rushing_tds: "Rushing TDs",
+    receiving_yards: "Receiving Yards", receiving_tds: "Receiving TDs",
+    total_yards: "Total Yards", total_tds: "Total TDs",
+  };
+  const NFL_RB_DVP_DISTRIBUTIONS = {
+    rushing_yards: { type: "normal", sd: 31.2 },
+    receiving_yards: { type: "normal", sd: 19.8 },
+    total_yards: { type: "normal", sd: 36.0 },
+    rushing_tds: { type: "negbinom", overdispersion: 1.08 },
+    receiving_tds: { type: "negbinom", overdispersion: 1.36 },
+    total_tds: { type: "poisson" },
+  };
+  const NFL_RB_DVP_DEFAULT_THRESHOLD = {
+    rushing_yards: 40, rushing_tds: 0.5, receiving_yards: 15, receiving_tds: 0.5, total_yards: 50, total_tds: 0.5,
+  };
+  const NFL_RB_DVP_THRESHOLD_STEP = {
+    rushing_yards: 5, rushing_tds: 0.5, receiving_yards: 5, receiving_tds: 0.5, total_yards: 5, total_tds: 0.5,
+  };
+
+  const nflRbDvpBetState = {};
+
+  function getNflRbDvpBetState(prop, gsisId) {
+    const key = `${prop}|${gsisId}`;
+    if (!nflRbDvpBetState[key]) {
+      nflRbDvpBetState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: NFL_RB_DVP_DEFAULT_THRESHOLD[prop] };
+    }
+    return nflRbDvpBetState[key];
+  }
+
+  // Anytime-TD isn't keyed by prop (there's only one), just by gsisId -
+  // separate bet-state map so it doesn't collide with the six real props.
+  const nflRbAnytimeTdBetState = {};
+
+  function getNflRbAnytimeTdBetState(gsisId) {
+    if (!nflRbAnytimeTdBetState[gsisId]) {
+      nflRbAnytimeTdBetState[gsisId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return nflRbAnytimeTdBetState[gsisId];
+  }
+
+  function probNflRbDvpAtLeast(prop, mean, line) {
+    if (mean == null) return null;
+    const cfg = NFL_RB_DVP_DISTRIBUTIONS[prop];
+    const thresholdInt = Math.ceil(line) - 1;
+    if (cfg.type === "normal") {
+      return Math.max(0, Math.min(1, 1 - normCdf(line, mean, cfg.sd)));
+    }
+    if (cfg.type === "poisson") {
+      return poissonSf(thresholdInt, mean);
+    }
+    // negbinom
+    const od = cfg.overdispersion;
+    const p = 1 / od;
+    const r = mean / (od - 1);
+    return nbinomSf(thresholdInt, r, p);
+  }
+
+  // Anytime TD = P(total_tds > 0), read off total_tds's own Poisson -
+  // not a separate distribution/index, matching core_nfl_rb_defense_
+  // props.py's rb_anytime_td_probability wrapper.
+  function probNflRbAnytimeTd(totalTdsMean) {
+    if (totalTdsMean == null) return null;
+    return poissonSf(0, totalTdsMean);
+  }
+
+  function updateNflRbDvpThreshold(prop, gsisId, value) {
+    const state = getNflRbDvpBetState(prop, gsisId);
+    state.threshold = parseFloat(value) || NFL_RB_DVP_DEFAULT_THRESHOLD[prop];
+    renderNflRbDvpFromCache();
+  }
+
+  function updateNflRbDvpBetField(prop, gsisId, field, value) {
+    const state = getNflRbDvpBetState(prop, gsisId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflRbDvpFromCache();
+  }
+
+  function updateNflRbAnytimeTdBetField(gsisId, field, value) {
+    const state = getNflRbAnytimeTdBetState(gsisId);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflRbDvpFromCache();
+  }
+
+  async function toggleNflRbDvpTrack(prop, gsisId, checked, rbName, team, line, modelProb, marketPct, wager, profit) {
+    const state = getNflRbDvpBetState(prop, gsisId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: `nfl_rb_dvp_${prop}`, external_player_id: gsisId, batter_name: rbName,
+            team_side: team, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) {
+          state.tracked = true;
+          state.trackedId = data.id;
+        } else {
+          state.tracked = false;
+          state.trackedId = null;
+        }
+      } catch (e) {
+        state.tracked = false;
+        state.trackedId = null;
+      }
+    } else {
+      if (state.trackedId != null) {
+        try {
+          await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+        } catch (e) {
+          // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+        }
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflRbDvpFromCache();
+  }
+
+  async function toggleNflRbAnytimeTdTrack(gsisId, checked, rbName, team, modelProb, marketPct, wager, profit) {
+    const state = getNflRbAnytimeTdBetState(gsisId);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "nfl_rb_dvp_anytime_td", external_player_id: gsisId, batter_name: rbName,
+            team_side: team, line: 0.5,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) {
+          state.tracked = true;
+          state.trackedId = data.id;
+        } else {
+          state.tracked = false;
+          state.trackedId = null;
+        }
+      } catch (e) {
+        state.tracked = false;
+        state.trackedId = null;
+      }
+    } else {
+      if (state.trackedId != null) {
+        try {
+          await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+        } catch (e) {
+          // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+        }
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflRbDvpFromCache();
+  }
+
+  let nflRbDvpDataCache = null;
+
+  async function loadNflRbDvpTab() {
+    document.getElementById("nfl-rb-dvp-content").innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/nfl/rb-defense-props`);
+      nflRbDvpDataCache = await res.json();
+      if (nflRbDvpDataCache.season != null) document.getElementById("nfl-rb-dvp-season-input").value = nflRbDvpDataCache.season;
+      if (nflRbDvpDataCache.week != null) document.getElementById("nfl-rb-dvp-week-input").value = nflRbDvpDataCache.week;
+      renderNflRbDvpFromCache();
+    } catch (e) {
+      document.getElementById("nfl-rb-dvp-content").innerHTML = `<div class="settings-hint">Couldn't load NFL RB By Position data.</div>`;
+    }
+  }
+
+  async function refreshNflRbDvpStats() {
+    const season = document.getElementById("nfl-rb-dvp-season-input").value;
+    const week = document.getElementById("nfl-rb-dvp-week-input").value;
+    if (!season || !week) {
+      document.getElementById("nfl-rb-dvp-refresh-status").textContent = "Enter both a season and a week first.";
+      return;
+    }
+    const statusEl = document.getElementById("nfl-rb-dvp-refresh-status");
+    statusEl.textContent = `Refreshing NFL RB By Position stats for ${season} week ${week} - this fetches real data and can take a little while...`;
+    try {
+      await fetch(`${API_BASE}/api/admin/refresh-nfl-rb-defense-props-stats?season=${season}&week=${week}`);
+      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
+      loadNflRbDvpTab();
+    } catch (e) {
+      statusEl.textContent = "Refresh failed - check the season/week and try again.";
+    }
+  }
+
+  function nflRbDvpPropSectionHtml(prop, g, isFirst) {
+    const label = NFL_RB_DVP_LABELS[prop];
+    const mean = g[`${prop}_mean`];
+    const spacerStyle = isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
+
+    if (mean == null) {
+      return `
+        <div style="${spacerStyle}">
+          <div class="meta" style="margin-bottom:4px;">${label}</div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const rbIndex = g[`${prop}_rb_index`];
+    const oppIndex = g[`${prop}_opp_index`];
+    const rbIndexStr = rbIndex != null ? rbIndex.toFixed(2) : "—";
+    const oppIndexStr = oppIndex != null ? oppIndex.toFixed(2) : "—";
+
+    const state = getNflRbDvpBetState(prop, g.rb_gsis_id);
+    const line = state.threshold;
+    const yesPct = probNflRbDvpAtLeast(prop, mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflRbDvpBetField('${prop}','${g.rb_gsis_id}','manualWager',this.value)" />`;
+    const trackArgs = `'${prop}','${g.rb_gsis_id}',this.checked,'${(g.rb_name || "").replace(/'/g, "\\'")}','${g.team}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const meanStr = (prop === "rushing_tds" || prop === "receiving_tds" || prop === "total_tds")
+      ? mean.toFixed(2) : mean.toFixed(1);
+
+    return `
+      <div style="${spacerStyle}">
+        <div class="teams" style="margin-bottom:4px;">
+          <span>${label}</span>
+          <span class="meta" style="margin-bottom:0;">${rbIndexStr} vs ${oppIndexStr}</span>
+          <span class="score">${meanStr}</span>
+        </div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="0" step="${NFL_RB_DVP_THRESHOLD_STEP[prop]}" value="${line}" style="text-align:center;" onchange="updateNflRbDvpThreshold('${prop}','${g.rb_gsis_id}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflRbDvpBetField('${prop}','${g.rb_gsis_id}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflRbDvpBetField('${prop}','${g.rb_gsis_id}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflRbDvpBetField('${prop}','${g.rb_gsis_id}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflRbDvpTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  // Anytime TD row - no adjustable O/U line (it's a fixed P(total TDs > 0)
+  // read off the total_tds prop's own mean), so this reuses the same
+  // bet-controls shape minus the O/U input, replaced with a static "Any" label.
+  function nflRbDvpAnytimeTdSectionHtml(g) {
+    const totalTdsMean = g.total_tds_mean;
+    const spacerStyle = "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
+
+    if (totalTdsMean == null) {
+      return `
+        <div style="${spacerStyle}">
+          <div class="meta" style="margin-bottom:4px;">Anytime TD</div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+
+    const yesPct = probNflRbAnytimeTd(totalTdsMean) * 100;
+    const noPct = 100 - yesPct;
+    const state = getNflRbAnytimeTdBetState(g.rb_gsis_id);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflRbAnytimeTdBetField('${g.rb_gsis_id}','manualWager',this.value)" />`;
+    const trackArgs = `'${g.rb_gsis_id}',this.checked,'${(g.rb_name || "").replace(/'/g, "\\'")}','${g.team}',${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <div style="${spacerStyle}">
+        <div class="teams" style="margin-bottom:4px;">
+          <span>Anytime TD</span>
+          <span class="score">${Math.round(yesPct)}%</span>
+        </div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span style="text-align:center; color:var(--muted);">Any</span>
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflRbAnytimeTdBetField('${g.rb_gsis_id}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflRbAnytimeTdBetField('${g.rb_gsis_id}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflRbAnytimeTdBetField('${g.rb_gsis_id}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflRbAnytimeTdTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  function nflRbDvpCardHtml(g) {
+    const rbLabel = g.rb_name ? `${g.rb_name} vs ${nflTeamFullName(g.opponent)}` : "Not enough data";
+    return `
+      <div class="card">
+        <div class="teams">
+          <span>${rbLabel}</span>
+        </div>
+        <div class="meta">${g.team} vs ${g.opponent}</div>
+        ${NFL_RB_DVP_PROPS.map((prop, i) => nflRbDvpPropSectionHtml(prop, g, i === 0)).join("")}
+        ${nflRbDvpAnytimeTdSectionHtml(g)}
+      </div>`;
+  }
+
+  // /api/nfl/rb-defense-props returns one row PER QUALIFYING RB (a team
+  // can have several, unlike the QB endpoint's one-per-team shape) - so
+  // grouping by matchup means grouping by TEAM first (every RB on a
+  // team stays together), then placing the opponent team's RBs
+  // immediately after, same "two sides of one game, back-to-back" goal
+  // as orderNflDvpByMatchup above.
+  function orderNflRbDvpByMatchup(rows) {
+    const byTeam = new Map();
+    for (const r of rows) {
+      if (!byTeam.has(r.team)) byTeam.set(r.team, []);
+      byTeam.get(r.team).push(r);
+    }
+    const seenTeams = new Set();
+    const ordered = [];
+    for (const r of rows) {
+      if (seenTeams.has(r.team)) continue;
+      ordered.push(...(byTeam.get(r.team) || []));
+      seenTeams.add(r.team);
+      const oppRows = byTeam.get(r.opponent);
+      if (oppRows && !seenTeams.has(r.opponent)) {
+        ordered.push(...oppRows);
+        seenTeams.add(r.opponent);
+      }
+    }
+    return ordered;
+  }
+
+  function renderNflRbDvpFromCache() {
+    const container = document.getElementById("nfl-rb-dvp-content");
+    if (!nflRbDvpDataCache) return;
+    const rows = nflRbDvpDataCache.rbs || [];
+    if (!rows.length) {
+      container.innerHTML = `<div class="settings-hint">No data yet - enter a season/week above and click Refresh Stats.</div>`;
+      return;
+    }
+
+    const ordered = orderNflRbDvpByMatchup(rows);
+    const cards = ordered.map(g => nflRbDvpCardHtml(g)).join("");
     container.innerHTML = `<div class="nfl-dvp-grid">${cards}</div>`;
   }
 

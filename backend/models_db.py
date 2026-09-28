@@ -454,6 +454,79 @@ class NflQbDefensePropGame(Base):
 
 
 # ---------------------------------------------------------------------------
+# NFL "By Position" -> RB Defense-vs-Position props (rushing_yards,
+# rushing_tds, receiving_yards, receiving_tds, total_yards, total_tds,
+# plus a derived anytime-TD probability) - ported from
+# core_nfl_rb_defense_props.py. Same estimation workaround as the QB
+# version above, but with core_nfl_rb_defense_props.py's own TWO
+# SEPARATE LEAGUE AVERAGES design: the RB's own side is shrunk toward
+# and indexed against the population of INDIVIDUAL RBs, while the
+# opponent-allowed side is shrunk toward and indexed against the
+# population of TEAM-WEEK TOTALS (every RB who touched the ball against
+# that defense, committee backfields included) - genuinely different
+# scales, so kept as two separate stat tables rather than reusing the
+# QB version's shared-league-avg shape. total_yards/total_tds are
+# derived on the fly at prediction time (rushing + receiving), never
+# stored as their own columns - same as core_nfl_rb_defense_props.py
+# itself never stores them separately.
+# ---------------------------------------------------------------------------
+
+class NflRbDefensePropStat(Base):
+    """One RB's real season-to-date totals for the four raw props
+    (rushing_yards, rushing_tds, receiving_yards, receiving_tds) - the
+    OWN side of the two-population design above. Exact, no estimation
+    needed, straight from /v1/stats/season."""
+    __tablename__ = "nfl_rb_defense_prop_stats"
+
+    gsis_id = Column(String, primary_key=True)
+    name = Column(String)
+    team = Column(String)
+    games = Column(Integer, default=0)
+    touches = Column(Integer, default=0)  # carries + targets, season-to-date - the qualifying floor for showing this RB individually (see nfl_rb_defense_props_sync.py)
+    rushing_yards_sum = Column(Integer, default=0)
+    rushing_tds_sum = Column(Integer, default=0)
+    receiving_yards_sum = Column(Integer, default=0)
+    receiving_tds_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflRbDefenseAllowedPropStat(Base):
+    """One team's ESTIMATED season-to-date totals allowed TO THE RB
+    POSITION (every RB who touched the ball against that defense,
+    committee backfields included) for the four raw props - the OPP
+    side of the two-population design above, built the same real-
+    schedule-walk estimation as NflDefenseAllowedPropStat, using each
+    opponent's own team-wide RB aggregate (ALL RBs on that team summed,
+    not just one) as the per-game estimate."""
+    __tablename__ = "nfl_rb_defense_allowed_prop_stats"
+
+    team = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    rushing_yards_sum = Column(Integer, default=0)
+    rushing_tds_sum = Column(Integer, default=0)
+    receiving_yards_sum = Column(Integer, default=0)
+    receiving_tds_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflRbDefensePropGame(Base):
+    """This week's real matchups - team/opponent pairs for the CURRENT
+    week only, same pattern as NflQbDefensePropGame. Unlike the QB
+    version, MULTIPLE qualifying RBs can share one team's row here -
+    each one gets looked up separately from NflRbDefensePropStat at
+    render time (committee backfields show up as more than one card,
+    same "every qualifying back, not just one starter" choice
+    NflRbStat/NflRbGame already made for NFL Rushing Yards)."""
+    __tablename__ = "nfl_rb_defense_prop_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # CFB Team Points prop - second non-MLB prop in this dashboard. Unlike NFL,
 # CFBD's /games endpoint gives real per-game final scores directly, so no
 # estimation workaround is needed - see cfb_points_sync.py's module docstring.
