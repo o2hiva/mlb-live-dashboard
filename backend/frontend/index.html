@@ -2845,6 +2845,32 @@
   };
   const NFL_DVP_DEFAULT_THRESHOLD = { passing_yards: 230, passing_tds: 1.5, rushing_yards: 15, rushing_tds: 0.5 };
   const NFL_DVP_THRESHOLD_STEP = { passing_yards: 10, passing_tds: 0.5, rushing_yards: 5, rushing_tds: 0.5 };
+  // QB index vs opponent-allowed index labels per prop - the rushing pair
+  // calls out that the opponent side is specifically what that defense
+  // allows to the QB POSITION (team_qb_aggregate on the backend), not the
+  // whole-roster rushing total, since that's the real basis for the
+  // rushing props' opponent index.
+  const NFL_DVP_INDEX_LABELS = {
+    passing_yards: { qb: "QB Pass Yds Index", opp: "Opp Pass Yds Allowed Index" },
+    passing_tds: { qb: "QB Pass TDs Index", opp: "Opp Pass TDs Allowed Index" },
+    rushing_yards: { qb: "QB Rush Yds Index", opp: "Def Rush Yds Allowed to QB Index" },
+    rushing_tds: { qb: "QB Rush TDs Index", opp: "Def Rush TDs Allowed to QB Index" },
+  };
+  // Full team names for the card header ("Jalen Hurts vs Chicago Bears")
+  // - api.nfldata.org only gives back abbreviations (nflverse convention).
+  const NFL_TEAM_FULL_NAMES = {
+    ARI: "Arizona Cardinals", ATL: "Atlanta Falcons", BAL: "Baltimore Ravens", BUF: "Buffalo Bills",
+    CAR: "Carolina Panthers", CHI: "Chicago Bears", CIN: "Cincinnati Bengals", CLE: "Cleveland Browns",
+    DAL: "Dallas Cowboys", DEN: "Denver Broncos", DET: "Detroit Lions", GB: "Green Bay Packers",
+    HOU: "Houston Texans", IND: "Indianapolis Colts", JAX: "Jacksonville Jaguars", KC: "Kansas City Chiefs",
+    LA: "Los Angeles Rams", LAC: "Los Angeles Chargers", LV: "Las Vegas Raiders", MIA: "Miami Dolphins",
+    MIN: "Minnesota Vikings", NE: "New England Patriots", NO: "New Orleans Saints", NYG: "New York Giants",
+    NYJ: "New York Jets", PHI: "Philadelphia Eagles", PIT: "Pittsburgh Steelers", SEA: "Seattle Seahawks",
+    SF: "San Francisco 49ers", TB: "Tampa Bay Buccaneers", TEN: "Tennessee Titans", WAS: "Washington Commanders",
+  };
+  function nflTeamFullName(abbrev) {
+    return NFL_TEAM_FULL_NAMES[abbrev] || abbrev;
+  }
 
   const nflDvpBetState = {};
 
@@ -2991,6 +3017,12 @@
         </div>`;
     }
 
+    const idxLabels = NFL_DVP_INDEX_LABELS[prop];
+    const qbIndex = g[`${prop}_qb_index`];
+    const oppIndex = g[`${prop}_opp_index`];
+    const qbIndexStr = qbIndex != null ? qbIndex.toFixed(2) : "—";
+    const oppIndexStr = oppIndex != null ? oppIndex.toFixed(2) : "—";
+
     const state = getNflDvpBetState(prop, g.qb_gsis_id);
     const line = state.threshold;
     const yesPct = probNflDvpAtLeast(prop, mean, line) * 100;
@@ -3008,8 +3040,10 @@
 
     return `
       <div style="${spacerStyle}">
+        <div class="meta" style="margin-bottom:4px;">${label}</div>
+        <div class="meta" style="margin-bottom:4px;">${idxLabels.qb} ${qbIndexStr} vs ${idxLabels.opp} ${oppIndexStr}</div>
         <div class="teams" style="margin-bottom:4px;">
-          <span>${label}</span>
+          <span>Prediction</span>
           <span class="score">${meanStr}</span>
         </div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
@@ -3033,10 +3067,11 @@
   }
 
   function nflDvpCardHtml(g) {
+    const qbLabel = g.qb_name ? `${g.qb_name} vs ${nflTeamFullName(g.opponent)}` : "Not enough data";
     return `
       <div class="card">
         <div class="teams">
-          <span>${g.qb_name || "Not enough data"}</span>
+          <span>${qbLabel}</span>
         </div>
         <div class="meta">${g.team} vs ${g.opponent}</div>
         ${NFL_DVP_PROPS.map((prop, i) => nflDvpPropSectionHtml(prop, g, i === 0)).join("")}
