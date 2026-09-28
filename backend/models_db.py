@@ -382,6 +382,69 @@ class NflRbGame(Base):
 
 
 # ---------------------------------------------------------------------------
+# NFL "By Position" -> QB Defense-vs-Position props (passing_yards,
+# passing_tds, rushing_yards, rushing_tds) - ported from
+# core_nfl_qb_defense_props.py. Same estimation workaround as
+# NflQbStat/NflTeamAllowedStat above (no confirmed per-game breakdown
+# endpoint on this API - see nfl_qb_defense_props_sync.py's module
+# docstring), extended to all four props instead of just passing yards,
+# and with the opponent-allowed side built from each team's own
+# QB-POSITION-ONLY aggregate (not /stats/team's whole-roster totals,
+# which would wrongly fold RB rushing volume into "what a defense
+# allows to opposing QBs on the ground").
+# ---------------------------------------------------------------------------
+
+class NflQbDefensePropStat(Base):
+    """One QB's real season-to-date totals for all four props - exact,
+    no estimation needed (same as NflQbStat's own side), straight from
+    /v1/stats/season."""
+    __tablename__ = "nfl_qb_defense_prop_stats"
+
+    gsis_id = Column(String, primary_key=True)
+    name = Column(String)
+    team = Column(String)
+    games = Column(Integer, default=0)
+    attempts = Column(Integer, default=0)
+    passing_yards_sum = Column(Integer, default=0)
+    passing_tds_sum = Column(Integer, default=0)
+    rushing_yards_sum = Column(Integer, default=0)
+    rushing_tds_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflDefenseAllowedPropStat(Base):
+    """One team's ESTIMATED season-to-date totals allowed TO THE QB
+    POSITION for all four props - built the same estimation approach
+    NflTeamAllowedStat uses (real schedule + each real opponent's own
+    QB-position aggregate as the per-game estimate), see
+    nfl_qb_defense_props_sync.py's module docstring for the honest
+    limitation this carries."""
+    __tablename__ = "nfl_defense_allowed_prop_stats"
+
+    team = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    passing_yards_sum = Column(Integer, default=0)
+    passing_tds_sum = Column(Integer, default=0)
+    rushing_yards_sum = Column(Integer, default=0)
+    rushing_tds_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NflQbDefensePropGame(Base):
+    """This week's real matchups - team/opponent pairs for the CURRENT
+    week only, same pattern as NflGame. Kept as its OWN table (not
+    reusing NflGame) so this prop's refresh can run independently of
+    NFL Passing Yards' own refresh without clobbering each other."""
+    __tablename__ = "nfl_qb_defense_prop_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    season = Column(Integer)
+    week = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # CFB Team Points prop - second non-MLB prop in this dashboard. Unlike NFL,
 # CFBD's /games endpoint gives real per-game final scores directly, so no
 # estimation workaround is needed - see cfb_points_sync.py's module docstring.

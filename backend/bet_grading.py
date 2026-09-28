@@ -61,6 +61,12 @@ DATA SOURCES, one per bet_type:
     nfl_rushing_yards_sync.py's module docstring). Left pending
     indefinitely unless graded by hand.
 
+  - "nfl_qb_dvp_passing_yards" / "nfl_qb_dvp_passing_tds" /
+    "nfl_qb_dvp_rushing_yards" / "nfl_qb_dvp_rushing_tds" (the "By
+    Position" QB tab's four props): NOT gradeable, same permanent
+    reason as nfl_passing_yards/nfl_rushing_yards - see
+    nfl_qb_defense_props_sync.py's module docstring.
+
   - "nfl_team_points": fetches that bet's own season/week schedule
     fresh from api.nfldata.org (nfl_points_sync.get_week_games) and
     reads the real final home_score/away_score for whichever team
@@ -103,7 +109,9 @@ log = logging.getLogger("bet_grading")
 # nfldata.org's own game_type+scores check, or - for NFL Passing Yards -
 # the permanent "not gradeable" case).
 NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
-                          "nfl_team_points", "nfl_game_total"}
+                          "nfl_team_points", "nfl_game_total",
+                          "nfl_qb_dvp_passing_yards", "nfl_qb_dvp_passing_tds",
+                          "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds"}
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -311,6 +319,12 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
     if bet.bet_type == "nfl_rushing_yards":
         # Same permanent limitation as nfl_passing_yards - see module
         # docstring. Left pending indefinitely rather than guessed at.
+        return None
+
+    if bet.bet_type.startswith("nfl_qb_dvp_"):
+        # Same permanent limitation as nfl_passing_yards/nfl_rushing_yards
+        # - see module docstring. Left pending indefinitely rather than
+        # guessed at.
         return None
 
     if bet.bet_type == "nfl_team_points":

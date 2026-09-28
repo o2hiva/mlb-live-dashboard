@@ -833,6 +833,62 @@ def nfl_rushing_games(db: Session = Depends(get_db)):
     return {"rbs": rows, "season": season, "week": week}
 
 
+@app.get("/api/admin/refresh-nfl-qb-defense-props-stats")
+def manual_refresh_nfl_qb_defense_props_stats(season: int, week: int):
+    """
+    Manually triggers the NFL "By Position" QB props sync (passing
+    yards, passing TDs, rushing yards, rushing TDs vs. each defense's
+    QB-position-allowed history) for a given season/current-week - same
+    "no auto-detection of the current week" reasoning as every other
+    NFL admin trigger. See nfl_qb_defense_props_sync.py's module
+    docstring for the estimation approach this uses.
+    """
+    import nfl_qb_defense_props_sync
+    summary = nfl_qb_defense_props_sync.refresh_nfl_qb_defense_props_stats(season, week)
+    return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/nfl/qb-defense-props")
+def nfl_qb_defense_props(db: Session = Depends(get_db)):
+    """
+    Every team's real current-week matchup and predicted values for all
+    four QB Defense-vs-Position props, from whatever the last
+    /api/admin/refresh-nfl-qb-defense-props-stats call populated.
+    starter_is_heuristic is always true (highest-attempts QB on record
+    for that team - see nfl_qb_defense_props_sync.py's own note). A
+    team can have some props populated and others null depending on
+    real games played so far (MIN_PRIOR_GAMES == 3, not lowered).
+    """
+    from models_db import NflQbDefensePropGame
+    import nfl_qb_defense_props_sync
+
+    games = db.query(NflQbDefensePropGame).all()
+    if not games:
+        return {"qbs": [], "season": None, "week": None}
+
+    league_avgs = nfl_qb_defense_props_sync.get_league_avgs(db)
+
+    rows = []
+    for g in games:
+        inputs = nfl_qb_defense_props_sync.compute_qb_defense_props_prediction(g.team, g.opponent, db, league_avgs=league_avgs)
+        row = {
+            "team": g.team,
+            "opponent": g.opponent,
+            "qb_name": inputs["qb_name"] if inputs else None,
+            "qb_gsis_id": inputs["qb_gsis_id"] if inputs else None,
+            "qb_games_sample": inputs["qb_games_sample"] if inputs else None,
+            "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+            "starter_is_heuristic": True,
+        }
+        for prop in nfl_qb_defense_props_sync.PROP_FIELDS:
+            row[f"{prop}_mean"] = inputs[f"{prop}_mean"] if inputs else None
+            row[f"{prop}_qb_index"] = inputs[f"{prop}_qb_index"] if inputs else None
+            row[f"{prop}_opp_index"] = inputs[f"{prop}_opp_index"] if inputs else None
+        rows.append(row)
+
+    return {"qbs": rows, "season": games[0].season, "week": games[0].week}
+
+
 @app.get("/api/admin/refresh-cfb-stats")
 def manual_refresh_cfb_stats(season: int, week: int):
     """
