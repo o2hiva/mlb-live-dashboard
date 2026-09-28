@@ -2878,7 +2878,7 @@
   }
 
   let nflDvpDataCache = null;
-  const NFL_DVP_ABBREV = { passing_yards: "PY", passing_tds: "PT", rushing_yards: "RY", rushing_tds: "RT" };
+  const NFL_DVP_ABBREV = { passing_yards: "PassYds", passing_tds: "PassTDs", rushing_yards: "RushYds", rushing_tds: "RushTDs" };
 
   async function loadNflDvpTab() {
     document.getElementById("nfl-dvp-content").innerHTML = `<div class="settings-hint">Loading...</div>`;
@@ -2965,7 +2965,7 @@
 
     const propHeaderCells = prop => {
       const ab = NFL_DVP_ABBREV[prop];
-      return `<span>${ab} Mean</span><span>${ab} O/U</span><span>${ab} Yes</span><span>${ab} No</span><span>${ab} Y/N</span><span>${ab} Mkt</span><span>${ab} Kly</span><span>${ab} Wager</span><span>${ab} Profit</span><span>${ab} Track</span>`;
+      return `<span>${ab}</span><span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>MKT</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>`;
     };
     const header = `
       <div class="nfl-dvp-row nfl-dvp-row-header">
