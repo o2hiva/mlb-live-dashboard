@@ -2936,7 +2936,7 @@
       ? `<span>$${wager.toFixed(2)}</span>`
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','manualWager',this.value)" />`;
     const trackArgs = `'${prop}','${g.qb_gsis_id}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}','${g.team}',${line},${modelProb},${state.market},${wager},${profit}`;
-    const meanStr = (prop === "passing_tds" || prop === "rushing_tds") ? mean.toFixed(2) : mean.toFixed(1);
+    const meanStr = prop === "passing_tds" ? Math.round(mean).toString() : (prop === "rushing_tds" ? mean.toFixed(2) : mean.toFixed(1));
 
     return `
       <span>${meanStr}</span>
