@@ -126,7 +126,7 @@
   .bybets-row select, .bybets-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
   .bybets-row input[type="checkbox"] { width: auto; justify-self: center; }
   .weekly-row {
-    display: grid; grid-template-columns: 1.5fr 0.8fr 0.8fr 0.8fr 0.8fr;
+    display: grid; grid-template-columns: 1.5fr 0.8fr 0.8fr 0.8fr 0.8fr 0.9fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
   }
   .weekly-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
@@ -1858,6 +1858,34 @@
     return { wins, total: resolved.length, pct: Math.round((wins / resolved.length) * 100) };
   }
 
+  // Profit/loss for a single resolved bet: +potential_profit on a win,
+  // -wager on a loss, 0 on a push. Returns null when there isn't enough
+  // info to compute it (not resolved, or no wager recorded), so callers
+  // can exclude it from a sum rather than silently treating it as $0.
+  function betProfitLoss(b) {
+    if (!b.resolved || b.wager == null) return null;
+    if (b.result === "win") return b.potential_profit != null ? b.potential_profit : null;
+    if (b.result === "loss") return -b.wager;
+    return 0; // push
+  }
+
+  function totalProfitLoss(bets) {
+    let total = 0;
+    let any = false;
+    for (const b of bets) {
+      const pl = betProfitLoss(b);
+      if (pl != null) { total += pl; any = true; }
+    }
+    return any ? total : null;
+  }
+
+  function profitLossHtml(total) {
+    if (total == null) return `<span>—</span>`;
+    const cls = total > 0 ? "prob-yes" : (total < 0 ? "prob-no" : "");
+    const sign = total > 0 ? "+" : (total < 0 ? "-" : "");
+    return `<span class="${cls}">${sign}$${Math.abs(total).toFixed(2)}</span>`;
+  }
+
   function hitRateBoxHtml(label, rate) {
     const valueStr = rate ? `${rate.pct}%` : "—";
     const recordStr = rate ? `${rate.wins}-${rate.total - rate.wins}` : "No graded bets yet";
@@ -1941,12 +1969,13 @@
 
     const header = `
       <div class="weekly-row weekly-row-header">
-        <span>Week</span><span>Bets</span><span>Wins</span><span>Losses</span><span>Hit Rate</span>
+        <span>Week</span><span>Bets</span><span>Wins</span><span>Losses</span><span>Hit Rate</span><span>Profit/Loss</span>
       </div>`;
 
     const rows = weeks.map(monday => {
       const weekBets = byWeek[monday];
       const rate = hitRateFor(weekBets);
+      const pl = totalProfitLoss(weekBets);
       const isCurrent = monday === todayMonday;
       const rowClass = isCurrent ? "weekly-row weekly-row-current" : "weekly-row";
       const label = formatWeekRange(monday) + (isCurrent ? " (This Week)" : "");
@@ -1957,6 +1986,7 @@
           <span class="prob-yes">${rate ? rate.wins : 0}</span>
           <span class="prob-no">${rate ? rate.total - rate.wins : 0}</span>
           <span>${rate ? rate.pct + "%" : "—"}</span>
+          ${profitLossHtml(pl)}
         </div>`;
     }).join("");
 
