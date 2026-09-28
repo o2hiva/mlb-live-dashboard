@@ -114,6 +114,15 @@
   .nfl-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nfl-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
   .nfl-row select, .nfl-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
+  .nfl-dvp-row {
+    display: grid;
+    grid-template-columns: 140px 55px 55px repeat(4, 55px 50px 40px 40px 52px 52px 32px 58px 52px 40px);
+    gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.75rem;
+  }
+  .nfl-dvp-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nfl-dvp-row-header { color: var(--muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.01em; font-weight: 600; }
+  .nfl-dvp-row select, .nfl-dvp-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 3px; font-size: 0.7rem; }
+  .nfl-dvp-row input[type="checkbox"] { width: auto; justify-self: center; }
   .bybets-row select, .bybets-row input { width: 100%; background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 2px 4px; font-size: 0.75rem; }
   .bybets-row input[type="checkbox"] { width: auto; justify-self: center; }
   .weekly-row {
@@ -274,17 +283,9 @@
         </div>
         <div id="nfl-dvp-refresh-status" class="settings-hint"></div>
 
-        <h3 style="margin-top:20px; margin-bottom:8px;">Passing Yards</h3>
-        <div id="nfl-dvp-passing_yards-content">Loading...</div>
-
-        <h3 style="margin-top:24px; margin-bottom:8px;">Passing TDs</h3>
-        <div id="nfl-dvp-passing_tds-content">Loading...</div>
-
-        <h3 style="margin-top:24px; margin-bottom:8px;">Rushing Yards</h3>
-        <div id="nfl-dvp-rushing_yards-content">Loading...</div>
-
-        <h3 style="margin-top:24px; margin-bottom:8px;">Rushing TDs</h3>
-        <div id="nfl-dvp-rushing_tds-content">Loading...</div>
+        <div style="overflow-x:auto;">
+          <div id="nfl-dvp-content" style="min-width:2260px;">Loading...</div>
+        </div>
       </div>
 
       <div id="subtab-content-nfl-pos-rb" style="display:none;">
@@ -2829,7 +2830,7 @@
   function updateNflDvpThreshold(prop, gsisId, value) {
     const state = getNflDvpBetState(prop, gsisId);
     state.threshold = parseFloat(value) || NFL_DVP_DEFAULT_THRESHOLD[prop];
-    renderNflDvpTable(prop);
+    renderNflDvpFromCache();
   }
 
   function updateNflDvpBetField(prop, gsisId, field, value) {
@@ -2841,7 +2842,7 @@
     } else {
       state[field] = value;
     }
-    renderNflDvpTable(prop);
+    renderNflDvpFromCache();
   }
 
   async function toggleNflDvpTrack(prop, gsisId, checked, qbName, team, line, modelProb, marketPct, wager, profit) {
@@ -2873,25 +2874,22 @@
       state.tracked = false;
       state.trackedId = null;
     }
-    renderNflDvpTable(prop);
+    renderNflDvpFromCache();
   }
 
   let nflDvpDataCache = null;
+  const NFL_DVP_ABBREV = { passing_yards: "PY", passing_tds: "PT", rushing_yards: "RY", rushing_tds: "RT" };
 
   async function loadNflDvpTab() {
-    NFL_DVP_PROPS.forEach(p => {
-      document.getElementById(`nfl-dvp-${p}-content`).innerHTML = `<div class="settings-hint">Loading...</div>`;
-    });
+    document.getElementById("nfl-dvp-content").innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
       const res = await fetch(`${API_BASE}/api/nfl/qb-defense-props`);
       nflDvpDataCache = await res.json();
       if (nflDvpDataCache.season != null) document.getElementById("nfl-dvp-season-input").value = nflDvpDataCache.season;
       if (nflDvpDataCache.week != null) document.getElementById("nfl-dvp-week-input").value = nflDvpDataCache.week;
-      NFL_DVP_PROPS.forEach(renderNflDvpTable);
+      renderNflDvpFromCache();
     } catch (e) {
-      NFL_DVP_PROPS.forEach(p => {
-        document.getElementById(`nfl-dvp-${p}-content`).innerHTML = `<div class="settings-hint">Couldn't load NFL By Position data.</div>`;
-      });
+      document.getElementById("nfl-dvp-content").innerHTML = `<div class="settings-hint">Couldn't load NFL By Position data.</div>`;
     }
   }
 
@@ -2913,8 +2911,51 @@
     }
   }
 
-  function renderNflDvpTable(prop) {
-    const container = document.getElementById(`nfl-dvp-${prop}-content`);
+  // One row per QB, all four props' O/U controls side by side (scrolls
+  // horizontally - see the .nfl-dvp-row grid and its wrapping
+  // overflow-x:auto container in the HTML). Each prop group repeats the
+  // same 10 columns: Mean, O/U, Yes%, No%, Y/N, Market, Kelly, Wager,
+  // Profit, Track - prefixed PY/PT/RY/RT in the header so one row still
+  // reads as passing yards, passing TDs, rushing yards, rushing TDs for
+  // the same QB.
+  function nflDvpPropCellsHtml(prop, g) {
+    const mean = g[`${prop}_mean`];
+    if (mean == null) {
+      return `<span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>`;
+    }
+    const state = getNflDvpBetState(prop, g.qb_gsis_id);
+    const line = state.threshold;
+    const yesPct = probNflDvpAtLeast(prop, mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','manualWager',this.value)" />`;
+    const trackArgs = `'${prop}','${g.qb_gsis_id}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}','${g.team}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const meanStr = (prop === "passing_tds" || prop === "rushing_tds") ? mean.toFixed(2) : mean.toFixed(1);
+
+    return `
+      <span>${meanStr}</span>
+      <input type="number" min="0" step="${NFL_DVP_THRESHOLD_STEP[prop]}" value="${line}" style="text-align:center;" onchange="updateNflDvpThreshold('${prop}','${g.qb_gsis_id}',this.value)" />
+      <span class="prob-yes">${Math.round(yesPct)}%</span>
+      <span class="prob-no">${Math.round(noPct)}%</span>
+      <select onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','useKelly',this.checked)" />
+      ${wagerHtml}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflDvpTrack(${trackArgs})" />`;
+  }
+
+  function renderNflDvpFromCache() {
+    const container = document.getElementById("nfl-dvp-content");
     if (!nflDvpDataCache) return;
     const games = nflDvpDataCache.qbs || [];
     if (!games.length) {
@@ -2922,60 +2963,23 @@
       return;
     }
 
+    const propHeaderCells = prop => {
+      const ab = NFL_DVP_ABBREV[prop];
+      return `<span>${ab} Mean</span><span>${ab} O/U</span><span>${ab} Yes</span><span>${ab} No</span><span>${ab} Y/N</span><span>${ab} Mkt</span><span>${ab} Kly</span><span>${ab} Wager</span><span>${ab} Profit</span><span>${ab} Track</span>`;
+    };
     const header = `
-      <div class="nfl-row nfl-row-header">
-        <span>QB</span><span>Team</span><span>Opponent</span><span>Mean</span><span>Index</span>
-        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
-        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      <div class="nfl-dvp-row nfl-dvp-row-header">
+        <span>QB</span><span>Team</span><span>Opp</span>
+        ${NFL_DVP_PROPS.map(propHeaderCells).join("")}
       </div>`;
 
-    const rows = games.map(g => {
-      const mean = g[`${prop}_mean`];
-      if (mean == null) {
-        return `
-          <div class="nfl-row">
-            <span>${g.qb_name || "Not enough data"}</span><span>${g.team}</span><span>${g.opponent}</span>
-            <span>—</span><span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>
-          </div>`;
-      }
-      const state = getNflDvpBetState(prop, g.qb_gsis_id);
-      const line = state.threshold;
-      const yesPct = probNflDvpAtLeast(prop, mean, line) * 100;
-      const noPct = 100 - yesPct;
-      const modelPct = state.yn === "yes" ? yesPct : noPct;
-      const modelProb = modelPct != null ? modelPct / 100 : null;
-      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-      const profit = profitIfWon(wager, state.market);
-      const marketVal = state.market != null ? state.market : "";
-      const wagerHtml = state.useKelly
-        ? `<span>$${wager.toFixed(2)}</span>`
-        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','manualWager',this.value)" />`;
-      const trackArgs = `'${prop}','${g.qb_gsis_id}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}','${g.team}',${line},${modelProb},${state.market},${wager},${profit}`;
-      const qbIndexStr = g[`${prop}_qb_index`] != null ? g[`${prop}_qb_index`].toFixed(2) : "—";
-      const oppIndexStr = g[`${prop}_opp_index`] != null ? g[`${prop}_opp_index`].toFixed(2) : "—";
-      const meanStr = (prop === "passing_tds" || prop === "rushing_tds") ? mean.toFixed(2) : mean.toFixed(1);
-
-      return `
-        <div class="nfl-row">
-          <span>${g.qb_name || "TBD"}</span>
-          <span>${g.team}</span>
-          <span>${g.opponent}</span>
-          <span>${meanStr}</span>
-          <span>${qbIndexStr} vs ${oppIndexStr}</span>
-          <input type="number" min="0" step="${NFL_DVP_THRESHOLD_STEP[prop]}" value="${line}" style="text-align:center;" onchange="updateNflDvpThreshold('${prop}','${g.qb_gsis_id}',this.value)" />
-          <span class="prob-yes">${Math.round(yesPct)}%</span>
-          <span class="prob-no">${Math.round(noPct)}%</span>
-          <select onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','yn',this.value)">
-            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
-            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
-          </select>
-          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','market',this.value)" />
-          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','useKelly',this.checked)" />
-          ${wagerHtml}
-          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
-          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflDvpTrack(${trackArgs})" />
-        </div>`;
-    }).join("");
+    const rows = games.map(g => `
+      <div class="nfl-dvp-row">
+        <span>${g.qb_name || "Not enough data"}</span>
+        <span>${g.team}</span>
+        <span>${g.opponent}</span>
+        ${NFL_DVP_PROPS.map(prop => nflDvpPropCellsHtml(prop, g)).join("")}
+      </div>`).join("");
 
     container.innerHTML = header + rows;
   }
