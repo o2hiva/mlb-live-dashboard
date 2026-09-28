@@ -34,6 +34,21 @@
   @media (max-width: 600px) {
     .grid { grid-template-columns: 1fr; }
   }
+  /* NFL By Position QB cards only - 4 per row instead of the default 3 (see .grid above). */
+  .nfl-dvp-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px;
+  }
+  @media (max-width: 1300px) {
+    .nfl-dvp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 900px) {
+    .nfl-dvp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 600px) {
+    .nfl-dvp-grid { grid-template-columns: 1fr; }
+  }
   .card {
     background: var(--card);
     border-radius: 12px;
@@ -3077,6 +3092,28 @@
       </div>`;
   }
 
+  // /api/nfl/qb-defense-props returns one row PER TEAM (each team's own
+  // QB against that week's real opponent) - so every matchup shows up
+  // twice, once from each side. Reorder those rows so the two QBs facing
+  // each other land back-to-back in the grid, instead of wherever the
+  // API happened to list them.
+  function orderNflDvpByMatchup(games) {
+    const byTeam = new Map(games.map(g => [g.team, g]));
+    const seen = new Set();
+    const ordered = [];
+    for (const g of games) {
+      if (seen.has(g.team)) continue;
+      ordered.push(g);
+      seen.add(g.team);
+      const opp = byTeam.get(g.opponent);
+      if (opp && !seen.has(opp.team)) {
+        ordered.push(opp);
+        seen.add(opp.team);
+      }
+    }
+    return ordered;
+  }
+
   function renderNflDvpFromCache() {
     const container = document.getElementById("nfl-dvp-content");
     if (!nflDvpDataCache) return;
@@ -3086,8 +3123,9 @@
       return;
     }
 
-    const cards = games.map(g => nflDvpCardHtml(g)).join("");
-    container.innerHTML = `<div class="grid">${cards}</div>`;
+    const ordered = orderNflDvpByMatchup(games);
+    const cards = ordered.map(g => nflDvpCardHtml(g)).join("");
+    container.innerHTML = `<div class="nfl-dvp-grid">${cards}</div>`;
   }
 
   // ---- CFB Team Points prop - second non-MLB prop in this dashboard.
