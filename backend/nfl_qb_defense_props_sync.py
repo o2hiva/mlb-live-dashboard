@@ -82,8 +82,12 @@ PROP_FIELDS = ["passing_yards", "passing_tds", "rushing_yards", "rushing_tds"]
 DEFAULT_SHRINKAGE_K = 8.0
 MIN_QUALIFYING_TEAMS_FOR_LIVE_BASELINE = 16
 
-# VALIDATED VALUE, KEPT AS-IS (not lowered) - see module docstring.
-MIN_PRIOR_GAMES = 3
+# TEMPORARILY LOWERED FROM THE VALIDATED VALUE (3) TO 2, BY EXPLICIT
+# REQUEST, so early-season data can be previewed before week 4 - see
+# module docstring for why 3 is the actual validated bar. Below 3 real
+# games, the shrinkage/index math still runs, it's just leaning more on
+# the league-average prior than the validated backtest assumed.
+MIN_PRIOR_GAMES = 2
 
 # Season-level qualifying bar for a QB to be shown/tracked individually -
 # same value nfl_passing_yards_sync.py uses for its own QB list.
