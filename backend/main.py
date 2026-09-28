@@ -56,6 +56,7 @@ _ensure_column("bet_tracker_settings", "draftkings_balance", "FLOAT DEFAULT 0.0"
 _ensure_column("tracked_bets", "bet_type", "VARCHAR DEFAULT 'hits'")
 _ensure_column("tracked_bets", "line", "FLOAT")
 _ensure_column("tracked_bets", "actual_value", "FLOAT")
+_ensure_column("tracked_bets", "external_player_id", "VARCHAR")
 _ensure_column("batter_season_stats", "hr", "INTEGER DEFAULT 0")
 _ensure_column("batter_season_stats", "bb", "INTEGER DEFAULT 0")
 _ensure_column("batter_season_stats", "strikeouts", "INTEGER DEFAULT 0")
@@ -1120,6 +1121,7 @@ class TrackedBetCreate(BaseModel):
     cfb_week: int | None = None
     nfl_season: int | None = None  # NFL team-points/game-total bets only - needed to re-fetch that week's real games at grading time (no numeric id to store, see nfl_points_sync.py)
     nfl_week: int | None = None
+    external_player_id: str | None = None  # gsis_id, for NFL rushing yards / by-position props - batter_id can't hold this (see models_db.py)
 
 
 @app.post("/api/bet-tracker/track")
@@ -1200,6 +1202,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "bet_type": r.bet_type,
             "batter_name": r.batter_name,
             "team_side": r.team_side,
+            "external_player_id": r.external_player_id,
             "matchup": f"{game.away_team} @ {game.home_team}" if game else "Unknown matchup",
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,

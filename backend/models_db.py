@@ -237,6 +237,15 @@ class TrackedBet(Base):
     nfl_season = Column(Integer, nullable=True)
     nfl_week = Column(Integer, nullable=True)
 
+    # NFL Rushing Yards / By Position (QB DvP) props only: the player's
+    # gsis_id (e.g. "00-0034796") - NOT a valid int, so it can't reuse
+    # batter_id (an Integer column relied on elsewhere for real MLB
+    # player ids, CFBD game ids, etc). Tracking these bet types used to
+    # try passing the gsis_id string as batter_id, which Pydantic/the
+    # Integer column rejected outright - the POST silently failed and
+    # the frontend was left thinking the bet was tracked when it wasn't.
+    external_player_id = Column(String, nullable=True)
+
 
 class LineupBatter(Base):
     """One confirmed starting batter for one game/side, in real batting

@@ -2693,23 +2693,39 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            game_pk: null, bet_type: "nfl_rushing_yards", batter_id: gsisId, batter_name: rbName,
+            game_pk: null, bet_type: "nfl_rushing_yards", external_player_id: gsisId, batter_name: rbName,
             team_side: team, line: line,
             yn: state.yn, model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
           }),
         });
         const data = await res.json();
-        state.tracked = true;
-        state.trackedId = data.id;
+        // Only count this as tracked if the server actually created a row
+        // and gave back its id - otherwise the checkbox would show
+        // "tracked" forever with no way to uncheck it (the untrack branch
+        // below only fires when trackedId is set).
+        if (res.ok && data && data.id != null) {
+          state.tracked = true;
+          state.trackedId = data.id;
+        } else {
+          state.tracked = false;
+          state.trackedId = null;
+        }
       } catch (e) {
         state.tracked = false;
+        state.trackedId = null;
       }
-    } else if (state.trackedId != null) {
-      try {
-        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
-      } catch (e) {
-        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+    } else {
+      // Unchecking always clears the tracked flag, even if there's no
+      // trackedId to delete (e.g. state left over from the earlier bug
+      // where a failed track still marked the box checked) - otherwise
+      // the checkbox is stuck checked with nothing to uncheck it.
+      if (state.trackedId != null) {
+        try {
+          await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+        } catch (e) {
+          // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+        }
       }
       state.tracked = false;
       state.trackedId = null;
@@ -2885,23 +2901,39 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            game_pk: null, bet_type: `nfl_qb_dvp_${prop}`, batter_id: gsisId, batter_name: qbName,
+            game_pk: null, bet_type: `nfl_qb_dvp_${prop}`, external_player_id: gsisId, batter_name: qbName,
             team_side: team, line: line,
             yn: state.yn, model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
           }),
         });
         const data = await res.json();
-        state.tracked = true;
-        state.trackedId = data.id;
+        // Only count this as tracked if the server actually created a row
+        // and gave back its id - otherwise the checkbox would show
+        // "tracked" forever with no way to uncheck it (the untrack branch
+        // below only fires when trackedId is set).
+        if (res.ok && data && data.id != null) {
+          state.tracked = true;
+          state.trackedId = data.id;
+        } else {
+          state.tracked = false;
+          state.trackedId = null;
+        }
       } catch (e) {
         state.tracked = false;
+        state.trackedId = null;
       }
-    } else if (state.trackedId != null) {
-      try {
-        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
-      } catch (e) {
-        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+    } else {
+      // Unchecking always clears the tracked flag, even if there's no
+      // trackedId to delete (e.g. state left over from the earlier bug
+      // where a failed track still marked the box checked) - otherwise
+      // the checkbox is stuck checked with nothing to uncheck it.
+      if (state.trackedId != null) {
+        try {
+          await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+        } catch (e) {
+          // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+        }
       }
       state.tracked = false;
       state.trackedId = null;
