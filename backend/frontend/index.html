@@ -3040,10 +3040,9 @@
 
     return `
       <div style="${spacerStyle}">
-        <div class="meta" style="margin-bottom:4px;">${label}</div>
-        <div class="meta" style="margin-bottom:4px;">${idxLabels.qb} ${qbIndexStr} vs ${idxLabels.opp} ${oppIndexStr}</div>
         <div class="teams" style="margin-bottom:4px;">
-          <span>Prediction</span>
+          <span>${label}</span>
+          <span class="meta" style="margin-bottom:0;">${qbIndexStr} vs ${oppIndexStr}</span>
           <span class="score">${meanStr}</span>
         </div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
