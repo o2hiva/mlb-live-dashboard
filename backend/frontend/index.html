@@ -283,9 +283,7 @@
         </div>
         <div id="nfl-dvp-refresh-status" class="settings-hint"></div>
 
-        <div style="overflow-x:auto;">
-          <div id="nfl-dvp-content" style="min-width:2260px;">Loading...</div>
-        </div>
+        <div id="nfl-dvp-content">Loading...</div>
       </div>
 
       <div id="subtab-content-nfl-pos-rb" style="display:none;">
@@ -2975,18 +2973,24 @@
     }
   }
 
-  // One row per QB, all four props' O/U controls side by side (scrolls
-  // horizontally - see the .nfl-dvp-row grid and its wrapping
-  // overflow-x:auto container in the HTML). Each prop group repeats the
-  // same 10 columns: Mean, O/U, Yes%, No%, Y/N, Market, Kelly, Wager,
-  // Profit, Track - prefixed PY/PT/RY/RT in the header so one row still
-  // reads as passing yards, passing TDs, rushing yards, rushing TDs for
-  // the same QB.
-  function nflDvpPropCellsHtml(prop, g) {
+  // One card per QB, laid out 3-per-row in the same .grid/.card look the
+  // MLB and CFB tabs use, rather than NFL's flat table rows. Each card
+  // stacks all four props (Passing Yards, Passing TDs, Rushing Yards,
+  // Rushing TDs) as its own mini O/U section - mirrors cfbTeamBlockHtml's
+  // one-prop-per-block pattern.
+  function nflDvpPropSectionHtml(prop, g, isFirst) {
+    const label = NFL_DVP_LABELS[prop];
     const mean = g[`${prop}_mean`];
+    const spacerStyle = isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
+
     if (mean == null) {
-      return `<span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>`;
+      return `
+        <div style="${spacerStyle}">
+          <div class="meta" style="margin-bottom:4px;">${label}</div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
     }
+
     const state = getNflDvpBetState(prop, g.qb_gsis_id);
     const line = state.threshold;
     const yesPct = probNflDvpAtLeast(prop, mean, line) * 100;
@@ -3003,19 +3007,40 @@
     const meanStr = prop === "passing_tds" ? Math.round(mean).toString() : (prop === "rushing_tds" ? mean.toFixed(2) : mean.toFixed(1));
 
     return `
-      <span>${meanStr}</span>
-      <input type="number" min="0" step="${NFL_DVP_THRESHOLD_STEP[prop]}" value="${line}" style="text-align:center;" onchange="updateNflDvpThreshold('${prop}','${g.qb_gsis_id}',this.value)" />
-      <span class="prob-yes">${Math.round(yesPct)}%</span>
-      <span class="prob-no">${Math.round(noPct)}%</span>
-      <select onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','yn',this.value)">
-        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
-        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
-      </select>
-      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','market',this.value)" />
-      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','useKelly',this.checked)" />
-      ${wagerHtml}
-      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
-      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflDvpTrack(${trackArgs})" />`;
+      <div style="${spacerStyle}">
+        <div class="teams" style="margin-bottom:4px;">
+          <span>${label}</span>
+          <span class="score">${meanStr}</span>
+        </div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <input type="number" min="0" step="${NFL_DVP_THRESHOLD_STEP[prop]}" value="${line}" style="text-align:center;" onchange="updateNflDvpThreshold('${prop}','${g.qb_gsis_id}',this.value)" />
+          <span class="prob-yes">${Math.round(yesPct)}%</span>
+          <span class="prob-no">${Math.round(noPct)}%</span>
+          <select onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','yn',this.value)">
+            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+          </select>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','market',this.value)" />
+          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflDvpBetField('${prop}','${g.qb_gsis_id}','useKelly',this.checked)" />
+          ${wagerHtml}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflDvpTrack(${trackArgs})" />
+        </div>
+      </div>`;
+  }
+
+  function nflDvpCardHtml(g) {
+    return `
+      <div class="card">
+        <div class="teams">
+          <span>${g.qb_name || "Not enough data"}</span>
+        </div>
+        <div class="meta">${g.team} vs ${g.opponent}</div>
+        ${NFL_DVP_PROPS.map((prop, i) => nflDvpPropSectionHtml(prop, g, i === 0)).join("")}
+      </div>`;
   }
 
   function renderNflDvpFromCache() {
@@ -3027,25 +3052,8 @@
       return;
     }
 
-    const propHeaderCells = prop => {
-      const ab = NFL_DVP_ABBREV[prop];
-      return `<span>${ab}</span><span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>MKT</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>`;
-    };
-    const header = `
-      <div class="nfl-dvp-row nfl-dvp-row-header">
-        <span>QB</span><span>Team</span><span>Opp</span>
-        ${NFL_DVP_PROPS.map(propHeaderCells).join("")}
-      </div>`;
-
-    const rows = games.map(g => `
-      <div class="nfl-dvp-row">
-        <span>${g.qb_name || "Not enough data"}</span>
-        <span>${g.team}</span>
-        <span>${g.opponent}</span>
-        ${NFL_DVP_PROPS.map(prop => nflDvpPropCellsHtml(prop, g)).join("")}
-      </div>`).join("");
-
-    container.innerHTML = header + rows;
+    const cards = games.map(g => nflDvpCardHtml(g)).join("");
+    container.innerHTML = `<div class="grid">${cards}</div>`;
   }
 
   // ---- CFB Team Points prop - second non-MLB prop in this dashboard.
