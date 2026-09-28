@@ -74,10 +74,11 @@ nfl_qb_defense_props_sync.py's team_qb_aggregate already uses, and the
 same limitation: not exact when touches were split more evenly across
 a committee than one RB's own game count implies).
 
-MIN_PRIOR_GAMES kept at the VALIDATED value (3), same choice already
-made for NFL/CFB Team Points and the QB version of this tab (leave the
-validated bar alone rather than guess with less evidence) - "not enough
-data" for every matchup until week 4, by design.
+MIN_PRIOR_GAMES: the validated value is 3 (same choice made for NFL/CFB
+Team Points and the QB version of this tab), but it's TEMPORARILY
+LOWERED TO 2 by explicit request so early-season data can be previewed
+before week 4 - see the constant's own comment below. Revert to 3 once
+previewing is done.
 """
 import logging
 import time
@@ -99,8 +100,13 @@ PROP_FIELDS = RAW_FIELDS + ["total_yards", "total_tds"]
 DEFAULT_SHRINKAGE_K = 8.0
 MIN_QUALIFYING_FOR_LIVE_BASELINE = 16  # applies to BOTH qualifying RBs (own side) and qualifying defenses (opp side)
 
-# Kept at the validated value - see module docstring.
-MIN_PRIOR_GAMES = 3
+# TEMPORARILY LOWERED FROM THE VALIDATED VALUE (3) TO 2, BY EXPLICIT
+# REQUEST, so early-season data can be previewed before week 4 - same
+# temporary change already made to nfl_qb_defense_props_sync.py's own
+# MIN_PRIOR_GAMES, for the same reason. Below 3 real games, the
+# shrinkage/index math still runs, it's just leaning more on the
+# league-average prior than the validated backtest assumed.
+MIN_PRIOR_GAMES = 2
 
 # Season-level substitute for the core script's per-game MIN_TOUCHES_OWN=8
 # floor - see module docstring's disclosed tradeoff.
