@@ -362,8 +362,8 @@
     <h2 style="margin-top:32px;">Hit Rates</h2>
     <div class="platform-grid" id="hit-rate-boxes">Loading...</div>
 
-    <h2 style="margin-top:32px;">Group Hit rates by sport</h2>
-    <div class="platform-grid" id="sport-hit-rate-boxes">Loading...</div>
+    <h2 style="margin-top:32px;">Hit rates by bet type</h2>
+    <div class="platform-grid" id="bet-type-hit-rate-boxes">Loading...</div>
 
     <h2 style="margin-top:32px;">Hit Rates by Week</h2>
     <div id="weekly-hit-rate-table">Loading...</div>
@@ -1897,17 +1897,6 @@
       </div>`;
   }
 
-  function renderHitRateBoxes(bets) {
-    const container = document.getElementById("hit-rate-boxes");
-    const overall = hitRateFor(bets);
-    let html = hitRateBoxHtml("Overall", overall);
-    for (const cat of HIT_RATE_CATEGORIES) {
-      const rate = hitRateFor(bets.filter(cat.filter));
-      html += hitRateBoxHtml(cat.label, rate);
-    }
-    container.innerHTML = html;
-  }
-
   // Explicit per-sport bet_type lists, NOT "everything else is MLB" -
   // that fallback silently mis-bucketed any new sport added later (bit
   // us once already when CFB was added). Add new bet_types to the
@@ -1918,10 +1907,23 @@
     { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
   ];
 
-  function renderSportHitRateBoxes(bets) {
-    const container = document.getElementById("sport-hit-rate-boxes");
-    let html = "";
+  // Top "Hit Rates" group: Overall first, then MLB/NFL/CFB.
+  function renderHitRateBoxes(bets) {
+    const container = document.getElementById("hit-rate-boxes");
+    const overall = hitRateFor(bets);
+    let html = hitRateBoxHtml("Overall", overall);
     for (const cat of SPORT_CATEGORIES) {
+      const rate = hitRateFor(bets.filter(cat.filter));
+      html += hitRateBoxHtml(cat.label, rate);
+    }
+    container.innerHTML = html;
+  }
+
+  // Second "Hit rates by bet type" group: the individual props.
+  function renderBetTypeHitRateBoxes(bets) {
+    const container = document.getElementById("bet-type-hit-rate-boxes");
+    let html = "";
+    for (const cat of HIT_RATE_CATEGORIES) {
       const rate = hitRateFor(bets.filter(cat.filter));
       html += hitRateBoxHtml(cat.label, rate);
     }
@@ -1999,7 +2001,7 @@
       const res = await fetch(`${API_BASE}/api/bet-tracker/tracked`);
       const bets = await res.json();
       renderHitRateBoxes(bets);
-      renderSportHitRateBoxes(bets);
+      renderBetTypeHitRateBoxes(bets);
       renderWeeklyHitRateTable(bets);
       if (!bets.length) {
         container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
