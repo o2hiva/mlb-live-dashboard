@@ -76,7 +76,17 @@ log = logging.getLogger("nfl_qb_defense_props_sync")
 API_BASE = "https://api.nfldata.org/v1"
 TIMEOUT = 30
 
-PROP_FIELDS = ["passing_yards", "passing_tds", "rushing_yards", "rushing_tds"]
+PROP_FIELDS = ["passing_yards", "passing_tds", "rushing_yards", "rushing_tds",
+               "passing_completions", "passing_attempts", "rushing_attempts"]
+
+# Raw /stats/season field name -> our prop name, for the 3 props whose
+# game-log key differs from the prop name itself (verbatim mapping from
+# the newer core_nfl_qb_defense_props.py).
+PROP_TO_FIELD = {
+    "passing_completions": "completions",
+    "passing_attempts": "attempts",
+    "rushing_attempts": "carries",
+}
 
 # Verbatim from core_nfl_qb_defense_props.py.
 DEFAULT_SHRINKAGE_K = 8.0
@@ -101,15 +111,22 @@ PROP_DISTRIBUTION = {
     "rushing_yards": ("normal", 17.3),
     "passing_tds": ("poisson", None),
     "rushing_tds": ("negbinom", 1.2),
+    "passing_completions": ("negbinom", 1.65),
+    "passing_attempts": ("negbinom", 2.0),
+    "rushing_attempts": ("negbinom", 1.5),
 }
 
 # Validated empirical values: the real "League" row from
-# backtest_nfl_defense_vs_qb.py's 2023 report (527 real team-games).
+# backtest_nfl_defense_vs_qb.py's 2023 report (527 real team-games), plus
+# the 3 new props' static averages from the newer core_nfl_qb_defense_props.py.
 LEAGUE_AVG_STATIC = {
     "passing_yards": 232.3,
     "passing_tds": 1.36,
     "rushing_yards": 16.9,
     "rushing_tds": 0.20,
+    "passing_completions": 21.355,
+    "passing_attempts": 33.088,
+    "rushing_attempts": 3.944,
 }
 
 CACHE_TTL_SECONDS = 6 * 60 * 60
@@ -140,16 +157,23 @@ def get_season_qbs_raw(season: int) -> list:
             break
         for row in rows:
             if row.get("position") == "QB":
+                attempts = row.get("attempts", 0) or 0
                 qbs.append({
                     "gsis_id": row["player_id"],
                     "name": row.get("player_display_name", row.get("player_name", "")),
                     "team": row.get("recent_team"),
                     "games": row.get("games", 0) or 0,
-                    "attempts": row.get("attempts", 0) or 0,
+                    "attempts": attempts,
                     "passing_yards": row.get("passing_yards", 0) or 0,
                     "passing_tds": row.get("passing_tds", 0) or 0,
                     "rushing_yards": row.get("rushing_yards", 0) or 0,
                     "rushing_tds": row.get("rushing_tds", 0) or 0,
+                    # 3 new props - re-keyed from the raw API field names to
+                    # our prop names (see PROP_TO_FIELD) so the generic
+                    # PROP_FIELDS-driven code below can find them by prop name.
+                    "passing_completions": row.get("completions", 0) or 0,
+                    "passing_attempts": attempts,
+                    "rushing_attempts": row.get("carries", 0) or 0,
                 })
         total = payload.get("total", 0)
         offset += limit
@@ -173,12 +197,17 @@ def team_qb_aggregate(all_qbs_raw: list) -> dict:
         if not team:
             continue
         entry = agg.setdefault(team, {"games": 0, "passing_yards": 0, "passing_tds": 0,
-                                       "rushing_yards": 0, "rushing_tds": 0})
+                                       "rushing_yards": 0, "rushing_tds": 0,
+                                       "passing_completions": 0, "passing_attempts": 0,
+                                       "rushing_attempts": 0})
         entry["games"] = max(entry["games"], qb["games"])
         entry["passing_yards"] += qb["passing_yards"]
         entry["passing_tds"] += qb["passing_tds"]
         entry["rushing_yards"] += qb["rushing_yards"]
         entry["rushing_tds"] += qb["rushing_tds"]
+        entry["passing_completions"] += qb["passing_completions"]
+        entry["passing_attempts"] += qb["passing_attempts"]
+        entry["rushing_attempts"] += qb["rushing_attempts"]
     return agg
 
 
@@ -232,6 +261,9 @@ def refresh_nfl_qb_defense_props_stats(season: int, current_week: int) -> dict:
                 games=qb["games"], attempts=qb["attempts"],
                 passing_yards_sum=qb["passing_yards"], passing_tds_sum=qb["passing_tds"],
                 rushing_yards_sum=qb["rushing_yards"], rushing_tds_sum=qb["rushing_tds"],
+                passing_completions_sum=qb["passing_completions"],
+                passing_attempts_sum=qb["passing_attempts"],
+                rushing_attempts_sum=qb["rushing_attempts"],
             ))
 
         team_agg = team_qb_aggregate(all_qbs_raw)
@@ -255,7 +287,9 @@ def refresh_nfl_qb_defense_props_stats(season: int, current_week: int) -> dict:
                 if opp_agg and opp_agg["games"] > 0:
                     entry = defense_allowed_totals.setdefault(
                         team, {"games": 0, "passing_yards": 0.0, "passing_tds": 0.0,
-                               "rushing_yards": 0.0, "rushing_tds": 0.0})
+                               "rushing_yards": 0.0, "rushing_tds": 0.0,
+                               "passing_completions": 0.0, "passing_attempts": 0.0,
+                               "rushing_attempts": 0.0})
                     entry["games"] += 1
                     for prop in PROP_FIELDS:
                         entry[prop] += opp_agg[prop] / opp_agg["games"]
@@ -264,7 +298,9 @@ def refresh_nfl_qb_defense_props_stats(season: int, current_week: int) -> dict:
                 if team_agg_self and team_agg_self["games"] > 0:
                     entry2 = defense_allowed_totals.setdefault(
                         opponent, {"games": 0, "passing_yards": 0.0, "passing_tds": 0.0,
-                                   "rushing_yards": 0.0, "rushing_tds": 0.0})
+                                   "rushing_yards": 0.0, "rushing_tds": 0.0,
+                                   "passing_completions": 0.0, "passing_attempts": 0.0,
+                                   "rushing_attempts": 0.0})
                     entry2["games"] += 1
                     for prop in PROP_FIELDS:
                         entry2[prop] += team_agg_self[prop] / team_agg_self["games"]
@@ -275,6 +311,9 @@ def refresh_nfl_qb_defense_props_stats(season: int, current_week: int) -> dict:
                 team=team, games=entry["games"],
                 passing_yards_sum=round(entry["passing_yards"]), passing_tds_sum=round(entry["passing_tds"]),
                 rushing_yards_sum=round(entry["rushing_yards"]), rushing_tds_sum=round(entry["rushing_tds"]),
+                passing_completions_sum=round(entry["passing_completions"]),
+                passing_attempts_sum=round(entry["passing_attempts"]),
+                rushing_attempts_sum=round(entry["rushing_attempts"]),
             ))
 
         try:

@@ -1877,6 +1877,9 @@
     { label: "NFL DvP Pass TDs", filter: b => b.bet_type === "nfl_qb_dvp_passing_tds" },
     { label: "NFL DvP Rush Yds", filter: b => b.bet_type === "nfl_qb_dvp_rushing_yards" },
     { label: "NFL DvP Rush TDs", filter: b => b.bet_type === "nfl_qb_dvp_rushing_tds" },
+    { label: "NFL DvP Completions", filter: b => b.bet_type === "nfl_qb_dvp_passing_completions" },
+    { label: "NFL DvP Pass Att", filter: b => b.bet_type === "nfl_qb_dvp_passing_attempts" },
+    { label: "NFL DvP Rush Att", filter: b => b.bet_type === "nfl_qb_dvp_rushing_attempts" },
     { label: "NFL RB DvP Rush Yds", filter: b => b.bet_type === "nfl_rb_dvp_rushing_yards" },
     { label: "NFL RB DvP Rush TDs", filter: b => b.bet_type === "nfl_rb_dvp_rushing_tds" },
     { label: "NFL RB DvP Rec Yds", filter: b => b.bet_type === "nfl_rb_dvp_receiving_yards" },
@@ -2883,16 +2886,19 @@
   // the displayed Yes% should still mean the same thing everywhere. Bet
   // state is keyed by "prop|gsisId" since one QB has FOUR independent
   // O/U lines, one per prop. ----
-  const NFL_DVP_PROPS = ["passing_yards", "passing_tds", "rushing_yards", "rushing_tds"];
-  const NFL_DVP_LABELS = { passing_yards: "Passing Yards", passing_tds: "Passing TDs", rushing_yards: "Rushing Yards", rushing_tds: "Rushing TDs" };
+  const NFL_DVP_PROPS = ["passing_yards", "passing_tds", "rushing_yards", "rushing_tds", "passing_completions", "passing_attempts", "rushing_attempts"];
+  const NFL_DVP_LABELS = { passing_yards: "Passing Yards", passing_tds: "Passing TDs", rushing_yards: "Rushing Yards", rushing_tds: "Rushing TDs", passing_completions: "Passing Completions", passing_attempts: "Passing Attempts", rushing_attempts: "Rushing Attempts" };
   const NFL_DVP_DISTRIBUTIONS = {
     passing_yards: { type: "normal", sd: 73.9 },
     rushing_yards: { type: "normal", sd: 17.3 },
     passing_tds: { type: "poisson" },
     rushing_tds: { type: "negbinom", overdispersion: 1.2 },
+    passing_completions: { type: "negbinom", overdispersion: 1.65 },
+    passing_attempts: { type: "negbinom", overdispersion: 2.0 },
+    rushing_attempts: { type: "negbinom", overdispersion: 1.5 },
   };
-  const NFL_DVP_DEFAULT_THRESHOLD = { passing_yards: 230, passing_tds: 1.5, rushing_yards: 15, rushing_tds: 0.5 };
-  const NFL_DVP_THRESHOLD_STEP = { passing_yards: 10, passing_tds: 0.5, rushing_yards: 5, rushing_tds: 0.5 };
+  const NFL_DVP_DEFAULT_THRESHOLD = { passing_yards: 230, passing_tds: 1.5, rushing_yards: 15, rushing_tds: 0.5, passing_completions: 21, passing_attempts: 33, rushing_attempts: 4 };
+  const NFL_DVP_THRESHOLD_STEP = { passing_yards: 10, passing_tds: 0.5, rushing_yards: 5, rushing_tds: 0.5, passing_completions: 1, passing_attempts: 1, rushing_attempts: 0.5 };
   // QB index vs opponent-allowed index labels per prop - the rushing pair
   // calls out that the opponent side is specifically what that defense
   // allows to the QB POSITION (team_qb_aggregate on the backend), not the
@@ -2903,6 +2909,9 @@
     passing_tds: { qb: "QB Pass TDs Index", opp: "Opp Pass TDs Allowed Index" },
     rushing_yards: { qb: "QB Rush Yds Index", opp: "Def Rush Yds Allowed to QB Index" },
     rushing_tds: { qb: "QB Rush TDs Index", opp: "Def Rush TDs Allowed to QB Index" },
+    passing_completions: { qb: "QB Completions Index", opp: "Opp Completions Allowed Index" },
+    passing_attempts: { qb: "QB Attempts Index", opp: "Opp Attempts Allowed Index" },
+    rushing_attempts: { qb: "QB Rush Att Index", opp: "Def Rush Att Allowed to QB Index" },
   };
   // Full team names for the card header ("Jalen Hurts vs Chicago Bears")
   // - api.nfldata.org only gives back abbreviations (nflverse convention).

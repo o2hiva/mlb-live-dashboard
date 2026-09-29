@@ -70,6 +70,12 @@ _ensure_column("tracked_bets", "cfb_season", "INTEGER")
 _ensure_column("tracked_bets", "cfb_week", "INTEGER")
 _ensure_column("tracked_bets", "nfl_season", "INTEGER")
 _ensure_column("tracked_bets", "nfl_week", "INTEGER")
+_ensure_column("nfl_qb_defense_prop_stats", "passing_completions_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_qb_defense_prop_stats", "passing_attempts_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_qb_defense_prop_stats", "rushing_attempts_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_defense_allowed_prop_stats", "passing_completions_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_defense_allowed_prop_stats", "passing_attempts_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_defense_allowed_prop_stats", "rushing_attempts_sum", "INTEGER DEFAULT 0")
 
 _scheduler = None
 

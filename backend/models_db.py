@@ -418,6 +418,9 @@ class NflQbDefensePropStat(Base):
     passing_tds_sum = Column(Integer, default=0)
     rushing_yards_sum = Column(Integer, default=0)
     rushing_tds_sum = Column(Integer, default=0)
+    passing_completions_sum = Column(Integer, default=0)
+    passing_attempts_sum = Column(Integer, default=0)
+    rushing_attempts_sum = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -436,6 +439,9 @@ class NflDefenseAllowedPropStat(Base):
     passing_tds_sum = Column(Integer, default=0)
     rushing_yards_sum = Column(Integer, default=0)
     rushing_tds_sum = Column(Integer, default=0)
+    passing_completions_sum = Column(Integer, default=0)
+    passing_attempts_sum = Column(Integer, default=0)
+    rushing_attempts_sum = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
