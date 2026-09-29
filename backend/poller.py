@@ -32,6 +32,7 @@ import mlb_client
 import predictor
 import hits_stats_sync
 import end_of_day
+import nhl_goalie_saves_sync
 from database import SessionLocal
 from models_db import Game, InningLine, Prediction
 
@@ -47,6 +48,15 @@ POLL_INTERVAL_IDLE_SECONDS = 60
 # MLB's API, so "yesterday" is guaranteed complete by the time this runs.
 INNING_STATS_REFRESH_HOUR_UTC = 9
 INNING_STATS_REFRESH_MINUTE_UTC = 0
+
+# NHL Goalie Saves daily collector - one hour after the MLB end-of-day
+# job above so the two never overlap. Unlike that job, this one is
+# INCREMENTAL (only newly-finished games get fetched - see
+# nhl_goalie_saves_sync.py's module docstring), so running it once a day
+# is enough; there's no need for anything more frequent the way MLB's
+# live-game polling is.
+NHL_GOALIE_SAVES_REFRESH_HOUR_UTC = 10
+NHL_GOALIE_SAVES_REFRESH_MINUTE_UTC = 0
 
 # How many days ahead to keep loaded/refreshed, so tomorrow's (and the
 # day after's) games + probable pitchers show up before game day, not
@@ -177,6 +187,21 @@ def poll_live_games():
         db.close()
 
 
+def _nhl_goalie_saves_daily_update():
+    """Wraps nhl_goalie_saves_sync.daily_update with its own try/except
+    so a failure here (a transient NHL API error, say) never takes down
+    the scheduler thread or blocks the other jobs registered in
+    start_scheduler - same defensive wrapping every other job function in
+    this module already does internally (see sync_schedule/
+    poll_live_games's own try/except/finally)."""
+    try:
+        season = nhl_goalie_saves_sync.current_nhl_season()
+        summary = nhl_goalie_saves_sync.daily_update(season)
+        log.info("NHL goalie-saves daily update complete: %s", summary)
+    except Exception:
+        log.exception("NHL goalie-saves daily update failed")
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
@@ -194,6 +219,19 @@ def start_scheduler() -> BackgroundScheduler:
         end_of_day.run_end_of_day_update,
         CronTrigger(hour=INNING_STATS_REFRESH_HOUR_UTC, minute=INNING_STATS_REFRESH_MINUTE_UTC),
         id="end_of_day_update",
+        next_run_time=datetime.utcnow(),
+    )
+    # NHL Goalie Saves - runs once daily (see NHL_GOALIE_SAVES_REFRESH_HOUR_UTC
+    # above), incrementally collecting any newly-finished games and
+    # refreshing tomorrow's real matchups. next_run_time=now ALSO fires it
+    # once immediately on every app startup/redeploy, same reasoning as
+    # end_of_day_update above - the season starts the day this feature
+    # ships, so the very first deploy needs tomorrow's game list ready
+    # without waiting until the next scheduled hour.
+    scheduler.add_job(
+        _nhl_goalie_saves_daily_update,
+        CronTrigger(hour=NHL_GOALIE_SAVES_REFRESH_HOUR_UTC, minute=NHL_GOALIE_SAVES_REFRESH_MINUTE_UTC),
+        id="nhl_goalie_saves_daily_update",
         next_run_time=datetime.utcnow(),
     )
     scheduler.start()

@@ -1076,6 +1076,65 @@ def nfl_points_games(db: Session = Depends(get_db)):
     return {"games": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/refresh-nhl-goalie-saves-stats")
+def manual_refresh_nhl_goalie_saves_stats(season: str, target_date: str | None = None):
+    """
+    Manually triggers the NHL Goalie Saves daily update for a given
+    season (NHL's own 8-digit code, e.g. "20262027" for the 2026-27
+    season). INCREMENTAL, not a full rebuild (see nhl_goalie_saves_sync.py's
+    module docstring for why) - only fetches games not already collected,
+    folds them into the running team-shots/goalie-saves totals, and
+    refreshes target_date's (default: tomorrow, UTC) real matchups. Safe
+    to call any number of times. Also runs automatically once daily (see
+    poller.py), which fires once immediately on every deploy too.
+    """
+    import nhl_goalie_saves_sync
+    summary = nhl_goalie_saves_sync.daily_update(season, target_date)
+    return {"status": "refreshed", "season": season, **summary}
+
+
+@app.get("/api/nhl/goalie-saves")
+def nhl_goalie_saves(db: Session = Depends(get_db)):
+    """
+    Every team's real target-date matchup and predicted goalie saves
+    (presumed starter picked as the team's most-games-on-record goalie -
+    see nhl_goalie_saves_sync.compute_goalie_saves_prediction), from
+    whatever the last daily_update call populated. Mirrors
+    /api/nfl/points-games's shape - one row per team per game, grouped by
+    game_id client-side into a single card per matchup.
+    """
+    from models_db import NhlGoalieGame
+    import nhl_goalie_saves_sync
+
+    games = db.query(NhlGoalieGame).all()
+    if not games:
+        return {"games": [], "season": None, "target_date": None}
+
+    league_avgs = nhl_goalie_saves_sync.get_league_avgs(db)
+
+    rows = []
+    for g in games:
+        inputs = nhl_goalie_saves_sync.compute_goalie_saves_prediction(g.team, g.opponent, db, league_avgs=league_avgs)
+        rows.append({
+            "team": g.team,
+            "opponent": g.opponent,
+            "game_id": g.game_id if g.game_id is not None else "|".join(sorted([g.team, g.opponent])),
+            "is_home": g.is_home,
+            "date": g.date,
+            "goalie_name": inputs["goalie_name"] if inputs else None,
+            "goalie_player_id": inputs["goalie_player_id"] if inputs else None,
+            "starter_is_heuristic": inputs["starter_is_heuristic"] if inputs else None,
+            "predicted_mean": inputs["mean"] if inputs else None,
+            "team_index": inputs["team_index"] if inputs else None,
+            "opp_index": inputs["opp_index"] if inputs else None,
+            "team_games_sample": inputs["team_games_sample"] if inputs else None,
+            "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+            "goalie_shots_sample": inputs["goalie_shots_sample"] if inputs else None,
+        })
+
+    return {"games": rows, "season": games[0].season, "target_date": games[0].date}
+
+
 @app.get("/api/debug/boxscore/{game_pk}")
 def debug_boxscore(game_pk: int):
     """

@@ -630,3 +630,80 @@ class NflQbSnapshot(Base):
     cumulative_attempts = Column(Integer, default=0)
     cumulative_yards = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NhlCollectedGame(Base):
+    """One real, finished NHL game already applied to NhlTeamShotsStat /
+    NhlGoalieSavesStat - the dedup ledger that makes
+    nhl_goalie_saves_sync.daily_update's game-collection step resumable
+    and incremental (only games NOT yet in this table get fetched and
+    applied on the next call). Same "resume, don't refetch" discipline as
+    nhl_backtest_team_shots.py's own JSON progress file, just ported to a
+    Postgres table since a full 82-game/32-team NHL season is too much to
+    rebuild from scratch on every refresh, unlike NFL/CFB's much smaller
+    week counts."""
+    __tablename__ = "nhl_collected_games"
+
+    game_id = Column(Integer, primary_key=True)  # NHL's own numeric game id
+    season = Column(String)   # NHL's 8-digit season code, e.g. "20262027"
+    date = Column(String)     # "YYYY-MM-DD"
+    home = Column(String)
+    away = Column(String)
+    home_sog = Column(Integer)
+    away_sog = Column(Integer)
+    collected_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NhlTeamShotsStat(Base):
+    """One NHL team's real season-to-date shots-for/shots-against totals -
+    INCREMENTALLY accumulated by nhl_goalie_saves_sync.daily_update as
+    each newly-finished game is discovered (unlike the NFL/CFB points
+    props, this is never rebuilt from scratch - an 82-game/32-team NHL
+    season is too much to refetch every refresh). Mirrors
+    core_nhl_goalie_saves.py's team_counts shape (games/shots_for_sum/
+    shots_against_sum)."""
+    __tablename__ = "nhl_team_shots_stats"
+
+    team = Column(String, primary_key=True)
+    season = Column(String)
+    games = Column(Integer, default=0)
+    shots_for_sum = Column(Integer, default=0)
+    shots_against_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NhlGoalieSavesStat(Base):
+    """One goalie's real season-to-date saves/shots-against totals - ONLY
+    accumulated from real single-goalie full-game appearances (see
+    core_nhl_goalie_saves.py's single-goalie-game gating - a goalie who
+    split a game with another goalie, or logged a 0-TOI dressed-but-
+    unused appearance, never contributes here). Mirrors that module's
+    goalie_counts shape."""
+    __tablename__ = "nhl_goalie_saves_stats"
+
+    player_id = Column(Integer, primary_key=True)  # NHL's own numeric player id
+    name = Column(String)
+    team = Column(String)  # most-recently-seen team, kept current each game applied
+    season = Column(String)
+    games = Column(Integer, default=0)
+    saves_sum = Column(Integer, default=0)
+    shots_against_sum = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NhlGoalieGame(Base):
+    """The target date's (normally tomorrow, UTC) real matchups - one row
+    per team, REFRESHED each daily_update call (not accumulated), same
+    pattern as NflPointsGame/CfbGame. game_id is the NHL API's own
+    numeric game id, kept for potential future grading use (not currently
+    used - see bet_grading.py, this prop is left permanently pending like
+    every other estimation-based prop in this project)."""
+    __tablename__ = "nhl_goalie_games"
+
+    team = Column(String, primary_key=True)
+    opponent = Column(String)
+    is_home = Column(Boolean, default=False)
+    game_id = Column(Integer, nullable=True)
+    date = Column(String, nullable=True)  # "YYYY-MM-DD"
+    season = Column(String)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

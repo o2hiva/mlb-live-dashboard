@@ -91,6 +91,14 @@ DATA SOURCES, one per bet_type:
     identifying the whole game - both real final scores are summed
     once that exact away/home pair is found completed.
 
+  - "nhl_goalie_saves": NOT gradeable by this module. The NHL Goalie
+    Saves prop's own presumed-starter pick (see
+    nhl_goalie_saves_sync.py's docstring) means the goalie who actually
+    started a given game may not match the one a bet was tracked
+    against, and there's no per-bet real-time re-verification path built
+    yet. Left pending indefinitely unless graded by hand, same permanent
+    status as nfl_passing_yards/nfl_rushing_yards/the NFL DvP props.
+
 GRADING RULE for every bet_type: "yes" wins if actual >= line (or, for
 first_inning_run, if a run actually scored); "no" wins the opposite.
 HR/Hits/HRR/Pitcher-Hits-Allowed/Game-Lines lines are always whole
@@ -122,7 +130,8 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds",
                           "nfl_rb_dvp_rushing_yards", "nfl_rb_dvp_rushing_tds",
                           "nfl_rb_dvp_receiving_yards", "nfl_rb_dvp_receiving_tds",
-                          "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td"}
+                          "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td",
+                          "nhl_goalie_saves"}
 
 
 def _refresh_abstract_status(db, game: Game):
