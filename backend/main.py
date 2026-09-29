@@ -76,6 +76,8 @@ _ensure_column("nfl_qb_defense_prop_stats", "rushing_attempts_sum", "INTEGER DEF
 _ensure_column("nfl_defense_allowed_prop_stats", "passing_completions_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_defense_allowed_prop_stats", "passing_attempts_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_defense_allowed_prop_stats", "rushing_attempts_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_qb_defense_prop_games", "gameday", "VARCHAR")
+_ensure_column("nfl_rb_defense_prop_games", "gameday", "VARCHAR")
 
 _scheduler = None
 
@@ -881,6 +883,7 @@ def nfl_qb_defense_props(db: Session = Depends(get_db)):
         row = {
             "team": g.team,
             "opponent": g.opponent,
+            "gameday": g.gameday,
             "qb_name": inputs["qb_name"] if inputs else None,
             "qb_gsis_id": inputs["qb_gsis_id"] if inputs else None,
             "qb_games_sample": inputs["qb_games_sample"] if inputs else None,
@@ -946,6 +949,7 @@ def nfl_rb_defense_props(db: Session = Depends(get_db)):
             row = {
                 "team": g.team,
                 "opponent": g.opponent,
+                "gameday": g.gameday,
                 "rb_name": inputs["rb_name"],
                 "rb_gsis_id": inputs["rb_gsis_id"],
                 "rb_games_sample": inputs["rb_games_sample"],

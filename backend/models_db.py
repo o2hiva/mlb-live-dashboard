@@ -456,6 +456,7 @@ class NflQbDefensePropGame(Base):
     opponent = Column(String)
     season = Column(Integer)
     week = Column(Integer)
+    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_qb_defense_props_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -529,6 +530,7 @@ class NflRbDefensePropGame(Base):
     opponent = Column(String)
     season = Column(Integer)
     week = Column(Integer)
+    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_rb_defense_props_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

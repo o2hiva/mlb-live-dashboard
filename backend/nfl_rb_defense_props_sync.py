@@ -239,6 +239,34 @@ def get_week_games(season: int, week: int) -> dict:
     return matchups
 
 
+def get_current_week_matchups_with_dates(season: int, week: int) -> dict:
+    """{team: {"opponent":, "gameday":}} for the CURRENT week only - same
+    /v1/games call as get_week_games, but also keeps each game's real
+    "gameday" (confirmed live field, format "YYYY-MM-DD") so the frontend
+    can order boxes by real kickoff day (Thursday night game first,
+    Monday Night Football last). NOTE: the API's own "gametime" field is
+    confirmed always null (checked against live 2026 week-4 data), so
+    this can only sort by DAY, not time-of-day - correct for TNF-first/
+    MNF-last, but can't sub-order same-day Sunday games (early/late/SNF)."""
+    resp = requests.get(
+        f"{API_BASE}/games",
+        params={"season": season, "week": week},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    games = resp.json().get("data", [])
+    matchups = {}
+    for g in games:
+        if g.get("game_type") != "REG":
+            continue
+        away, home = g.get("away_team"), g.get("home_team")
+        gameday = g.get("gameday")
+        if away and home:
+            matchups[away] = {"opponent": home, "gameday": gameday}
+            matchups[home] = {"opponent": away, "gameday": gameday}
+    return matchups
+
+
 def _shrunk_avg(sum_val: float, count: int, k: float, league_avg: float) -> float:
     return (sum_val + k * league_avg) / (count + k)
 
@@ -324,14 +352,15 @@ def refresh_nfl_rb_defense_props_stats(season: int, current_week: int) -> dict:
             ))
 
         try:
-            this_week_matchups = get_week_games(season, current_week)
+            this_week_matchups = get_current_week_matchups_with_dates(season, current_week)
         except requests.exceptions.RequestException:
             log.exception("Failed to fetch NFL RB DvP current week %s schedule", current_week)
             this_week_matchups = {}
 
         db.query(NflRbDefensePropGame).delete()
-        for team, opponent in this_week_matchups.items():
-            db.add(NflRbDefensePropGame(team=team, opponent=opponent, season=season, week=current_week))
+        for team, info in this_week_matchups.items():
+            db.add(NflRbDefensePropGame(team=team, opponent=info["opponent"], season=season,
+                                         week=current_week, gameday=info["gameday"]))
 
         db.commit()
         global _own_league_avg_cache, _opp_league_avg_cache, _league_avg_cache_time

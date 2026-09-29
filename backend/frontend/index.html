@@ -3139,11 +3139,26 @@
   // twice, once from each side. Reorder those rows so the two QBs facing
   // each other land back-to-back in the grid, instead of wherever the
   // API happened to list them.
+  // Sorts by real kickoff day ("gameday", "YYYY-MM-DD" from /v1/games) so
+  // Thursday Night Football lands first and Monday Night Football lands
+  // last. The API never populates a time-of-day field (confirmed against
+  // live data), so this can only order by DAY - same-day Sunday games
+  // keep their original relative order among themselves. Missing/null
+  // gameday sorts last rather than crashing the comparison.
+  function sortByGameday(list) {
+    return [...list].sort((a, b) => {
+      const da = a.gameday || "9999-99-99";
+      const db_ = b.gameday || "9999-99-99";
+      return da < db_ ? -1 : da > db_ ? 1 : 0;
+    });
+  }
+
   function orderNflDvpByMatchup(games) {
-    const byTeam = new Map(games.map(g => [g.team, g]));
+    const dated = sortByGameday(games);
+    const byTeam = new Map(dated.map(g => [g.team, g]));
     const seen = new Set();
     const ordered = [];
-    for (const g of games) {
+    for (const g of dated) {
       if (seen.has(g.team)) continue;
       ordered.push(g);
       seen.add(g.team);
@@ -3528,14 +3543,15 @@
   // immediately after, same "two sides of one game, back-to-back" goal
   // as orderNflDvpByMatchup above.
   function orderNflRbDvpByMatchup(rows) {
+    const dated = sortByGameday(rows);
     const byTeam = new Map();
-    for (const r of rows) {
+    for (const r of dated) {
       if (!byTeam.has(r.team)) byTeam.set(r.team, []);
       byTeam.get(r.team).push(r);
     }
     const seenTeams = new Set();
     const ordered = [];
-    for (const r of rows) {
+    for (const r of dated) {
       if (seenTeams.has(r.team)) continue;
       ordered.push(...(byTeam.get(r.team) || []));
       seenTeams.add(r.team);
