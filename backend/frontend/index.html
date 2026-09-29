@@ -939,18 +939,30 @@
     `;
   }
 
-  const NPB_FINISHED_STATE = "試合終了";
+  // Backend already translates status/team names to English (see
+  // npb_yrfi_sync.status_en/team_name_en) and converts spaia.jp's raw JST
+  // start time into Pacific (npb_yrfi_sync.start_time_pacific) - the
+  // frontend just formats what it's given.
+  function npbGameTimeLabel(g) {
+    const t = g.start_time_pacific;
+    if (!t) return "";
+    // "same_calendar_day" false is the common case (evening JST first
+    // pitches land on the Pacific calendar day BEFORE the schedule date) -
+    // flag it so the date isn't misread as a typo.
+    return t.same_calendar_day ? `${t.time_24h} PT` : `${t.time_24h} PT (${t.date_iso})`;
+  }
 
   function npbCardHtml(g) {
-    const isFinal = g.status === NPB_FINISHED_STATE;
-    const statusLabel = isFinal ? "Final" : (g.status || "Scheduled");
+    const isFinal = g.status === "Final";
+    const statusLabel = g.status || "Scheduled";
+    const timeLabel = npbGameTimeLabel(g);
     const yesPct = g.p_yrfi != null ? Math.round(g.p_yrfi * 100) : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
     const startersNote = g.starters_are_heuristic ? " (presumed)" : "";
 
     return `
       <div class="card">
-        <div class="meta">${statusLabel}</div>
+        <div class="meta">${statusLabel}${timeLabel ? ` &middot; ${timeLabel}` : ""}</div>
         <div class="teams">
           <span>${g.away_team}</span>
           <span class="score">${g.away_score ?? "-"}</span>

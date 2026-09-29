@@ -62,6 +62,7 @@ ONLY (for collection): gameStateName == "試合終了".
 import json
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -75,6 +76,88 @@ TIMEOUT = 30
 
 FINISHED_STATE = "試合終了"
 REGULAR_SEASON_MARKER = "公式戦"
+
+_JST = ZoneInfo("Asia/Tokyo")
+_PACIFIC = ZoneInfo("America/Los_Angeles")
+
+# All 12 real NPB teams' full Japanese name (exactly as spaia.jp's
+# homeTeamName/visitorTeamName return them, and the same primary-key
+# string NpbTeamScoreStat/NpbPitcherAllowStat/NpbGame are keyed on) ->
+# English name, for display only. Confirmed against real API responses
+# for every team (spaia.jp/baseball/npb/api/games_info_by_date).
+TEAM_NAME_EN = {
+    "読売ジャイアンツ": "Yomiuri Giants",
+    "東京ヤクルトスワローズ": "Tokyo Yakult Swallows",
+    "横浜DeNAベイスターズ": "Yokohama DeNA BayStars",
+    "中日ドラゴンズ": "Chunichi Dragons",
+    "阪神タイガース": "Hanshin Tigers",
+    "広島東洋カープ": "Hiroshima Toyo Carp",
+    "埼玉西武ライオンズ": "Saitama Seibu Lions",
+    "北海道日本ハムファイターズ": "Hokkaido Nippon-Ham Fighters",
+    "千葉ロッテマリーンズ": "Chiba Lotte Marines",
+    "福岡ソフトバンクホークス": "Fukuoka SoftBank Hawks",
+    "オリックス・バファローズ": "Orix Buffaloes",
+    "東北楽天ゴールデンイーグルス": "Tohoku Rakuten Golden Eagles",
+}
+
+# Real gameStateName values seen from spaia.jp -> English label. Falls
+# back to the raw Japanese string for anything not in this table (an
+# unusual/unrecognized status still displays as something rather than
+# going blank).
+STATUS_EN = {
+    "試合前": "Scheduled",
+    "試合中": "In Progress",
+    "試合終了": "Final",
+    "試合中止": "Cancelled",
+    "コールドゲーム": "Called Game",
+    "延期": "Postponed",
+    "順延": "Postponed",
+}
+
+
+def team_name_en(name: str | None) -> str | None:
+    """English display name for a real NPB team's full Japanese name.
+    Falls back to the original string for anything not in TEAM_NAME_EN
+    (e.g. a franchise rename spaia.jp hasn't been updated for here)."""
+    if name is None:
+        return None
+    return TEAM_NAME_EN.get(name, name)
+
+
+def status_en(status: str | None) -> str | None:
+    """English label for a real NPB gameStateName. Falls back to the
+    original string for anything not in STATUS_EN."""
+    if status is None:
+        return None
+    return STATUS_EN.get(status, status)
+
+
+def start_time_pacific(date_str: str | None, start_time_jst: str | None) -> dict | None:
+    """Converts a real NPB game's JST calendar date (NpbGame.date,
+    "YYYYMMDD") + start time (NpbGame.start_time_jst, "HHMM" 24h JST
+    local clock time - spaia.jp's own "startTime" field, confirmed
+    against a real games_info_by_date response) into Pacific time.
+    Returns {"time_24h": "HH:MM", "date_iso": "YYYY-MM-DD",
+    "same_calendar_day": bool} or None if either input is missing or
+    unparseable. same_calendar_day is False whenever the Pacific date
+    differs from the JST schedule date - which is normal (JST is
+    16-17 hours ahead of Pacific, so most evening NPB first pitches land
+    on the Pacific calendar day BEFORE the JST date), not an error; the
+    caller decides whether/how to flag it."""
+    if not date_str or not start_time_jst or len(start_time_jst) < 3:
+        return None
+    try:
+        hour = int(start_time_jst[:-2])
+        minute = int(start_time_jst[-2:])
+        jst_dt = datetime(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:8]), hour, minute, tzinfo=_JST)
+    except (ValueError, IndexError):
+        return None
+    pacific_dt = jst_dt.astimezone(_PACIFIC)
+    return {
+        "time_24h": pacific_dt.strftime("%H:%M"),
+        "date_iso": pacific_dt.date().isoformat(),
+        "same_calendar_day": pacific_dt.strftime("%Y%m%d") == date_str,
+    }
 
 MIN_PRIOR_GAMES = 10          # team games of batting history required
 MIN_PRIOR_STARTS = 5          # pitcher starts of allowing history required
@@ -321,6 +404,7 @@ def sync_date(date_str: str, db) -> dict:
         row.away_team_id = str(away_team_id) if away_team_id is not None else None
         row.game_type = game_type
         row.status = status
+        row.start_time_jst = g.get("startTime")
         games_seen += 1
 
         if status != FINISHED_STATE or db.get(NpbCollectedGame, game_id) is not None:

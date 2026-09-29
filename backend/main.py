@@ -84,6 +84,7 @@ _ensure_column("nfl_rb_defense_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
+_ensure_column("npb_games", "start_time_jst", "VARCHAR")
 
 _scheduler = None
 
@@ -1138,9 +1139,18 @@ def npb_yrfi_games(date: str | None = None, db: Session = Depends(get_db)):
         rows.append({
             "game_id": g.game_id,
             "date": g.date,
-            "home_team": g.home_team,
-            "away_team": g.away_team,
-            "status": g.status,
+            # Real team names/status come back from spaia.jp in Japanese -
+            # translated here for display; home_team/away_team stay the
+            # ORIGINAL Japanese strings too (home_team_ja/away_team_ja)
+            # since that's the exact primary-key value the rest of this
+            # app (bet tracking, NpbTeamScoreStat/NpbPitcherAllowStat) is
+            # keyed on.
+            "home_team": npb_yrfi_sync.team_name_en(g.home_team),
+            "away_team": npb_yrfi_sync.team_name_en(g.away_team),
+            "home_team_ja": g.home_team,
+            "away_team_ja": g.away_team,
+            "status": npb_yrfi_sync.status_en(g.status),
+            "start_time_pacific": npb_yrfi_sync.start_time_pacific(g.date, g.start_time_jst),
             "home_score": g.home_score,
             "away_score": g.away_score,
             "p_yrfi": inputs["p_yrfi"] if inputs else None,

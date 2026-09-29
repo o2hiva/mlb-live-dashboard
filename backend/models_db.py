@@ -768,6 +768,7 @@ class NpbGame(Base):
     away_team_id = Column(String, nullable=True)
     game_type = Column(String, nullable=True)
     status = Column(String, nullable=True)  # raw gameStateName, e.g. "試合終了" (finished)
+    start_time_jst = Column(String, nullable=True)  # raw "startTime" from spaia.jp, "HHMM" 24h JST local clock time - see npb_yrfi_sync.start_time_pacific()
     home_score = Column(Integer, nullable=True)
     away_score = Column(Integer, nullable=True)
     home_starter_id = Column(String, nullable=True)
