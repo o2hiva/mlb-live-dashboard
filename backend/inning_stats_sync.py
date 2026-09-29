@@ -182,6 +182,95 @@ def refresh_inning_stats():
         db.close()
 
 
+def backfill_runs5inn() -> dict:
+    """
+    ONE-TIME backfill for TeamRuns5InnStat's missing season history.
+
+    ROOT CAUSE (found via /api/debug/game-lines-inputs/{game_pk}): the
+    Game Lines prop's TeamRuns5InnStat table was added to this same daily
+    job LATER than TeamInningStat/PitcherInningStat - by the time it was
+    added, SYNC_STATE_KEY's checkpoint had already advanced through most
+    of the season (from those older tables' own daily runs), so
+    refresh_inning_stats()'s `while day <= yesterday` loop found nothing
+    left to process and TeamRuns5InnStat only started accumulating from
+    the day this feature shipped onward (5 games for a team with 60+ real
+    games played, confirmed live via the debug endpoint) - not a data
+    problem, a one-time backfill gap.
+
+    Independent of SYNC_STATE_KEY on purpose - replays the FULL season
+    (DEFAULT_START_DATE through yesterday) into TeamRuns5InnStat only,
+    never touching TeamInningStat/PitcherInningStat (already correct;
+    replaying into them too would double-count every game they've
+    already recorded). Rebuilds TeamRuns5InnStat from scratch (DELETE +
+    re-accumulate in memory, one commit at the end) rather than
+    incrementing existing rows, so it's safe to re-run this endpoint more
+    than once - it always ends at the same correct totals rather than
+    adding on top of a previous backfill.
+    """
+    db = SessionLocal()
+    try:
+        totals: dict[str, dict] = {}  # team_name -> {"games": int, "runs5inn": int}
+
+        def _add(team_name: str, runs: int):
+            row = totals.setdefault(team_name, {"games": 0, "runs5inn": 0})
+            row["games"] += 1
+            row["runs5inn"] += runs
+
+        start = date.fromisoformat(DEFAULT_START_DATE)
+        yesterday = mlb_client.mlb_yesterday()
+        days_processed = 0
+        games_folded = 0
+
+        day = start
+        while day <= yesterday:
+            date_str = day.isoformat()
+            try:
+                games = mlb_client.get_final_games_with_linescore(date_str)
+            except Exception:
+                log.exception("backfill_runs5inn: failed to fetch games for %s - skipping this day", date_str)
+                day += timedelta(days=1)
+                continue
+
+            for game in games:
+                teams = game.get("teams", {})
+                away_team_name = teams.get("away", {}).get("team", {}).get("name")
+                home_team_name = teams.get("home", {}).get("team", {}).get("name")
+                if not away_team_name or not home_team_name:
+                    continue
+
+                away_runs5inn_total, home_runs5inn_total = 0, 0
+                any_inning_found = False
+                for inn_num in RUNS5INN_RANGE:
+                    a_runs, h_runs = mlb_client.get_inning_runs_from_raw_game(game, inn_num)
+                    if a_runs is not None:
+                        away_runs5inn_total += a_runs
+                        any_inning_found = True
+                    if h_runs is not None:
+                        home_runs5inn_total += h_runs
+                        any_inning_found = True
+                if any_inning_found:
+                    _add(away_team_name, away_runs5inn_total)
+                    _add(home_team_name, home_runs5inn_total)
+                    games_folded += 1
+
+            days_processed += 1
+            day += timedelta(days=1)
+
+        db.query(TeamRuns5InnStat).delete()
+        for team_name, vals in totals.items():
+            db.add(TeamRuns5InnStat(team_name=team_name, games=vals["games"], runs5inn=vals["runs5inn"]))
+        db.commit()
+
+        summary = {"days_processed": days_processed, "games_folded": games_folded, "teams": len(totals)}
+        log.info("inning_stats_sync.backfill_runs5inn complete: %s", summary)
+        return summary
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def load_team_counts(inning: int) -> dict:
     db = SessionLocal()
     try:

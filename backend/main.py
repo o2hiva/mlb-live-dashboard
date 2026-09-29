@@ -238,6 +238,27 @@ def manual_refresh_inning_stats(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/admin/backfill-runs5inn")
+def manual_backfill_runs5inn():
+    """
+    ONE-TIME fix for the Game Lines "not enough data" bug (traced via
+    /api/debug/game-lines-inputs/{game_pk}): TeamRuns5InnStat was only
+    accumulating from the day the Game Lines feature shipped onward,
+    not the real season before it, because it was added to
+    inning_stats_sync's daily job after that job's shared sync-date
+    checkpoint had already advanced through most of the season. Replays
+    the full season directly into TeamRuns5InnStat only - see
+    inning_stats_sync.backfill_runs5inn's own docstring for the full
+    story. Safe to re-run (always rebuilds TeamRuns5InnStat from
+    scratch to the same correct totals, never doubles up). Takes a
+    while (replays the whole season day by day) - the response only
+    arrives once it's done.
+    """
+    import inning_stats_sync
+    summary = inning_stats_sync.backfill_runs5inn()
+    return {"status": "backfill complete", **summary}
+
+
 @app.get("/api/admin/run-daily-updates")
 def manual_run_daily_updates():
     """
