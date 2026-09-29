@@ -2,7 +2,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 from datetime import date
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -1074,6 +1074,82 @@ def nfl_points_games(db: Session = Depends(get_db)):
         })
 
     return {"games": rows, "season": games[0].season, "week": games[0].week}
+
+
+@app.post("/api/admin/seed-npb-yrfi")
+async def seed_npb_yrfi_endpoint(request: Request):
+    """
+    ONE-TIME bulk import of an existing npb_first_inning_progress.json
+    (built locally by npb_backtest_first_inning.py) into the live
+    Postgres tables - lets the NPB tab start with real season history
+    instead of an empty slate. Safe to call more than once (already-
+    collected games are skipped by game_id, same dedup as the daily
+    incremental collector). POST the raw progress file's JSON body
+    directly, e.g.:
+        curl -X POST --data-binary @npb_first_inning_progress.json \\
+             -H "Content-Type: application/json" \\
+             https://sports-hub-live.up.railway.app/api/admin/seed-npb-yrfi
+    """
+    body = await request.json()
+    import npb_yrfi_sync
+    summary = npb_yrfi_sync.seed_from_progress(body)
+    return {"status": "seeded", **summary}
+
+
+@app.get("/api/admin/refresh-npb-yrfi-stats")
+def manual_refresh_npb_yrfi_stats(days_back: int = 3, days_ahead: int = 1):
+    """
+    Manually triggers the NPB YRFI daily update - sweeps a small window
+    of real dates (JST) around today, collecting any newly-finished
+    games into the running team-scoring/pitcher-allowing totals and
+    refreshing each swept date's real schedule for display. Safe to call
+    any number of times. Also runs automatically once daily (see
+    poller.py).
+    """
+    import npb_yrfi_sync
+    summary = npb_yrfi_sync.daily_update(days_back=days_back, days_ahead=days_ahead)
+    return {"status": "refreshed", **summary}
+
+
+@app.get("/api/npb/yrfi-games")
+def npb_yrfi_games(date: str | None = None, db: Session = Depends(get_db)):
+    """
+    One date's (YYYYMMDD, default: today JST) real NPB games with each
+    one's pre-game YRFI/NRFI probability - presumed starters (see
+    npb_yrfi_sync.py's module docstring for why NPB's API never exposes a
+    confirmed starter ahead of time). No lineup data (not available for
+    NPB, unlike MLB) - otherwise mirrors the MLB Live Games card shape.
+    """
+    from models_db import NpbGame
+    import npb_yrfi_sync
+
+    if date is None:
+        date = npb_yrfi_sync._jst_today().strftime("%Y%m%d")
+
+    games = db.query(NpbGame).filter_by(date=date).all()
+    if not games:
+        return {"games": [], "date": date}
+
+    league_avg = npb_yrfi_sync.get_league_avg(db)
+
+    rows = []
+    for g in games:
+        inputs = npb_yrfi_sync.compute_npb_yrfi_prediction(g.home_team, g.away_team, db, league_avg=league_avg)
+        rows.append({
+            "game_id": g.game_id,
+            "date": g.date,
+            "home_team": g.home_team,
+            "away_team": g.away_team,
+            "status": g.status,
+            "home_score": g.home_score,
+            "away_score": g.away_score,
+            "p_yrfi": inputs["p_yrfi"] if inputs else None,
+            "home_starter_name": inputs["home_starter_name"] if inputs else None,
+            "away_starter_name": inputs["away_starter_name"] if inputs else None,
+            "starters_are_heuristic": inputs["starters_are_heuristic"] if inputs else None,
+        })
+
+    return {"games": rows, "date": date}
 
 
 @app.get("/api/admin/refresh-nhl-goalie-saves-stats")

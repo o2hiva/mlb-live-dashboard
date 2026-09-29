@@ -33,6 +33,7 @@ import predictor
 import hits_stats_sync
 import end_of_day
 import nhl_goalie_saves_sync
+import npb_yrfi_sync
 from database import SessionLocal
 from models_db import Game, InningLine, Prediction
 
@@ -57,6 +58,14 @@ INNING_STATS_REFRESH_MINUTE_UTC = 0
 # live-game polling is.
 NHL_GOALIE_SAVES_REFRESH_HOUR_UTC = 10
 NHL_GOALIE_SAVES_REFRESH_MINUTE_UTC = 0
+
+# NPB YRFI daily collector - 13:00 UTC = 22:00 JST, safely after even a
+# late-starting NPB evening game (typically ~18:00 JST first pitch) has
+# gone final, so a day's real games are collectible by the time this
+# runs. INCREMENTAL, same reasoning as the NHL job above - see
+# npb_yrfi_sync.py's module docstring.
+NPB_YRFI_REFRESH_HOUR_UTC = 13
+NPB_YRFI_REFRESH_MINUTE_UTC = 0
 
 # How many days ahead to keep loaded/refreshed, so tomorrow's (and the
 # day after's) games + probable pitchers show up before game day, not
@@ -202,6 +211,17 @@ def _nhl_goalie_saves_daily_update():
         log.exception("NHL goalie-saves daily update failed")
 
 
+def _npb_yrfi_daily_update():
+    """Wraps npb_yrfi_sync.daily_update with its own try/except, same
+    defensive-wrapping reasoning as _nhl_goalie_saves_daily_update
+    above."""
+    try:
+        summary = npb_yrfi_sync.daily_update()
+        log.info("NPB YRFI daily update complete: %s", summary)
+    except Exception:
+        log.exception("NPB YRFI daily update failed")
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
@@ -232,6 +252,17 @@ def start_scheduler() -> BackgroundScheduler:
         _nhl_goalie_saves_daily_update,
         CronTrigger(hour=NHL_GOALIE_SAVES_REFRESH_HOUR_UTC, minute=NHL_GOALIE_SAVES_REFRESH_MINUTE_UTC),
         id="nhl_goalie_saves_daily_update",
+        next_run_time=datetime.utcnow(),
+    )
+    # NPB YRFI - runs once daily (see NPB_YRFI_REFRESH_HOUR_UTC above),
+    # incrementally collecting any newly-finished games and refreshing
+    # the display window's real schedule. next_run_time=now ALSO fires it
+    # once immediately on every app startup/redeploy, same reasoning as
+    # the jobs above.
+    scheduler.add_job(
+        _npb_yrfi_daily_update,
+        CronTrigger(hour=NPB_YRFI_REFRESH_HOUR_UTC, minute=NPB_YRFI_REFRESH_MINUTE_UTC),
+        id="npb_yrfi_daily_update",
         next_run_time=datetime.utcnow(),
     )
     scheduler.start()

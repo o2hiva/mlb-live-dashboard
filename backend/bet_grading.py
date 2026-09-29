@@ -99,6 +99,17 @@ DATA SOURCES, one per bet_type:
     yet. Left pending indefinitely unless graded by hand, same permanent
     status as nfl_passing_yards/nfl_rushing_yards/the NFL DvP props.
 
+  - "npb_yrfi": IS gradeable, unlike the props above - the outcome
+    itself (did either team score in the 1st) doesn't depend on which
+    pitcher was guessed as the presumed starter, only on what actually
+    happened in the game, which npb_yrfi_sync.py's daily collector
+    already writes to NpbGame.visitor_scored_1st/home_scored_1st once a
+    game finishes. No live NPB fetch needed at grading time - just a
+    local DB lookup by game_id (stored in external_player_id, same
+    reused-column pattern as models_db.py's TrackedBet docstring
+    describes for other sports). None (still pending) until that game's
+    row shows a real outcome.
+
 GRADING RULE for every bet_type: "yes" wins if actual >= line (or, for
 first_inning_run, if a run actually scored); "no" wins the opposite.
 HR/Hits/HRR/Pitcher-Hits-Allowed/Game-Lines lines are always whole
@@ -131,7 +142,7 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nfl_rb_dvp_rushing_yards", "nfl_rb_dvp_rushing_tds",
                           "nfl_rb_dvp_receiving_yards", "nfl_rb_dvp_receiving_tds",
                           "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td",
-                          "nhl_goalie_saves"}
+                          "nhl_goalie_saves", "npb_yrfi"}
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -300,6 +311,24 @@ def _nfl_game_total_actual(bet: TrackedBet, nfl_games_cache: dict) -> float | No
     return None
 
 
+def _npb_yrfi_actual(db, bet: TrackedBet) -> float | None:
+    """Real 1st-inning-scored outcome for this NPB YRFI bet, read
+    directly from our own already-collected NpbGame row - no live NPB
+    fetch needed, npb_yrfi_sync.daily_update already wrote
+    visitor_scored_1st/home_scored_1st once the game finished. The
+    game_id is stored in external_player_id (same reused-column pattern
+    as every other non-MLB sport in this project - see models_db.py's
+    TrackedBet docstring). None if the game hasn't finished yet or the
+    id wasn't found."""
+    from models_db import NpbGame
+    if not bet.external_player_id:
+        return None
+    game = db.get(NpbGame, bet.external_player_id)
+    if not game or game.visitor_scored_1st is None or game.home_scored_1st is None:
+        return None
+    return 1.0 if (game.visitor_scored_1st or game.home_scored_1st) else 0.0
+
+
 def _player_game_stats(boxscore: dict, team_side: str, player_id: int) -> dict | None:
     """This player's own per-game stats from a boxscore response - the
     same 'players' dict extract_boxscore_lineup already reads for
@@ -320,6 +349,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
     if bet.bet_type == "first_inning_run":
         actual = _first_inning_actual(db, bet.game_pk)
         return None if actual is None else (1.0 if actual else 0.0)
+
+    if bet.bet_type == "npb_yrfi":
+        return _npb_yrfi_actual(db, bet)
 
     if bet.bet_type.startswith("game_lines_"):
         key = bet.bet_type[len("game_lines_"):]  # "home" / "away" / "combined"

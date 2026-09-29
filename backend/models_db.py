@@ -707,3 +707,73 @@ class NhlGoalieGame(Base):
     date = Column(String, nullable=True)  # "YYYY-MM-DD"
     season = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NpbCollectedGame(Base):
+    """Ledger of NPB games already applied to NpbTeamScoreStat /
+    NpbPitcherAllowStat - dedup ledger for npb_yrfi_sync.py's incremental
+    daily collection AND the one-time seed_from_progress() import of an
+    existing npb_first_inning_progress.json, mirrors NhlCollectedGame."""
+    __tablename__ = "npb_collected_games"
+
+    game_id = Column(String, primary_key=True)  # spaia.jp's own numeric game id, as a string
+    date = Column(String)  # "YYYYMMDD"
+    home = Column(String)
+    away = Column(String)
+    collected_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NpbTeamScoreStat(Base):
+    """One NPB team's real season-to-date 1st-inning-SCORED (batting
+    side) rate - incrementally accumulated, same discipline as
+    NhlTeamShotsStat (never rebuilt from scratch)."""
+    __tablename__ = "npb_team_score_stats"
+
+    team = Column(String, primary_key=True)  # real Japanese team name, exactly as spaia.jp returns it
+    games = Column(Integer, default=0)
+    scored = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NpbPitcherAllowStat(Base):
+    """One NPB starting pitcher's real season-to-date 1st-inning-ALLOWED
+    rate - only accumulated from games where they were identified as the
+    STARTER (both_pitcher_game_stats's no="1" field - see
+    npb_yrfi_sync.py's module docstring)."""
+    __tablename__ = "npb_pitcher_allow_stats"
+
+    pitcher_id = Column(String, primary_key=True)  # spaia.jp's own numeric player id, as a string
+    name = Column(String)
+    team = Column(String)  # most-recently-seen team, kept current each start applied
+    starts = Column(Integer, default=0)
+    allowed = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NpbGame(Base):
+    """One real NPB game for a given date - REFRESHED each time that date
+    is swept (not accumulated), holding enough to render a card: teams,
+    status, final score, and (once the game is finished and collected)
+    the REAL starters and 1st-inning outcome. visitor_scored_1st/
+    home_scored_1st double as the real outcome bet_grading.py needs to
+    grade a tracked npb_yrfi bet, keyed by this same game_id (no separate
+    fetch needed at grading time - see bet_grading.py)."""
+    __tablename__ = "npb_games"
+
+    game_id = Column(String, primary_key=True)
+    date = Column(String)  # "YYYYMMDD"
+    home_team = Column(String)
+    away_team = Column(String)
+    home_team_id = Column(String, nullable=True)
+    away_team_id = Column(String, nullable=True)
+    game_type = Column(String, nullable=True)
+    status = Column(String, nullable=True)  # raw gameStateName, e.g. "試合終了" (finished)
+    home_score = Column(Integer, nullable=True)
+    away_score = Column(Integer, nullable=True)
+    home_starter_id = Column(String, nullable=True)
+    home_starter_name = Column(String, nullable=True)
+    away_starter_id = Column(String, nullable=True)
+    away_starter_name = Column(String, nullable=True)
+    visitor_scored_1st = Column(Boolean, nullable=True)
+    home_scored_1st = Column(Boolean, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
