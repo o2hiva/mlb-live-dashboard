@@ -78,6 +78,8 @@ _ensure_column("nfl_defense_allowed_prop_stats", "passing_attempts_sum", "INTEGE
 _ensure_column("nfl_defense_allowed_prop_stats", "rushing_attempts_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_qb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_rb_defense_prop_games", "gameday", "VARCHAR")
+_ensure_column("nfl_points_games", "gameday", "VARCHAR")
+_ensure_column("cfb_games", "start_date_utc", "VARCHAR")
 
 _scheduler = None
 
@@ -964,6 +966,21 @@ def nfl_rb_defense_props(db: Session = Depends(get_db)):
     return {"rbs": rows, "season": games[0].season, "week": games[0].week}
 
 
+@app.get("/api/admin/debug-cfb-games-schema")
+def debug_cfb_games_schema(year: int, week: int):
+    """
+    TEMPORARY diagnostic: returns one raw game straight from CFBD's
+    /games endpoint (using the same cfb_points_sync.get_week_games call
+    and stored CFBD_API_KEY this app already uses) so the real field
+    name for a game's kickoff date/time can be confirmed before wiring
+    up CFB Team Points' date/time display and ordering. Safe to delete
+    once that's confirmed.
+    """
+    import cfb_points_sync
+    games = cfb_points_sync.get_week_games(year, week)
+    return {"count": len(games), "first_game_raw": games[0] if games else None}
+
+
 @app.get("/api/admin/refresh-cfb-stats")
 def manual_refresh_cfb_stats(season: int, week: int):
     """
@@ -1004,6 +1021,7 @@ def cfb_games(db: Session = Depends(get_db)):
             "opponent": g.opponent,
             "game_id": g.game_id,
             "is_home": g.is_home,
+            "start_date_utc": g.start_date_utc,
             "predicted_mean": inputs["mean"] if inputs else None,
             "team_index": inputs["team_index"] if inputs else None,
             "opp_index": inputs["opp_index"] if inputs else None,
@@ -1058,6 +1076,7 @@ def nfl_points_games(db: Session = Depends(get_db)):
             "opponent": g.opponent,
             "game_id": "|".join(sorted([g.team, g.opponent])),
             "is_home": g.is_home,
+            "gameday": g.gameday,
             "predicted_mean": inputs["mean"] if inputs else None,
             "team_index": inputs["team_index"] if inputs else None,
             "opp_index": inputs["opp_index"] if inputs else None,

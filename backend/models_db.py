@@ -569,6 +569,7 @@ class CfbGame(Base):
     is_home = Column(Boolean, default=False)  # was `team` the home side of game_id - needed so a tracked bet can send the correct team_side for grading
     season = Column(Integer)
     week = Column(Integer)
+    start_date_utc = Column(String, nullable=True)  # ISO8601 UTC kickoff, once CFBD's real field name is confirmed live - see cfb_points_sync.py
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -605,6 +606,7 @@ class NflPointsGame(Base):
     is_home = Column(Boolean, default=False)
     season = Column(Integer)
     week = Column(Integer)
+    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_points_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

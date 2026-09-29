@@ -3153,6 +3153,19 @@
     });
   }
 
+  // Renders a plain "YYYY-MM-DD" gameday string (no timezone shift - the
+  // date is used as given rather than parsed as UTC midnight, which would
+  // otherwise roll it back a day in Pacific). No time-of-day is shown for
+  // NFL games because api.nfldata.org never populates one (confirmed live -
+  // its "gametime" field is always null).
+  function formatGamedayOnly(gameday) {
+    if (!gameday) return "Date TBD";
+    const [y, m, d] = gameday.split("-").map(Number);
+    if (!y || !m || !d) return "Date TBD";
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
+
   function orderNflDvpByMatchup(games) {
     const dated = sortByGameday(games);
     const byTeam = new Map(dated.map(g => [g.team, g]));
@@ -4234,9 +4247,10 @@
   }
 
   function nflPointsCardHtml(gameId, pair, season, week) {
+    const gameday = (pair.home && pair.home.gameday) || (pair.away && pair.away.gameday) || null;
     return `
       <div class="card">
-        <div class="meta">Season ${season} · Week ${week}</div>
+        <div class="meta">Season ${season} · Week ${week} · ${formatGamedayOnly(gameday)}</div>
         ${nflTeamBlockHtml(pair.away, false)}
         ${nflTeamBlockHtml(pair.home, true)}
         ${nflTotalRowHtml(gameId, pair.home, pair.away)}
@@ -4263,7 +4277,16 @@
       byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
     }
 
-    const cards = Array.from(byGame.entries())
+    // Order boxes by real kickoff day (Thursday Night Football first,
+    // Monday Night Football last) - each pair's gameday comes from
+    // either side (same value on both).
+    const orderedPairs = Array.from(byGame.entries()).sort(([, pairA], [, pairB]) => {
+      const da = (pairA.home && pairA.home.gameday) || (pairA.away && pairA.away.gameday) || "9999-99-99";
+      const db_ = (pairB.home && pairB.home.gameday) || (pairB.away && pairB.away.gameday) || "9999-99-99";
+      return da < db_ ? -1 : da > db_ ? 1 : 0;
+    });
+
+    const cards = orderedPairs
       .map(([gameId, pair]) => nflPointsCardHtml(gameId, pair, nflPointsDataCache.season, nflPointsDataCache.week))
       .join("");
 

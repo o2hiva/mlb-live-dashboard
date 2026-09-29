@@ -195,8 +195,9 @@ def refresh_nfl_points_stats(season: int, current_week: int) -> dict:
             home, away = game.get("home_team"), game.get("away_team")
             if not home or not away:
                 continue
-            db.add(NflPointsGame(team=home, opponent=away, is_home=True, season=season, week=current_week))
-            db.add(NflPointsGame(team=away, opponent=home, is_home=False, season=season, week=current_week))
+            gameday = game.get("gameday")
+            db.add(NflPointsGame(team=home, opponent=away, is_home=True, season=season, week=current_week, gameday=gameday))
+            db.add(NflPointsGame(team=away, opponent=home, is_home=False, season=season, week=current_week, gameday=gameday))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written
