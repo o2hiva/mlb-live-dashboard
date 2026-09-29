@@ -198,8 +198,15 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             home, away = game.get("homeTeam"), game.get("awayTeam")
             if not home or not away:
                 continue
-            db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True, season=season, week=current_week))
-            db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False, season=season, week=current_week))
+            # "startDate" confirmed live (CFBD real field, ISO8601 UTC,
+            # e.g. "2026-09-24T23:00:00.000Z") - unlike NFL's schedule API,
+            # this one DOES carry a real kickoff time, so CFB Team Points
+            # can show/order by actual time, not just date.
+            start_date_utc = game.get("startDate")
+            db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
+                            season=season, week=current_week, start_date_utc=start_date_utc))
+            db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
+                            season=season, week=current_week, start_date_utc=start_date_utc))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written

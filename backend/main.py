@@ -966,21 +966,6 @@ def nfl_rb_defense_props(db: Session = Depends(get_db)):
     return {"rbs": rows, "season": games[0].season, "week": games[0].week}
 
 
-@app.get("/api/admin/debug-cfb-games-schema")
-def debug_cfb_games_schema(year: int, week: int):
-    """
-    TEMPORARY diagnostic: returns one raw game straight from CFBD's
-    /games endpoint (using the same cfb_points_sync.get_week_games call
-    and stored CFBD_API_KEY this app already uses) so the real field
-    name for a game's kickoff date/time can be confirmed before wiring
-    up CFB Team Points' date/time display and ordering. Safe to delete
-    once that's confirmed.
-    """
-    import cfb_points_sync
-    games = cfb_points_sync.get_week_games(year, week)
-    return {"count": len(games), "first_game_raw": games[0] if games else None}
-
-
 @app.get("/api/admin/refresh-cfb-stats")
 def manual_refresh_cfb_stats(season: int, week: int):
     """

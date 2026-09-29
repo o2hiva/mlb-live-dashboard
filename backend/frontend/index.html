@@ -3166,6 +3166,18 @@
     return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   }
 
+  // CFB's "start_date_utc" (confirmed live - CFBD's real "startDate" field,
+  // ISO8601 UTC) DOES carry a real kickoff time, unlike NFL's schedule API -
+  // so this renders date + 24-hour Pacific time, not just a date.
+  function formatKickoffPacific(isoUtc) {
+    if (!isoUtc) return "Date/Time TBD";
+    const dt = new Date(isoUtc);
+    if (isNaN(dt.getTime())) return "Date/Time TBD";
+    const datePart = dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" });
+    const timePart = dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false });
+    return `${datePart} ${timePart} PT`;
+  }
+
   function orderNflDvpByMatchup(games) {
     const dated = sortByGameday(games);
     const byTeam = new Map(dated.map(g => [g.team, g]));
@@ -3907,9 +3919,10 @@
   }
 
   function cfbCardHtml(gameId, pair, season, week) {
+    const startDateUtc = (pair.home && pair.home.start_date_utc) || (pair.away && pair.away.start_date_utc) || null;
     return `
       <div class="card">
-        <div class="meta">Season ${season} · Week ${week}</div>
+        <div class="meta">Season ${season} · Week ${week} · ${formatKickoffPacific(startDateUtc)}</div>
         ${cfbTeamBlockHtml(pair.away, false)}
         ${cfbTeamBlockHtml(pair.home, true)}
         ${cfbTotalRowHtml(gameId, pair.home, pair.away)}
@@ -3934,7 +3947,16 @@
       byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
     }
 
-    const cards = Array.from(byGame.entries())
+    // Order boxes by real kickoff time (earliest first) - CFBD's
+    // "start_date_utc" is a real ISO8601 timestamp, so this sorts by
+    // actual time, not just day.
+    const orderedPairs = Array.from(byGame.entries()).sort(([, pairA], [, pairB]) => {
+      const ta = (pairA.home && pairA.home.start_date_utc) || (pairA.away && pairA.away.start_date_utc) || "9999-99-99";
+      const tb = (pairB.home && pairB.home.start_date_utc) || (pairB.away && pairB.away.start_date_utc) || "9999-99-99";
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+
+    const cards = orderedPairs
       .map(([gameId, pair]) => cfbCardHtml(gameId, pair, cfbDataCache.season, cfbDataCache.week))
       .join("");
 
