@@ -605,6 +605,60 @@ def game_lines(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/debug/game-lines-inputs/{game_pk}")
+def debug_game_lines_inputs(game_pk: int, db: Session = Depends(get_db)):
+    """
+    Diagnostic: shows every raw value compute_game_lines_inputs() checks
+    for this game, and exactly which gate (if any) is failing - same
+    "trace it, don't guess" pattern as
+    /api/debug/pitcher-hits-allowed-inputs. A None mean on the real
+    /game-lines endpoint always traces back to one of the four rows or
+    gates shown here.
+    """
+    from models_db import PitcherHitsStat, TeamRuns5InnStat
+    import game_lines_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    away_p = db.get(PitcherHitsStat, game.away_probable_pitcher_id) if game.away_probable_pitcher_id else None
+    home_p = db.get(PitcherHitsStat, game.home_probable_pitcher_id) if game.home_probable_pitcher_id else None
+    away_t = db.get(TeamRuns5InnStat, game.away_team)
+    home_t = db.get(TeamRuns5InnStat, game.home_team)
+
+    def pitcher_view(label, pid, row):
+        if pid is None:
+            return {"label": label, "pitcher_id": None, "issue": "no probable_pitcher_id set on this Game row yet"}
+        if row is None:
+            return {"label": label, "pitcher_id": pid, "issue": "no PitcherHitsStat row for this pitcher_id at all"}
+        return {
+            "label": label, "pitcher_id": pid, "pitcher_name": row.pitcher_name,
+            "outs": row.outs, "runs_allowed": row.runs_allowed,
+            "meets_min_outs_45": row.outs >= game_lines_sync.MIN_PITCHER_OUTS,
+        }
+
+    def team_view(label, name, row):
+        if row is None:
+            return {"label": label, "team_name": name, "issue": "no TeamRuns5InnStat row for this exact team_name string"}
+        return {
+            "label": label, "team_name": name, "games": row.games, "runs5inn": row.runs5inn,
+            "meets_min_games_10": row.games >= game_lines_sync.MIN_TEAM_GAMES,
+        }
+
+    return {
+        "game_pk": game_pk,
+        "home_team": game.home_team,
+        "away_team": game.away_team,
+        "home_probable_pitcher_id": game.home_probable_pitcher_id,
+        "away_probable_pitcher_id": game.away_probable_pitcher_id,
+        "away_pitcher": pitcher_view("away_pitcher (faced by home batters)", game.away_probable_pitcher_id, away_p),
+        "home_pitcher": pitcher_view("home_pitcher (faced by away batters)", game.home_probable_pitcher_id, home_p),
+        "away_team_runs5inn": team_view("away_team", game.away_team, away_t),
+        "home_team_runs5inn": team_view("home_team", game.home_team, home_t),
+    }
+
+
 @app.get("/api/admin/refresh-nfl-stats")
 def manual_refresh_nfl_stats(season: int, week: int):
     """
