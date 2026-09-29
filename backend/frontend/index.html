@@ -1989,12 +1989,19 @@
 
   function renderWeeklyHitRateTable(bets) {
     const container = document.getElementById("weekly-hit-rate-table");
-    const resolved = bets.filter(b => b.resolved && b.game_date);
+    // game_date only exists for bets tied to an MLB game_pk - every NFL/
+    // CFB prop (no MLB game to look up) always has game_date == null, so
+    // filtering on it alone silently dropped every non-MLB bet from this
+    // table entirely. Fall back to the date the bet was PLACED for those.
+    const resolved = bets.filter(b => b.resolved && (b.game_date || b.placed_at));
 
-    // Group resolved bets by the Monday of their game's week.
+    // Group resolved bets by the Monday of their game's week (or, for
+    // NFL/CFB bets with no game_date, the Monday of the week they were
+    // placed in).
     const byWeek = {};
     for (const b of resolved) {
-      const monday = getMondayOfWeek(b.game_date);
+      const dateStr = b.game_date || b.placed_at.slice(0, 10);
+      const monday = getMondayOfWeek(dateStr);
       if (!byWeek[monday]) byWeek[monday] = [];
       byWeek[monday].push(b);
     }
