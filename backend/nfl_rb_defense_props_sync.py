@@ -93,7 +93,7 @@ log = logging.getLogger("nfl_rb_defense_props_sync")
 API_BASE = "https://api.nfldata.org/v1"
 TIMEOUT = 30
 
-RAW_FIELDS = ["rushing_yards", "rushing_tds", "receiving_yards", "receiving_tds"]
+RAW_FIELDS = ["rushing_yards", "rushing_tds", "receiving_yards", "receiving_tds", "carries", "receptions"]
 PROP_FIELDS = RAW_FIELDS + ["total_yards", "total_tds"]
 
 # Verbatim from core_nfl_rb_defense_props.py.
@@ -122,6 +122,8 @@ PROP_DISTRIBUTION = {
     "rushing_tds": ("negbinom", 1.08),
     "receiving_tds": ("negbinom", 1.36),
     "total_tds": ("poisson", None),
+    "carries": ("negbinom", 2.0),
+    "receptions": ("negbinom", 1.34),
 }
 
 # Validated empirical values: own_league_avg_snapshot / opp_league_avg_snapshot
@@ -134,6 +136,8 @@ OWN_LEAGUE_AVG_STATIC = {
     "receiving_tds": 0.104,
     "total_yards": 74.049,
     "total_tds": 0.504,
+    "carries": 13.155,
+    "receptions": 2.565,
 }
 OPP_LEAGUE_AVG_STATIC = {
     "rushing_yards": 83.81,
@@ -142,6 +146,8 @@ OPP_LEAGUE_AVG_STATIC = {
     "receiving_tds": 0.157,
     "total_yards": 113.765,
     "total_tds": 0.741,
+    "carries": 20.082,
+    "receptions": 4.157,
 }
 
 CACHE_TTL_SECONDS = 6 * 60 * 60
@@ -186,6 +192,8 @@ def get_season_rbs_raw(season: int) -> list:
                     "rushing_tds": row.get("rushing_tds", 0) or 0,
                     "receiving_yards": row.get("receiving_yards", 0) or 0,
                     "receiving_tds": row.get("receiving_tds", 0) or 0,
+                    "carries": carries,
+                    "receptions": row.get("receptions", 0) or 0,
                 })
         total = payload.get("total", 0)
         offset += limit
@@ -208,12 +216,15 @@ def team_rb_aggregate(all_rbs_raw: list) -> dict:
         if not team:
             continue
         entry = agg.setdefault(team, {"games": 0, "rushing_yards": 0, "rushing_tds": 0,
-                                       "receiving_yards": 0, "receiving_tds": 0})
+                                       "receiving_yards": 0, "receiving_tds": 0,
+                                       "carries": 0, "receptions": 0})
         entry["games"] = max(entry["games"], rb["games"])
         entry["rushing_yards"] += rb["rushing_yards"]
         entry["rushing_tds"] += rb["rushing_tds"]
         entry["receiving_yards"] += rb["receiving_yards"]
         entry["receiving_tds"] += rb["receiving_tds"]
+        entry["carries"] += rb["carries"]
+        entry["receptions"] += rb["receptions"]
     return agg
 
 
@@ -306,6 +317,7 @@ def refresh_nfl_rb_defense_props_stats(season: int, current_week: int) -> dict:
                 games=rb["games"], touches=rb["touches"],
                 rushing_yards_sum=rb["rushing_yards"], rushing_tds_sum=rb["rushing_tds"],
                 receiving_yards_sum=rb["receiving_yards"], receiving_tds_sum=rb["receiving_tds"],
+                carries_sum=rb["carries"], receptions_sum=rb["receptions"],
             ))
 
         team_agg = team_rb_aggregate(all_rbs_raw)
@@ -329,7 +341,8 @@ def refresh_nfl_rb_defense_props_stats(season: int, current_week: int) -> dict:
                 if opp_agg and opp_agg["games"] > 0:
                     entry = defense_allowed_totals.setdefault(
                         team, {"games": 0, "rushing_yards": 0.0, "rushing_tds": 0.0,
-                               "receiving_yards": 0.0, "receiving_tds": 0.0})
+                               "receiving_yards": 0.0, "receiving_tds": 0.0,
+                               "carries": 0.0, "receptions": 0.0})
                     entry["games"] += 1
                     for prop in RAW_FIELDS:
                         entry[prop] += opp_agg[prop] / opp_agg["games"]
@@ -338,7 +351,8 @@ def refresh_nfl_rb_defense_props_stats(season: int, current_week: int) -> dict:
                 if team_agg_self and team_agg_self["games"] > 0:
                     entry2 = defense_allowed_totals.setdefault(
                         opponent, {"games": 0, "rushing_yards": 0.0, "rushing_tds": 0.0,
-                                   "receiving_yards": 0.0, "receiving_tds": 0.0})
+                                   "receiving_yards": 0.0, "receiving_tds": 0.0,
+                                   "carries": 0.0, "receptions": 0.0})
                     entry2["games"] += 1
                     for prop in RAW_FIELDS:
                         entry2[prop] += team_agg_self[prop] / team_agg_self["games"]
@@ -349,6 +363,7 @@ def refresh_nfl_rb_defense_props_stats(season: int, current_week: int) -> dict:
                 team=team, games=entry["games"],
                 rushing_yards_sum=round(entry["rushing_yards"]), rushing_tds_sum=round(entry["rushing_tds"]),
                 receiving_yards_sum=round(entry["receiving_yards"]), receiving_tds_sum=round(entry["receiving_tds"]),
+                carries_sum=round(entry["carries"]), receptions_sum=round(entry["receptions"]),
             ))
 
         try:

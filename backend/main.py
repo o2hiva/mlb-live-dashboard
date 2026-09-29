@@ -80,6 +80,10 @@ _ensure_column("nfl_qb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_rb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_points_games", "gameday", "VARCHAR")
 _ensure_column("cfb_games", "start_date_utc", "VARCHAR")
+_ensure_column("nfl_rb_defense_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_rb_defense_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_rb_defense_allowed_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
+_ensure_column("nfl_rb_defense_allowed_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
 
 _scheduler = None
 

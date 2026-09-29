@@ -494,6 +494,8 @@ class NflRbDefensePropStat(Base):
     rushing_tds_sum = Column(Integer, default=0)
     receiving_yards_sum = Column(Integer, default=0)
     receiving_tds_sum = Column(Integer, default=0)
+    carries_sum = Column(Integer, default=0)
+    receptions_sum = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -513,6 +515,8 @@ class NflRbDefenseAllowedPropStat(Base):
     rushing_tds_sum = Column(Integer, default=0)
     receiving_yards_sum = Column(Integer, default=0)
     receiving_tds_sum = Column(Integer, default=0)
+    carries_sum = Column(Integer, default=0)
+    receptions_sum = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

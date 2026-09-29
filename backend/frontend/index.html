@@ -1880,8 +1880,10 @@
     { label: "NFL DvP Completions", filter: b => b.bet_type === "nfl_qb_dvp_passing_completions" },
     { label: "NFL DvP Pass Att", filter: b => b.bet_type === "nfl_qb_dvp_passing_attempts" },
     { label: "NFL DvP Rush Att", filter: b => b.bet_type === "nfl_qb_dvp_rushing_attempts" },
+    { label: "NFL RB DvP Carries", filter: b => b.bet_type === "nfl_rb_dvp_carries" },
     { label: "NFL RB DvP Rush Yds", filter: b => b.bet_type === "nfl_rb_dvp_rushing_yards" },
     { label: "NFL RB DvP Rush TDs", filter: b => b.bet_type === "nfl_rb_dvp_rushing_tds" },
+    { label: "NFL RB DvP Receptions", filter: b => b.bet_type === "nfl_rb_dvp_receptions" },
     { label: "NFL RB DvP Rec Yds", filter: b => b.bet_type === "nfl_rb_dvp_receiving_yards" },
     { label: "NFL RB DvP Rec TDs", filter: b => b.bet_type === "nfl_rb_dvp_receiving_tds" },
     { label: "NFL RB DvP Total Yds", filter: b => b.bet_type === "nfl_rb_dvp_total_yards" },
@@ -3223,10 +3225,10 @@
   // qualifying RBs can share one team (committee backfields), unlike
   // the QB tab's one-card-per-team shape - see nfl_rb_defense_props_
   // sync.py's module docstring. ----
-  const NFL_RB_DVP_PROPS = ["rushing_yards", "rushing_tds", "receiving_yards", "receiving_tds", "total_yards", "total_tds"];
+  const NFL_RB_DVP_PROPS = ["carries", "rushing_yards", "rushing_tds", "receptions", "receiving_yards", "receiving_tds", "total_yards", "total_tds"];
   const NFL_RB_DVP_LABELS = {
-    rushing_yards: "Rushing Yards", rushing_tds: "Rushing TDs",
-    receiving_yards: "Receiving Yards", receiving_tds: "Receiving TDs",
+    carries: "Carries", rushing_yards: "Rushing Yards", rushing_tds: "Rushing TDs",
+    receptions: "Receptions", receiving_yards: "Receiving Yards", receiving_tds: "Receiving TDs",
     total_yards: "Total Yards", total_tds: "Total TDs",
   };
   const NFL_RB_DVP_DISTRIBUTIONS = {
@@ -3236,12 +3238,16 @@
     rushing_tds: { type: "negbinom", overdispersion: 1.08 },
     receiving_tds: { type: "negbinom", overdispersion: 1.36 },
     total_tds: { type: "poisson" },
+    carries: { type: "negbinom", overdispersion: 2.0 },
+    receptions: { type: "negbinom", overdispersion: 1.34 },
   };
   const NFL_RB_DVP_DEFAULT_THRESHOLD = {
     rushing_yards: 40, rushing_tds: 0.5, receiving_yards: 15, receiving_tds: 0.5, total_yards: 50, total_tds: 0.5,
+    carries: 13, receptions: 2.5,
   };
   const NFL_RB_DVP_THRESHOLD_STEP = {
     rushing_yards: 5, rushing_tds: 0.5, receiving_yards: 5, receiving_tds: 0.5, total_yards: 5, total_tds: 0.5,
+    carries: 1, receptions: 0.5,
   };
 
   const nflRbDvpBetState = {};
