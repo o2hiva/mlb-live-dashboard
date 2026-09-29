@@ -185,6 +185,14 @@ def _apply_batting(db, team: str, scored: bool) -> None:
     if row is None:
         row = NpbTeamScoreStat(team=team, games=0, scored=0)
         db.add(row)
+        # The session is autoflush=False (see database.py), so without this
+        # flush a second _apply_batting() call for the SAME team later in
+        # this same uncommitted batch would not see this pending row via
+        # db.get() and would create a second one - colliding on the primary
+        # key at commit time (psycopg2.errors.UniqueViolation). Flushing
+        # sends the pending INSERT to the DB now (not a commit), making it
+        # visible to subsequent db.get() calls within this transaction.
+        db.flush()
     row.games += 1
     if scored:
         row.scored += 1
@@ -196,6 +204,14 @@ def _apply_pitching(db, pitcher_id, name: str, team: str, allowed: bool) -> None
     if row is None:
         row = NpbPitcherAllowStat(pitcher_id=pitcher_id, name=name, team=team, starts=0, allowed=0)
         db.add(row)
+        # Same reasoning as _apply_batting() above - required so a starter
+        # who starts more than once within one uncommitted commit batch
+        # (any real starter, across a season's worth of games) doesn't get
+        # inserted twice and collide on pitcher_id at commit time. This is
+        # the exact bug that produced the reported
+        # "npb_pitcher_allow_stats_pkey" UniqueViolation during
+        # seed_from_progress().
+        db.flush()
     row.name = name
     row.team = team  # keep the pitcher's most-recently-seen team current
     row.starts += 1
@@ -297,6 +313,7 @@ def sync_date(date_str: str, db) -> dict:
         if row is None:
             row = NpbGame(game_id=game_id, date=date_str)
             db.add(row)
+            db.flush()  # same autoflush=False reasoning as _apply_batting/_apply_pitching above
         row.date = date_str
         row.home_team = home_team
         row.away_team = away_team

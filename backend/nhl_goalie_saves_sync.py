@@ -206,6 +206,17 @@ def _apply_game_to_stats(db, team: str, opponent: str, own_sog: int, opp_sog: in
     if row is None:
         row = NhlTeamShotsStat(team=team, season=season, games=0, shots_for_sum=0, shots_against_sum=0)
         db.add(row)
+        # The session is autoflush=False (see database.py), so without this
+        # flush a second _apply_game_to_stats() call for the SAME team
+        # later in this same uncommitted batch (any team playing more than
+        # one game between commits, which happens routinely) would not see
+        # this pending row via db.get() and would add a second one -
+        # colliding on the primary key at commit time
+        # (psycopg2.errors.UniqueViolation). Flushing sends the pending
+        # INSERT to the DB now (not a commit), making it visible to
+        # subsequent db.get() calls within this transaction. This is the
+        # same bug class that broke npb_yrfi_sync.py's seed import.
+        db.flush()
     row.season = season
     row.games += 1
     row.shots_for_sum += own_sog
@@ -221,6 +232,7 @@ def _apply_game_to_stats(db, team: str, opponent: str, own_sog: int, opp_sog: in
                 grow = NhlGoalieSavesStat(player_id=pid, name=g["name"], team=team, season=season,
                                            games=0, saves_sum=0, shots_against_sum=0)
                 db.add(grow)
+                db.flush()  # same autoflush=False reasoning as the NhlTeamShotsStat block above
             grow.name = g["name"]
             grow.team = team  # keep the goalie's most-recently-seen team current
             grow.season = season
@@ -299,10 +311,18 @@ def daily_update(season: str, target_date: str | None = None) -> dict:
 
                 # Re-check right before writing - this exact game_id also
                 # appears in the OTHER participant's schedule, which may
-                # already have applied it earlier in this same loop
-                # (db.get() sees a just-added, not-yet-committed row via
-                # the session's identity map, so this catches that case
-                # without an extra round trip).
+                # already have applied it earlier in this same loop. The
+                # session is autoflush=False (see database.py), so db.get()
+                # does NOT see a just-added, not-yet-committed row on its
+                # own - it only catches that case here because
+                # _apply_game_to_stats() below (and every db.add() in this
+                # module) explicitly db.flush()es right after adding, which
+                # is what actually makes the pending NhlCollectedGame add a
+                # few lines down visible to this same check next time
+                # around. Without those flushes this re-check would still
+                # miss it and hit psycopg2.errors.UniqueViolation on
+                # NhlCollectedGame's primary key, the same bug class that
+                # broke npb_yrfi_sync.py's seed import.
                 if db.get(NhlCollectedGame, game_id) is not None:
                     continue
 
@@ -311,6 +331,7 @@ def daily_update(season: str, target_date: str | None = None) -> dict:
                 db.add(NhlCollectedGame(game_id=game_id, season=season, date=game_date,
                                          home=home_abbrev, away=away_abbrev,
                                          home_sog=home_sog, away_sog=away_sog))
+                db.flush()  # makes this NhlCollectedGame row visible to the re-check above next time this game_id is seen
                 games_collected += 1
                 if games_collected % 10 == 0:
                     db.commit()  # periodic commit - resumable if a long first backfill run is interrupted
