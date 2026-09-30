@@ -86,9 +86,10 @@
   .hits-batter { display: grid; grid-template-columns: 1.3fr 36px 34px 34px 46px 52px 30px 60px 60px 40px; align-items: center; gap: 4px; font-size: 0.72rem; padding: 3px 0; }
   .hits-batter > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hits-batter-header { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px; margin-top: 6px; }
+  .hits-batter-header > span { text-align: center; }
   .hits-batter select, .hits-batter input {
     background: var(--bg); color: var(--text); border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 4px; padding: 1px 2px; font-size: 0.7rem; width: 100%;
+    border-radius: 4px; padding: 1px 2px; font-size: 0.7rem; width: 100%; text-align: center;
   }
   .hits-batter input[type="checkbox"] { width: auto; justify-self: center; }
   .hits-index { color: var(--muted); font-size: 0.7rem; text-align: center; }
@@ -542,11 +543,11 @@
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
         ${(awayMlPct != null || homeMlPct != null) ? `
-          <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; margin-bottom:2px;">
+          <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
             <span></span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
           </div>` : ""}
         ${awayMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; padding:4px 0;">
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
             <span style="font-size:1rem; font-weight:600;">${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} <span class="prob-yes">${awayMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "away", g.away_team, awayMlPct)}
             <span class="score">${g.away_score ?? "-"}</span>
@@ -556,7 +557,7 @@
             <span class="score">${g.away_score ?? "-"}</span>
           </div>`}
         ${homeMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; padding:4px 0;">
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
             <span style="font-size:1rem; font-weight:600;">${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} <span class="prob-yes">${homeMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "home", g.home_team, homeMlPct)}
             <span class="score">${g.home_score ?? "-"}</span>
@@ -933,7 +934,7 @@
     const idBase = `ml-${gamePk}-${side}`;
 
     const wagerCell = state.useKelly
-      ? `<span>$${wager.toFixed(2)}</span>`
+      ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
       : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}"
            onchange="updateMoneylineBetField(${gamePk},'${side}','manualWager',this.value)" />`;
 
@@ -949,7 +950,7 @@
       <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
         onchange="updateMoneylineBetField(${gamePk},'${side}','useKelly',this.checked)" />
       ${wagerCell}
-      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
       <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleMoneylineTrack(${trackArgs})" />
     `;
   }
