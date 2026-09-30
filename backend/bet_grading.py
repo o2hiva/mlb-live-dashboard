@@ -99,6 +99,16 @@ DATA SOURCES, one per bet_type:
     yet. Left pending indefinitely unless graded by hand, same permanent
     status as nfl_passing_yards/nfl_rushing_yards/the NFL DvP props.
 
+  - "full_game_moneyline_home" / "full_game_moneyline_away": MONEYLINE
+    ONLY - full_game_lines_sync.py deliberately does not expose a
+    totals/spread prediction (not validated - see its module docstring),
+    so those bet_types don't exist. Both read straight off
+    Game.home_score/away_score - already populated for every finished
+    game by poll_live_games, so grading these needs NO new fetch at all
+    (no boxscore, no third-party API). Actual is 1.0/0.0 (won/lost);
+    bet.line is left None so _grade's own 0.5 default applies, same
+    pattern as first_inning_run.
+
   - "npb_yrfi": IS gradeable, unlike the props above - the outcome
     itself (did either team score in the 1st) doesn't depend on which
     pitcher was guessed as the presumed starter, only on what actually
@@ -177,6 +187,22 @@ def _first_inning_actual(db, game_pk: int) -> bool | None:
     if not lines:
         return None
     return sum(l.runs for l in lines) > 0
+
+
+def _full_game_actual(db, bet: TrackedBet) -> float | None:
+    """Real outcome for one Full Game moneyline bet (MONEYLINE ONLY - see
+    module docstring). None if the game's real final score isn't on file
+    yet (Game.home_score/away_score are always set once poll_live_games
+    has seen the game go Final)."""
+    game = db.get(Game, bet.game_pk)
+    if not game or game.home_score is None or game.away_score is None:
+        return None
+
+    if bet.bet_type == "full_game_moneyline_home":
+        return 1.0 if game.home_score > game.away_score else 0.0
+    if bet.bet_type == "full_game_moneyline_away":
+        return 1.0 if game.away_score > game.home_score else 0.0
+    return None
 
 
 def _game_lines_actual(db, game_pk: int, key: str) -> float | None:
@@ -356,6 +382,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
     if bet.bet_type.startswith("game_lines_"):
         key = bet.bet_type[len("game_lines_"):]  # "home" / "away" / "combined"
         return _game_lines_actual(db, bet.game_pk, key)
+
+    if bet.bet_type.startswith("full_game_"):
+        return _full_game_actual(db, bet)
 
     if bet.bet_type == "cfb_team_points":
         return _cfb_team_points_actual(bet, cfb_games_cache)

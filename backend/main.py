@@ -85,6 +85,9 @@ _ensure_column("nfl_rb_defense_prop_stats", "receptions_sum", "INTEGER DEFAULT 0
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
 _ensure_column("npb_games", "start_time_jst", "VARCHAR")
+_ensure_column("games", "home_moneyline_win_prob", "FLOAT")
+_ensure_column("games", "away_moneyline_win_prob", "FLOAT")
+_ensure_column("games", "moneyline_model_version", "VARCHAR")
 
 _scheduler = None
 
@@ -150,6 +153,13 @@ def games_today(game_date: str = None, db: Session = Depends(get_db)):
             "first_inning_run_yes_probability": latest_pred.probability if latest_pred else None,
             "first_inning_run_no_probability": (1 - latest_pred.probability) if latest_pred else None,
             "model_version": latest_pred.model_version if latest_pred else None,
+            # Full Game moneyline - see full_game_lines_sync.py. Recomputed
+            # every poll cycle up to first pitch, then frozen (poller.py),
+            # same "compute pregame, keep for tracking/grading afterward"
+            # pattern as first_inning_run above.
+            "home_moneyline_win_prob": g.home_moneyline_win_prob,
+            "away_moneyline_win_prob": g.away_moneyline_win_prob,
+            "moneyline_model_version": g.moneyline_model_version,
         })
     return out
 
@@ -624,6 +634,74 @@ def game_lines(game_pk: int, db: Session = Depends(get_db)):
         "home_mean": inputs["home_mean"] if inputs else None,
         "combined_mean": inputs["combined_mean"] if inputs else None,
     }
+
+
+@app.get("/api/games/{game_pk}/moneyline")
+def full_game_moneyline(game_pk: int, db: Session = Depends(get_db)):
+    """
+    On-demand recompute of the validated Full Game moneyline for one game
+    (see full_game_lines_sync.py's module docstring for the formula and
+    its 2-season backtest validation) - mainly useful for spot-checking a
+    specific matchup. The main games list (/api/games/today) doesn't call
+    this; it reads the already-computed Game.home_moneyline_win_prob/
+    away_moneyline_win_prob columns instead (kept fresh every poll cycle
+    up to first pitch - see poller.py), so this endpoint recomputing from
+    scratch should normally agree with what's already stored.
+
+    NOTE: intentionally returns win probabilities only - no totals/spread
+    fields. That side of the model is explicitly NOT validated yet, see
+    full_game_lines_sync.py.
+    """
+    import full_game_lines_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    result = full_game_lines_sync.compute_moneyline(
+        game.home_team, game.away_team, game.home_probable_pitcher_id, game.away_probable_pitcher_id,
+    )
+
+    return {
+        "game_pk": game_pk,
+        "home_team": game.home_team,
+        "away_team": game.away_team,
+        "home_win_prob": result["home_win_prob"] if result else None,
+        "away_win_prob": result["away_win_prob"] if result else None,
+        "model_version": result["model_version"] if result else None,
+    }
+
+
+@app.get("/api/admin/refresh-full-game-lines-stats")
+def manual_refresh_full_game_lines_stats():
+    """
+    Manually triggers full_game_lines_sync's incremental daily update
+    right now (checks the last few days for real FINAL games not yet
+    folded into TeamRunsFullGameStat/TeamBullpenStat) instead of waiting
+    for its scheduled run - see poller.py. Safe to run any time and more
+    than once (the TeamBullpenCollectedGame ledger skips anything
+    already folded).
+    """
+    import full_game_lines_sync
+    summary = full_game_lines_sync.daily_update()
+    return {"status": "daily update complete", **summary}
+
+
+@app.get("/api/admin/backfill-full-game-lines")
+def manual_backfill_full_game_lines(max_games: int = 300):
+    """
+    Full-season backfill for TeamRunsFullGameStat/TeamBullpenStat - ONE
+    real boxscore fetch per game (unlike the day-granularity Game Lines
+    backfill), so a full season (2000+ games) can't safely run in a
+    single call. Each call folds up to `max_games` NEW games and picks
+    up next time exactly where it left off (see
+    full_game_lines_sync.backfill's own docstring). Call this
+    repeatedly - e.g. hit it ~7-8 times in a row for a full season at
+    the default max_games=300 - until the response says "finished": true.
+    """
+    import full_game_lines_sync
+    summary = full_game_lines_sync.backfill(max_games=max_games)
+    return {"status": "backfill step complete", **summary}
 
 
 @app.get("/api/debug/game-lines-inputs/{game_pk}")

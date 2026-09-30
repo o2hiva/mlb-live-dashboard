@@ -34,6 +34,7 @@ import hits_stats_sync
 import end_of_day
 import nhl_goalie_saves_sync
 import npb_yrfi_sync
+import full_game_lines_sync
 from database import SessionLocal
 from models_db import Game, InningLine, Prediction
 
@@ -67,6 +68,16 @@ NHL_GOALIE_SAVES_REFRESH_MINUTE_UTC = 0
 NPB_YRFI_REFRESH_HOUR_UTC = 13
 NPB_YRFI_REFRESH_MINUTE_UTC = 0
 
+# Full Game Lines daily collector (real full-game runs + starter/bullpen
+# split, one boxscore fetch per game) - placed between the NHL (10:00)
+# and NPB (13:00) jobs above so none of the three ever overlap.
+# INCREMENTAL, same reasoning as those two - see
+# full_game_lines_sync.py's module docstring for why this one starts
+# cold (TeamRunsFullGameStat/TeamBullpenStat both begin at zero and need
+# real games to accumulate - an accepted tradeoff, not a bug).
+FULL_GAME_LINES_REFRESH_HOUR_UTC = 10
+FULL_GAME_LINES_REFRESH_MINUTE_UTC = 30
+
 # How many days ahead to keep loaded/refreshed, so tomorrow's (and the
 # day after's) games + probable pitchers show up before game day, not
 # just once MLB's default "today" schedule call would surface them.
@@ -99,6 +110,31 @@ def _upsert_first_inning_prediction(db, game: Game, game_info: dict):
         existing_pred.created_at = datetime.utcnow()
 
 
+def _upsert_full_game_moneyline(db, game: Game):
+    """Recomputes the validated Full Game moneyline (see
+    full_game_lines_sync.py) and stores it directly on the Game row -
+    same "recompute every cycle up to first pitch, then frozen" reasoning
+    as _upsert_first_inning_prediction above (a probable-pitcher swap or
+    newly-accumulated team/bullpen stats get picked up automatically).
+    A simple pair of columns rather than a separate history table, since
+    only the latest pre-game number is ever shown or tracked. Wrapped in
+    its own try/except so a transient failure here never blocks the
+    schedule sync or the 1st-inning prediction it runs alongside."""
+    try:
+        import full_game_lines_sync
+        result = full_game_lines_sync.compute_moneyline(
+            game.home_team, game.away_team, game.home_probable_pitcher_id, game.away_probable_pitcher_id,
+        )
+    except Exception:
+        log.exception("Failed to compute Full Game moneyline for game %s", game.game_pk)
+        return
+    if result is None:
+        return
+    game.home_moneyline_win_prob = result["home_win_prob"]
+    game.away_moneyline_win_prob = result["away_win_prob"]
+    game.moneyline_model_version = result["model_version"]
+
+
 def _sync_one_date(db, date_str: str):
     games = mlb_client.get_schedule(date_str)
     for g in games:
@@ -123,6 +159,7 @@ def _sync_one_date(db, date_str: str):
 
         if existing.status in NOT_STARTED_STATUSES:
             _upsert_first_inning_prediction(db, existing, g)
+            _upsert_full_game_moneyline(db, existing)
             _check_lineup_for_game(db, existing)
 
 
@@ -222,6 +259,17 @@ def _npb_yrfi_daily_update():
         log.exception("NPB YRFI daily update failed")
 
 
+def _full_game_lines_daily_update():
+    """Wraps full_game_lines_sync.daily_update with its own try/except,
+    same defensive-wrapping reasoning as _nhl_goalie_saves_daily_update/
+    _npb_yrfi_daily_update above."""
+    try:
+        summary = full_game_lines_sync.daily_update()
+        log.info("Full Game Lines daily update complete: %s", summary)
+    except Exception:
+        log.exception("Full Game Lines daily update failed")
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler()
     scheduler.add_job(sync_schedule, "interval", seconds=POLL_INTERVAL_IDLE_SECONDS, id="sync_schedule")
@@ -263,6 +311,19 @@ def start_scheduler() -> BackgroundScheduler:
         _npb_yrfi_daily_update,
         CronTrigger(hour=NPB_YRFI_REFRESH_HOUR_UTC, minute=NPB_YRFI_REFRESH_MINUTE_UTC),
         id="npb_yrfi_daily_update",
+        next_run_time=datetime.utcnow(),
+    )
+    # Full Game Lines - runs once daily (see
+    # FULL_GAME_LINES_REFRESH_HOUR_UTC above), incrementally collecting
+    # any newly-finished games' full-game runs and starter/bullpen split.
+    # next_run_time=now ALSO fires it once immediately on every app
+    # startup/redeploy, same reasoning as the jobs above - cheap either
+    # way (daily_update only looks back a few days, never the whole
+    # season; use /api/admin/backfill-full-game-lines for that).
+    scheduler.add_job(
+        _full_game_lines_daily_update,
+        CronTrigger(hour=FULL_GAME_LINES_REFRESH_HOUR_UTC, minute=FULL_GAME_LINES_REFRESH_MINUTE_UTC),
+        id="full_game_lines_daily_update",
         next_run_time=datetime.utcnow(),
     )
     scheduler.start()

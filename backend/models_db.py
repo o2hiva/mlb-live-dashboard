@@ -28,6 +28,15 @@ class Game(Base):
     away_score = Column(Integer, default=0)
     inning = Column(Integer, default=0)
     inning_half = Column(String, nullable=True)  # "top" / "bottom"
+    # Full Game Lines - MONEYLINE ONLY (see full_game_lines_sync.py's own
+    # docstring for the validated formula and why total/spread are NOT
+    # exposed). Recomputed every poll cycle up to first pitch, same as
+    # first_inning_run's own Prediction row, then frozen once the game
+    # starts - a simple pair of columns rather than a separate history
+    # table since only the latest pre-game number is ever shown/tracked.
+    home_moneyline_win_prob = Column(Float, nullable=True)
+    away_moneyline_win_prob = Column(Float, nullable=True)
+    moneyline_model_version = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     inning_lines = relationship("InningLine", back_populates="game")
@@ -74,6 +83,63 @@ class TeamRuns5InnStat(Base):
     team_name = Column(String, primary_key=True)
     games = Column(Integer, default=0)
     runs5inn = Column(Integer, default=0)
+
+
+class TeamRunsFullGameStat(Base):
+    """Real season-to-date RUNS SCORED across the WHOLE game (every
+    inning actually played, not just 1-5) for one team - feeds the
+    Full Game Lines prop's own-scoring index (see
+    full_game_lines_sync.py). Deliberately a SEPARATE table from
+    TeamRuns5InnStat/TeamInningStat rather than reused - this one has
+    its own dedicated sync checkpoint (TeamBullpenCollectedGame; full
+    game runs and the bullpen split are collected together, one
+    boxscore fetch covers both) so it can never repeat the exact bug
+    class that hit TeamRuns5InnStat (a table added onto an existing
+    job's ALREADY-ADVANCED shared checkpoint, silently skipping the
+    season it should have backfilled - see
+    inning_stats_sync.backfill_runs5inn's docstring for the full
+    story)."""
+    __tablename__ = "team_runs_fullgame_stats"
+
+    team_name = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    runs_scored = Column(Integer, default=0)
+
+
+class TeamBullpenStat(Base):
+    """Real season-to-date outs recorded / runs allowed by a team's
+    BULLPEN ONLY - every pitcher who appeared in a game EXCEPT that
+    game's own real starter (identified via the same
+    probablePitcher-on-a-finished-game convention already relied on
+    elsewhere in this codebase, e.g. inning_stats_sync.py's
+    away_pname/home_pname). Complements PitcherHitsStat, which already
+    covers the STARTER's own runs-allowed/outs (reused as-is for the
+    starter side of the Full Game Lines formula - no new pitcher-level
+    table needed there). MLB's team-level season pitching stats don't
+    split starter vs. relief on their own, so this has to be
+    reconstructed per game from a real boxscore - see
+    full_game_lines_sync.py's module docstring."""
+    __tablename__ = "team_bullpen_stats"
+
+    team_name = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    outs = Column(Integer, default=0)
+    runs_allowed = Column(Integer, default=0)
+
+
+class TeamBullpenCollectedGame(Base):
+    """Dedup ledger for full_game_lines_sync.py's per-game boxscore
+    collector - one row per game_pk already folded into
+    TeamRunsFullGameStat/TeamBullpenStat, so the daily incremental job
+    never double-counts and the backfill is safe to re-run/resume
+    (picks up wherever it left off, same discipline as
+    NpbCollectedGame/NhlCollectedGame)."""
+    __tablename__ = "team_bullpen_collected_games"
+
+    game_pk = Column(Integer, primary_key=True)
+    date = Column(String)  # "YYYY-MM-DD"
+    home = Column(String)
+    away = Column(String)
 
 
 class TeamInningStat(Base):
