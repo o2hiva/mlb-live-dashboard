@@ -625,6 +625,26 @@ class CfbTeamPointsStat(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class CfbWeekTeamStat(Base):
+    """One team's real points-scored/points-allowed contribution from one
+    already-fetched, completed CFB week (FBS-vs-FBS only) - lets
+    cfb_points_sync.refresh_cfb_points_stats avoid re-fetching a past
+    week from CFBD on every refresh. CFBD's rate limit is MONTHLY (not
+    per-minute), so re-fetching a week that's already final wastes
+    irreplaceable quota for nothing - a finished week's score never
+    changes. Composite PK (season, week, team); only ever written for
+    week < the current week being refreshed (the current week is always
+    re-fetched fresh, since more of its games may still complete)."""
+    __tablename__ = "cfb_week_team_stats"
+
+    season = Column(Integer, primary_key=True)
+    week = Column(Integer, primary_key=True)
+    team = Column(String, primary_key=True)
+    games = Column(Integer, default=0)
+    points_scored = Column(Integer, default=0)
+    points_allowed = Column(Integer, default=0)
+
+
 class CfbGame(Base):
     """This week's real matchups - team/opponent pairs for the CURRENT
     week only (refreshed each sync, not accumulated - same pattern as

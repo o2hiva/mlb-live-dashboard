@@ -42,7 +42,7 @@ from datetime import datetime, timedelta
 import requests
 
 from database import SessionLocal
-from models_db import CfbTeamPointsStat, CfbGame
+from models_db import CfbTeamPointsStat, CfbGame, CfbWeekTeamStat
 
 log = logging.getLogger("cfb_points_sync")
 
@@ -145,23 +145,63 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
     points-scored/points-allowed totals, weeks 1..current_week) and
     CfbGame (this week's real matchups, from whatever week=current_week
     games CFBD has posted so far, whether or not they've been played
-    yet) from scratch. Safe to call any time, any number of times -
-    always fully rebuilt from real CFBD data, no stale incremental state.
+    yet).
+
+    CFBD's rate limit is MONTHLY (1000 calls/mo on the free tier, per
+    https://blog.collegefootballdata.com/api-v2-is-now-in-general-availability/ ),
+    not per-minute or per-hour - a burned monthly budget stays burned
+    until the next billing cycle, it doesn't cool down. The original
+    version of this function re-fetched every week 1..current_week from
+    CFBD on every single call (plus a duplicate call for the current
+    week's schedule) - a handful of "Refresh Stats" clicks was enough to
+    exhaust the free tier for the rest of the month.
+
+    So: every PAST week (< current_week) that's already been fetched
+    once is cached team-by-team in CfbWeekTeamStat and reused from then
+    on - a finished week's score never changes, so re-fetching it is
+    pure waste. Only the current (possibly still in-progress) week is
+    always fetched fresh, and that single fetch is reused for both the
+    team-totals rebuild and the CfbGame schedule (the old code fetched
+    the same week twice). Net effect: 1 CFBD call per refresh once a
+    season's past weeks are cached, instead of current_week+1 calls
+    every time.
     """
     db = SessionLocal()
     try:
         team_totals: dict[str, dict] = {}
         weeks_fetched = 0
-        games_used = 0
+        weeks_from_cache = 0
+        this_week_games: list[dict] = []
+
+        cached_weeks = {
+            w for (w,) in db.query(CfbWeekTeamStat.week)
+                            .filter(CfbWeekTeamStat.season == season, CfbWeekTeamStat.week < current_week)
+                            .distinct().all()
+        }
 
         for week in range(1, current_week + 1):
+            is_current = (week == current_week)
+
+            if not is_current and week in cached_weeks:
+                weeks_from_cache += 1
+                for row in db.query(CfbWeekTeamStat).filter_by(season=season, week=week).all():
+                    totals = team_totals.setdefault(
+                        row.team, {"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0})
+                    totals["games"] += row.games
+                    totals["points_scored_sum"] += row.points_scored
+                    totals["points_allowed_sum"] += row.points_allowed
+                continue
+
             try:
                 games = get_week_games(season, week)
             except requests.exceptions.RequestException:
                 log.exception("Failed to fetch CFB week %s games", week)
                 continue
             weeks_fetched += 1
+            if is_current:
+                this_week_games = games  # reused below for CfbGame - avoids a second identical CFBD call
 
+            week_rows: dict[str, dict] = {}
             for game in games:
                 if not is_fbs_vs_fbs(game):
                     continue
@@ -169,11 +209,23 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 home_pts, away_pts = game["homePoints"], game["awayPoints"]
 
                 for team, pts, allowed_pts in ((home, home_pts, away_pts), (away, away_pts, home_pts)):
-                    row = team_totals.setdefault(team, {"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0})
-                    row["games"] += 1
-                    row["points_scored_sum"] += pts
-                    row["points_allowed_sum"] += allowed_pts
-                games_used += 1
+                    totals = team_totals.setdefault(
+                        team, {"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0})
+                    totals["games"] += 1
+                    totals["points_scored_sum"] += pts
+                    totals["points_allowed_sum"] += allowed_pts
+                    wrow = week_rows.setdefault(team, {"games": 0, "points_scored": 0, "points_allowed": 0})
+                    wrow["games"] += 1
+                    wrow["points_scored"] += pts
+                    wrow["points_allowed"] += allowed_pts
+
+            if not is_current:
+                # A past week that fetched successfully for the first time -
+                # cache it so no future refresh ever needs CFBD for it again.
+                db.query(CfbWeekTeamStat).filter_by(season=season, week=week).delete()
+                for team, wtotals in week_rows.items():
+                    db.add(CfbWeekTeamStat(season=season, week=week, team=team, **wtotals))
+                db.flush()
 
         db.query(CfbTeamPointsStat).delete()
         for team, totals in team_totals.items():
@@ -188,30 +240,34 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
         # before it's final, same as NflGame's own "this week's matchups"
         # table). A team can appear at most once per week in a normal
         # schedule, so team-as-primary-key (like NflGame) is safe here too.
-        db.query(CfbGame).delete()
-        try:
-            this_week_games = get_week_games(season, current_week)
-        except requests.exceptions.RequestException:
-            log.exception("Failed to fetch CFB current week %s schedule", current_week)
-            this_week_games = []
-        for game in this_week_games:
-            home, away = game.get("homeTeam"), game.get("awayTeam")
-            if not home or not away:
-                continue
-            # "startDate" confirmed live (CFBD real field, ISO8601 UTC,
-            # e.g. "2026-09-24T23:00:00.000Z") - unlike NFL's schedule API,
-            # this one DOES carry a real kickoff time, so CFB Team Points
-            # can show/order by actual time, not just date.
-            start_date_utc = game.get("startDate")
-            db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
-                            season=season, week=current_week, start_date_utc=start_date_utc))
-            db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
-                            season=season, week=current_week, start_date_utc=start_date_utc))
+        # Only replace the existing schedule if this call actually got a
+        # fresh current-week fetch - if CFBD failed (e.g. quota
+        # exhausted), keep whatever CfbGame already has rather than
+        # wiping it out to empty.
+        if this_week_games:
+            db.query(CfbGame).delete()
+            for game in this_week_games:
+                home, away = game.get("homeTeam"), game.get("awayTeam")
+                if not home or not away:
+                    continue
+                # "startDate" confirmed live (CFBD real field, ISO8601 UTC,
+                # e.g. "2026-09-24T23:00:00.000Z") - unlike NFL's schedule
+                # API, this one DOES carry a real kickoff time, so CFB Team
+                # Points can show/order by actual time, not just date.
+                start_date_utc = game.get("startDate")
+                db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
+                                season=season, week=current_week, start_date_utc=start_date_utc))
+                db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
+                                season=season, week=current_week, start_date_utc=start_date_utc))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written
-        summary = {"weeks_fetched": weeks_fetched, "teams": len(team_totals), "games_used": games_used,
-                   "current_week_matchups": len(this_week_games)}
+        games_used = sum(t["games"] for t in team_totals.values()) // 2
+        summary = {
+            "weeks_fetched": weeks_fetched, "weeks_from_cache": weeks_from_cache,
+            "teams": len(team_totals), "games_used": games_used,
+            "current_week_matchups": len(this_week_games),
+        }
         log.info("refresh_cfb_points_stats complete: %s", summary)
         return summary
     except Exception:
