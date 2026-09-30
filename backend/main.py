@@ -636,6 +636,41 @@ def game_lines(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/games/{game_pk}/f5-lines")
+def f5_lines(game_pk: int, db: Session = Depends(get_db)):
+    """
+    1st 5 Innings (F5) Game Lines prop - each team's predicted F5 runs
+    (feeding a client-side O/U probability for any line, same pattern as
+    /api/games/{game_pk}/game-lines), the combined F5 total mean, and F5
+    moneyline win probabilities. Game-level (2 team rows + 1 combined
+    total row + moneyline), not per-batter/pitcher. Needs no new sync
+    trigger for the caller - reuses PitcherHitsStat and TeamRuns5InnStat,
+    same as game_lines_sync.py. See f5_lines_sync.py for the full
+    formula, its validation summary, and honest limitations.
+    """
+    import f5_lines_sync
+
+    game = db.get(Game, game_pk)
+    if game is None:
+        return {"error": "not found"}
+
+    inputs = f5_lines_sync.compute_f5_lines_inputs(
+        game.home_team, game.away_team, game.home_probable_pitcher_id, game.away_probable_pitcher_id,
+    )
+
+    return {
+        "game_pk": game_pk,
+        "home_team": game.home_team,
+        "away_team": game.away_team,
+        "away_mean": inputs["away_mean"] if inputs else None,
+        "home_mean": inputs["home_mean"] if inputs else None,
+        "combined_mean": inputs["combined_mean"] if inputs else None,
+        "home_win_prob_5inn": inputs["home_win_prob_5inn"] if inputs else None,
+        "away_win_prob_5inn": inputs["away_win_prob_5inn"] if inputs else None,
+        "model_version": inputs["model_version"] if inputs else None,
+    }
+
+
 @app.get("/api/games/{game_pk}/moneyline")
 def full_game_moneyline(game_pk: int, db: Session = Depends(get_db)):
     """

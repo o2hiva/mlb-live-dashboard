@@ -1580,6 +1580,233 @@
     `;
   }
 
+  // ---- 1st 5 Innings (F5) tab: each team's predicted F5 runs (O/U
+  // default 2, same instant-recompute-on-any-line pattern as Game
+  // Lines above but with THIS module's own validated overdispersion -
+  // see F5_OVERDISPERSION/probF5AtLeast), the combined F5 total (O/U
+  // default 5), and F5 moneyline win probabilities (server-computed
+  // exact joint distribution, not client-recomputed - see
+  // f5_lines_sync.py). Like Game Lines, does NOT depend on lineup
+  // confirmation - only the two starting pitchers' and two teams'
+  // season data. ----
+  const f5DataCache = {};
+  const f5BetState = {};
+
+  function getF5BetState(gamePk, key) {
+    if (!f5BetState[gamePk]) f5BetState[gamePk] = {};
+    if (!f5BetState[gamePk][key]) {
+      f5BetState[gamePk][key] = {
+        yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null,
+        threshold: key === "combined" ? 5 : 2,
+      };
+    }
+    return f5BetState[gamePk][key];
+  }
+
+  function updateF5Threshold(gamePk, key, value) {
+    const state = getF5BetState(gamePk, key);
+    state.threshold = Math.max(1, parseInt(value, 10) || (key === "combined" ? 5 : 2));
+    rerenderF5(gamePk);
+  }
+
+  function updateF5BetField(gamePk, key, field, value) {
+    const state = getF5BetState(gamePk, key);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderF5(gamePk);
+  }
+
+  function rerenderF5(gamePk) {
+    if (activeLineupTab[gamePk] !== "f5") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && f5DataCache[gamePk]) {
+      contentDiv.innerHTML = f5SectionHtml(gamePk, f5DataCache[gamePk]);
+    }
+  }
+
+  async function toggleF5Track(gamePk, key, checked, label, line, modelProb, marketPct, wager, profit) {
+    const state = getF5BetState(gamePk, key);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "f5_lines_" + key, batter_name: label,
+            team_side: key === "combined" ? null : key, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderF5(gamePk);
+  }
+
+  function f5BetRowCellsHtml(gamePk, key, label, yesPct, noPct, line) {
+    const state = getF5BetState(gamePk, key);
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `f5-${gamePk}-${key}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateF5BetField(${gamePk},'${key}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'${key}',this.checked,'${label.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+      <select id="yn-${idBase}" onchange="updateF5BetField(${gamePk},'${key}','yn',this.value)">
+        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+      </select>
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateF5BetField(${gamePk},'${key}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateF5BetField(${gamePk},'${key}','useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleF5Track(${trackArgs})" />
+    `;
+  }
+
+  function f5RowHtml(gamePk, key, label, mean) {
+    const state = getF5BetState(gamePk, key);
+    const line = state.threshold;
+    const yesPct = mean != null ? probF5AtLeast(mean, line) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+    const meanStr = mean != null ? mean.toFixed(2) : "—";
+
+    return `
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
+        <span>${label}</span>
+        <span class="hits-index">${meanStr}</span>
+        <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateF5Threshold(${gamePk},'${key}',this.value)" />
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        ${f5BetRowCellsHtml(gamePk, key, label, yesPct, noPct, line)}
+      </div>
+    `;
+  }
+
+  // F5 moneyline - server already returns the exact joint-distribution
+  // win probabilities (f5_lines_sync.py), so unlike the O/U rows above
+  // there's no line/threshold to recompute client-side - just Y/N
+  // market/kelly/wager/profit/track cells around a fixed probability.
+  function f5MoneylineBetRowCellsHtml(gamePk, side, teamName, winPct) {
+    const state = getF5BetState(gamePk, "ml_" + side);
+    const modelProb = winPct != null ? winPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `f5ml-${gamePk}-${side}`;
+
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateF5BetField(${gamePk},'ml_${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gamePk},'ml_${side}',this.checked,'${teamName.replace(/'/g, "\\'")} F5 ML',null,${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateF5BetField(${gamePk},'ml_${side}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateF5BetField(${gamePk},'ml_${side}','useKelly',this.checked)" />
+      ${wagerCell}
+      <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleF5MoneylineTrack(${trackArgs})" />
+    `;
+  }
+
+  async function toggleF5MoneylineTrack(gamePk, key, checked, teamName, line, modelProb, marketPct, wager, profit) {
+    const side = key.replace("ml_", "");
+    const state = getF5BetState(gamePk, key);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "f5_moneyline_" + side, batter_name: teamName,
+            team_side: side, yn: "yes", model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderF5(gamePk);
+  }
+
+  function f5MoneylineRowHtml(gamePk, side, teamName, winProb) {
+    const winPct = winProb != null ? Math.round(winProb * 100) : null;
+    return `
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
+        <span>${teamName} - F5 Moneyline</span>
+        <span class="hits-index">—</span>
+        <span></span>
+        <span class="prob-yes">${winPct != null ? winPct + "%" : "N/A"}</span>
+        <span></span>
+        <span></span>
+        ${f5MoneylineBetRowCellsHtml(gamePk, side, teamName, winPct)}
+      </div>
+    `;
+  }
+
+  function f5SectionHtml(gamePk, data) {
+    const header = `
+      <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
+        <span>Team</span><span>Mean</span><span>O/U</span><span>Yes</span><span>No</span>
+        <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+
+    if (data.away_mean == null && data.home_mean == null && data.combined_mean == null) {
+      return header + `<div class="hits-side-label">Not enough real season data yet for both teams.</div>`;
+    }
+
+    return `
+      ${header}
+      ${f5RowHtml(gamePk, "away", `${data.away_team} (Away) - 5 Inn Runs`, data.away_mean)}
+      ${f5RowHtml(gamePk, "home", `${data.home_team} (Home) - 5 Inn Runs`, data.home_mean)}
+      ${f5RowHtml(gamePk, "combined", `Combined Total - 5 Inn Runs`, data.combined_mean)}
+      ${f5MoneylineRowHtml(gamePk, "away", data.away_team, data.away_win_prob_5inn)}
+      ${f5MoneylineRowHtml(gamePk, "home", data.home_team, data.home_win_prob_5inn)}
+    `;
+  }
+
   // ---- Pitcher Hits Allowed prop: same 2-rows-per-game structure as
   // Pitcher K, but Poisson-distributed (mean only, no sd/spread param).
   // See pitcher_hits_allowed_sync.py for the full formula. ----
@@ -1933,6 +2160,19 @@
     return nbinomSf(Math.ceil(line) - 1, r, p);
   }
 
+  // 1st 5 Innings (F5) Game Lines tab: its OWN validated overdispersion
+  // (2.5 - see f5_lines_sync.py), deliberately NOT the same 1.65 the
+  // older Game Lines prop above uses - different model, different
+  // backtest. Same NB math/instant-recompute pattern otherwise.
+  const F5_OVERDISPERSION = 2.5;
+
+  function probF5AtLeast(mean, line) {
+    if (mean == null) return null;
+    const p = 1 / F5_OVERDISPERSION;
+    const r = mean / (F5_OVERDISPERSION - 1);
+    return nbinomSf(Math.ceil(line) - 1, r, p);
+  }
+
   function getHrrBetState(gamePk, side, batterId) {
     if (!hrrBetState[gamePk]) hrrBetState[gamePk] = {};
     const key = `${side}_${batterId}`;
@@ -2093,6 +2333,7 @@
         <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
         <span class="lineup-tab ${tab === "pha" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'pha')">P-Hits</span>
+        <span class="lineup-tab ${tab === "f5" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'f5')">1st 5</span>
         <span class="lineup-tab ${tab === "gamelines" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'gamelines')">Game Lines</span>
       </div>
       <div id="lineup-content-${gamePk}"></div>
@@ -2105,6 +2346,7 @@
       hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
       k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
       pha: { cache: phaDataCache, render: phaSectionHtml, path: "pitcher-hits-allowed" },
+      f5: { cache: f5DataCache, render: f5SectionHtml, path: "f5-lines" },
       gamelines: { cache: gameLinesDataCache, render: gameLinesSectionHtml, path: "game-lines" },
     };
     const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];

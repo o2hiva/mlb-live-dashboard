@@ -34,6 +34,16 @@ DATA SOURCES, one per bet_type:
     needed, InningLine is already populated live for every inning
     (not just the 1st) by poll_live_games.
 
+  - "f5_lines_home" / "f5_lines_away" / "f5_lines_combined": same real
+    F5-runs data and grading path as "game_lines_*" above - these are
+    the 1st 5 Innings tab's O/U bets (f5_lines_sync.py's model), a
+    different prediction source over the identical real outcome.
+
+  - "f5_moneyline_home" / "f5_moneyline_away": which side had more runs
+    after 5 innings, from the same InningLine sum as "f5_lines_*" - a
+    tie gives 0.0 to both sides (no push, same convention as every bet
+    type here).
+
   - "cfb_team_points": fetches that bet's own season/week schedule
     fresh from CFBD (cfb_points_sync.get_week_games) and reads the real
     final homePoints/awayPoints for whichever side (home/away, stored
@@ -225,6 +235,25 @@ def _game_lines_actual(db, game_pk: int, key: str) -> float | None:
     return None
 
 
+def _f5_moneyline_actual(db, game_pk: int, side: str) -> float | None:
+    """Real F5 moneyline outcome (1.0/0.0) for one side ("home"/"away"),
+    from the same live-populated InningLine rows the F5 total/Game Lines
+    props already use, summed over innings 1-5. A tie after 5 gives 0.0
+    to both sides - same non-push convention as every other bet_type
+    this system tracks (see module docstring), and the identical
+    strict-greater-than rule Full Game Lines' own moneyline actual uses."""
+    lines = db.query(InningLine).filter_by(game_pk=game_pk).filter(InningLine.inning <= 5).all()
+    if not lines:
+        return None
+    away_runs = sum(l.runs for l in lines if l.half == "top")
+    home_runs = sum(l.runs for l in lines if l.half == "bottom")
+    if side == "home":
+        return 1.0 if home_runs > away_runs else 0.0
+    if side == "away":
+        return 1.0 if away_runs > home_runs else 0.0
+    return None
+
+
 def _cfb_team_points_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | None:
     """Real final points for this CFB Team Points bet's team, fetched
     fresh from CFBD for the bet's own recorded season/week - see module
@@ -382,6 +411,14 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
     if bet.bet_type.startswith("game_lines_"):
         key = bet.bet_type[len("game_lines_"):]  # "home" / "away" / "combined"
         return _game_lines_actual(db, bet.game_pk, key)
+
+    if bet.bet_type.startswith("f5_lines_"):
+        key = bet.bet_type[len("f5_lines_"):]  # "home" / "away" / "combined"
+        return _game_lines_actual(db, bet.game_pk, key)  # same real F5-runs data, different model source
+
+    if bet.bet_type.startswith("f5_moneyline_"):
+        side = bet.bet_type[len("f5_moneyline_"):]  # "home" / "away"
+        return _f5_moneyline_actual(db, bet.game_pk, side)
 
     if bet.bet_type.startswith("full_game_"):
         return _full_game_actual(db, bet)
