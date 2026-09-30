@@ -543,11 +543,11 @@
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
         ${(awayMlPct != null || homeMlPct != null) ? `
-          <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
-            <span></span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
+          <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
+            <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
           </div>` : ""}
         ${awayMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
             <span style="font-size:1rem; font-weight:600;">${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} <span class="prob-yes">${awayMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "away", g.away_team, awayMlPct)}
             <span class="score">${g.away_score ?? "-"}</span>
@@ -557,7 +557,7 @@
             <span class="score">${g.away_score ?? "-"}</span>
           </div>`}
         ${homeMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
             <span style="font-size:1rem; font-weight:600;">${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} <span class="prob-yes">${homeMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "home", g.home_team, homeMlPct)}
             <span class="score">${g.home_score ?? "-"}</span>
@@ -873,7 +873,7 @@
   function getMoneylineBetState(gamePk, side) {
     if (!moneylineBetState[gamePk]) moneylineBetState[gamePk] = {};
     if (!moneylineBetState[gamePk][side]) {
-      moneylineBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+      moneylineBetState[gamePk][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
     }
     return moneylineBetState[gamePk][side];
   }
@@ -899,7 +899,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             game_pk: gamePk, bet_type: "full_game_moneyline_" + side, batter_name: teamName + " ML",
-            team_side: side, yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            team_side: side, yn: "yes", model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
           }),
         });
@@ -923,9 +923,7 @@
 
   function moneylineBetRowCellsHtml(gamePk, side, teamName, winPct) {
     const state = getMoneylineBetState(gamePk, side);
-    const noPct = winPct != null ? 100 - winPct : null;
-    const modelPct = state.yn === "yes" ? winPct : noPct;
-    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const modelProb = winPct != null ? winPct / 100 : null;
 
     const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
     const profit = profitIfWon(wager, state.market);
@@ -941,10 +939,6 @@
     const trackArgs = `${gamePk},'${side}',this.checked,'${teamName.replace(/'/g, "\\'")}',${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <select id="yn-${idBase}" onchange="updateMoneylineBetField(${gamePk},'${side}','yn',this.value)">
-        <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
-        <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
-      </select>
       <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%"
         onchange="updateMoneylineBetField(${gamePk},'${side}','market',this.value)" />
       <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""}
