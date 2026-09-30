@@ -541,32 +541,33 @@
           ${statusLabel}
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
-        <div class="teams">
-          <span>${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} ${awayMlPct != null ? `<span class="prob-yes" style="margin-left:6px;">${awayMlPct}%</span>` : ""}</span>
-          <span class="score">${g.away_score ?? "-"}</span>
-        </div>
-        <div class="teams">
-          <span>${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} ${homeMlPct != null ? `<span class="prob-yes" style="margin-left:6px;">${homeMlPct}%</span>` : ""}</span>
-          <span class="score">${g.home_score ?? "-"}</span>
-        </div>
+        ${(awayMlPct != null || homeMlPct != null) ? `
+          <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 40px 46px 52px 30px 60px 60px 40px; margin-bottom:2px;">
+            <span></span><span></span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+          </div>` : ""}
+        ${awayMlPct != null ? `
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 40px 46px 52px 30px 60px 60px 40px; margin-bottom:2px;">
+            <span>${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} <span class="prob-yes">${awayMlPct}%</span></span>
+            <span class="score">${g.away_score ?? "-"}</span>
+            ${moneylineBetRowCellsHtml(g.game_pk, "away", g.away_team, awayMlPct)}
+          </div>` : `
+          <div class="teams">
+            <span>${g.away_team} ${lineupLabel(g.away_lineup_confirmed)}</span>
+            <span class="score">${g.away_score ?? "-"}</span>
+          </div>`}
+        ${homeMlPct != null ? `
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 40px 46px 52px 30px 60px 60px 40px; margin-bottom:2px;">
+            <span>${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} <span class="prob-yes">${homeMlPct}%</span></span>
+            <span class="score">${g.home_score ?? "-"}</span>
+            ${moneylineBetRowCellsHtml(g.game_pk, "home", g.home_team, homeMlPct)}
+          </div>` : `
+          <div class="teams">
+            <span>${g.home_team} ${lineupLabel(g.home_lineup_confirmed)}</span>
+            <span class="score">${g.home_score ?? "-"}</span>
+          </div>`}
         <div class="pitchers">
           ${g.away_probable_pitcher || "TBD"} vs ${g.home_probable_pitcher || "TBD"}
         </div>
-        ${(homeMlPct != null && awayMlPct != null) ? `
-          <div style="margin-top:14px;">
-            <div class="prob-label">Full Game Moneyline (${g.moneyline_model_version || "n/a"})</div>
-            <div class="hits-batter hits-batter-header" style="grid-template-columns: 1fr 46px 52px 30px 60px 60px 40px; margin-top:6px;">
-              <span>Team</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-            </div>
-            <div class="hits-batter" style="grid-template-columns: 1fr 46px 52px 30px 60px 60px 40px;">
-              <span class="prob-yes">${g.away_team} (${awayMlPct}%)</span>
-              ${moneylineBetRowCellsHtml(g.game_pk, "away", g.away_team, awayMlPct)}
-            </div>
-            <div class="hits-batter" style="grid-template-columns: 1fr 46px 52px 30px 60px 60px 40px;">
-              <span class="prob-yes">${g.home_team} (${homeMlPct}%)</span>
-              ${moneylineBetRowCellsHtml(g.game_pk, "home", g.home_team, homeMlPct)}
-            </div>
-          </div>` : ""}
         ${yesPct != null ? `
           <div style="margin-top:16px;">
             <div class="prob-label">1st-inning run scored? (${g.model_version || "n/a"})</div>
