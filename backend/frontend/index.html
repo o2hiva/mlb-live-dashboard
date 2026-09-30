@@ -546,8 +546,8 @@
             <span></span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
           </div>` : ""}
         ${awayMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; font-size:1rem; font-weight:600; padding:4px 0;">
-            <span>${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} <span class="prob-yes">${awayMlPct}%</span></span>
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; padding:4px 0;">
+            <span style="font-size:1rem; font-weight:600;">${g.away_team} ${lineupLabel(g.away_lineup_confirmed)} <span class="prob-yes">${awayMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "away", g.away_team, awayMlPct)}
             <span class="score">${g.away_score ?? "-"}</span>
           </div>` : `
@@ -556,8 +556,8 @@
             <span class="score">${g.away_score ?? "-"}</span>
           </div>`}
         ${homeMlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; font-size:1rem; font-weight:600; padding:4px 0;">
-            <span>${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} <span class="prob-yes">${homeMlPct}%</span></span>
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 32px 38px 24px 52px 48px 34px 40px; padding:4px 0;">
+            <span style="font-size:1rem; font-weight:600;">${g.home_team} ${lineupLabel(g.home_lineup_confirmed)} <span class="prob-yes">${homeMlPct}%</span></span>
             ${moneylineBetRowCellsHtml(g.game_pk, "home", g.home_team, homeMlPct)}
             <span class="score">${g.home_score ?? "-"}</span>
           </div>` : `
