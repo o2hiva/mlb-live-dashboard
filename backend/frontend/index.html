@@ -375,8 +375,12 @@
     </div>
 
     <div id="subtab-content-nhl-goalies">
-      <div class="sub">NHL Goalie Saves - tomorrow's real matchups, each team's presumed starting goalie (most games on record so far this season) and predicted saves. The 2026-27 season just started, so predictions fill in automatically as enough real games are collected day by day.</div>
+      <div class="sub">NHL Goalie Saves - real matchups for the selected date, each team's presumed starting goalie (most games on record so far this season) and predicted saves. The 2026-27 season just started, so predictions fill in automatically as enough real games are collected day by day.</div>
       <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label for="nhl-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
+          <input id="nhl-date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="loadNhlTab()" />
+        </div>
         <div>
           <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
           <input id="nhl-season-input" type="text" value="20262027" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:100px;" />
@@ -4776,10 +4780,12 @@
   }
 
   async function loadNhlTab() {
+    const dateInput = document.getElementById("nhl-date-picker");
+    if (!dateInput.value) dateInput.value = todayIso();
     const container = document.getElementById("nhl-content");
     container.innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
-      const res = await fetch(`${API_BASE}/api/nhl/goalie-saves`);
+      const res = await fetch(`${API_BASE}/api/nhl/goalie-saves?target_date=${dateInput.value}`);
       nhlGoalieDataCache = await res.json();
       if (nhlGoalieDataCache.season != null) document.getElementById("nhl-season-input").value = nhlGoalieDataCache.season;
       renderNhlGoalieFromCache();
@@ -4794,10 +4800,13 @@
       document.getElementById("nhl-refresh-status").textContent = "Enter a season first.";
       return;
     }
+    const dateInput = document.getElementById("nhl-date-picker");
+    if (!dateInput.value) dateInput.value = todayIso();
+    const targetDate = dateInput.value;
     const statusEl = document.getElementById("nhl-refresh-status");
-    statusEl.textContent = `Refreshing NHL stats for ${season} - this collects any newly-finished games and can take a little while the first time...`;
+    statusEl.textContent = `Refreshing NHL stats for ${season} (matchups for ${targetDate}) - this collects any newly-finished games and can take a little while the first time...`;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/refresh-nhl-goalie-saves-stats?season=${season}`);
+      const res = await fetch(`${API_BASE}/api/admin/refresh-nhl-goalie-saves-stats?season=${season}&target_date=${targetDate}`);
       const data = await res.json();
       statusEl.textContent = `Refreshed - ${data.games_collected ?? 0} new game(s) collected, ${data.target_matchups ?? 0} matchup(s) for ${data.target_date ?? "target date"}.`;
       loadNhlTab();

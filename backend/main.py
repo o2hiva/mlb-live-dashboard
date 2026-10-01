@@ -1368,21 +1368,31 @@ def manual_refresh_nhl_goalie_saves_stats(season: str, target_date: str | None =
 
 
 @app.get("/api/nhl/goalie-saves")
-def nhl_goalie_saves(db: Session = Depends(get_db)):
+def nhl_goalie_saves(target_date: str | None = None, db: Session = Depends(get_db)):
     """
-    Every team's real target-date matchup and predicted goalie saves
-    (presumed starter picked as the team's most-games-on-record goalie -
-    see nhl_goalie_saves_sync.compute_goalie_saves_prediction), from
-    whatever the last daily_update call populated. Mirrors
+    One date's (YYYY-MM-DD, default: today UTC) real matchups and
+    predicted goalie saves (presumed starter picked as the team's most-
+    games-on-record goalie - see
+    nhl_goalie_saves_sync.compute_goalie_saves_prediction). Mirrors
     /api/nfl/points-games's shape - one row per team per game, grouped by
     game_id client-side into a single card per matchup.
+
+    NhlGoalieGame now keeps every date it's ever been refreshed for (see
+    its own docstring) rather than a single global row per team, so
+    picking a date here never depends on which date was MOST RECENTLY
+    refreshed - that's what let refreshing tomorrow's matchups silently
+    make today's disappear before this endpoint took a date param.
     """
+    from datetime import datetime
     from models_db import NhlGoalieGame
     import nhl_goalie_saves_sync
 
-    games = db.query(NhlGoalieGame).all()
+    if target_date is None:
+        target_date = datetime.utcnow().date().isoformat()
+
+    games = db.query(NhlGoalieGame).filter_by(date=target_date).all()
     if not games:
-        return {"games": [], "season": None, "target_date": None}
+        return {"games": [], "season": None, "target_date": target_date}
 
     league_avgs = nhl_goalie_saves_sync.get_league_avgs(db)
 

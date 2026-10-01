@@ -778,19 +778,29 @@ class NhlGoalieSavesStat(Base):
 
 
 class NhlGoalieGame(Base):
-    """The target date's (normally tomorrow, UTC) real matchups - one row
-    per team, REFRESHED each daily_update call (not accumulated), same
-    pattern as NflPointsGame/CfbGame. game_id is the NHL API's own
-    numeric game id, kept for potential future grading use (not currently
-    used - see bet_grading.py, this prop is left permanently pending like
-    every other estimation-based prop in this project)."""
-    __tablename__ = "nhl_goalie_games"
+    """One date's real matchups - one row per team per date, REFRESHED
+    only for the SPECIFIC date a daily_update/refresh call targets (other
+    dates already stored are left untouched) - same date-scoped-replace
+    pattern as NpbGame, not a single global row per team. game_id is the
+    NHL API's own numeric game id, kept for potential future grading use
+    (not currently used - see bet_grading.py, this prop is left
+    permanently pending like every other estimation-based prop in this
+    project).
 
-    team = Column(String, primary_key=True)
+    NOTE: table renamed from the original "nhl_goalie_games" (where
+    `team` alone was the primary key, so switching the viewed date wiped
+    whatever date was previously stored - the exact bug this rename
+    fixes) to "nhl_goalie_games_v2" with its own surrogate id, so
+    create_all() builds the new shape fresh rather than needing a manual
+    ALTER TABLE on the live primary key."""
+    __tablename__ = "nhl_goalie_games_v2"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team = Column(String, index=True)
     opponent = Column(String)
     is_home = Column(Boolean, default=False)
     game_id = Column(Integer, nullable=True)
-    date = Column(String, nullable=True)  # "YYYY-MM-DD"
+    date = Column(String, nullable=True, index=True)  # "YYYY-MM-DD"
     season = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

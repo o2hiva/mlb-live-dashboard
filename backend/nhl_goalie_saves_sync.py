@@ -252,7 +252,11 @@ def daily_update(season: str, target_date: str | None = None) -> dict:
          fetches each one's real boxscore once, and folds it into the
          running NhlTeamShotsStat/NhlGoalieSavesStat totals.
       2. Discovers target_date's (default: tomorrow, UTC) real matchups
-         and refreshes NhlGoalieGame with them.
+         and refreshes NhlGoalieGame with them - ONLY that date's rows
+         are replaced; any other date already stored (e.g. today's,
+         if that's what the viewer currently has open) is left alone,
+         so the NHL tab can offer a date picker like MLB's without one
+         refresh call wiping out a different date's games.
     Safe to call any number of times - already-collected games are
     skipped, so a same-day repeat call is cheap (mostly no-ops). Also
     runs automatically once daily (see poller.py), which additionally
@@ -338,7 +342,11 @@ def daily_update(season: str, target_date: str | None = None) -> dict:
 
         db.commit()
 
-        db.query(NhlGoalieGame).delete()
+        # Only replace THIS target_date's rows - other dates already
+        # stored (e.g. today's matchups, if the viewer is looking at
+        # those) are left untouched, so refreshing for one date never
+        # makes another date's games disappear from the NHL tab.
+        db.query(NhlGoalieGame).filter_by(date=target_date).delete()
         for team, info in target_matchups.items():
             db.add(NhlGoalieGame(team=team, opponent=info["opponent"], is_home=info["is_home"],
                                   game_id=info["game_id"], date=info["date"], season=season))
