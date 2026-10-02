@@ -208,31 +208,29 @@
 
   <div id="tab-content-nfl" style="display:none;">
     <div class="tabs">
-      <span id="subtab-btn-nfl-passing" class="tab-btn active" onclick="switchNflSubTab('passing')">Passing Yards</span>
-      <span id="subtab-btn-nfl-rushing" class="tab-btn" onclick="switchNflSubTab('rushing')">Rushing Yards</span>
-      <span id="subtab-btn-nfl-points" class="tab-btn" onclick="switchNflSubTab('points')">Team Points</span>
+      <span id="subtab-btn-nfl-points" class="tab-btn active" onclick="switchNflSubTab('points')">Team Points</span>
       <span id="subtab-btn-nfl-byposition" class="tab-btn" onclick="switchNflSubTab('byposition')">By Position</span>
     </div>
 
-    <div id="subtab-content-nfl-passing">
-      <div class="sub">NFL Passing Yards - current week's real matchups, each team's most recent starter.</div>
+    <div id="subtab-content-nfl-points">
+      <div class="sub">NFL Team Points - current week's real matchups, each team's predicted points scored. Open a game box's "Show Props ▾" for Game Lines (combined total), Passing Yards and Rushing Yards.</div>
       <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
         <div>
           <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
-          <input id="nfl-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
+          <input id="nfl-points-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
         </div>
         <div>
           <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
-          <input id="nfl-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+          <input id="nfl-points-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
         </div>
-        <span class="hits-toggle" onclick="refreshNflStats()" style="padding:6px 14px;">Refresh Stats</span>
-        <span class="hits-toggle" onclick="toggleNflBackfillForm()" style="padding:6px 14px;">Manual Backfill</span>
+        <span class="hits-toggle" onclick="refreshNflPointsStats()" style="padding:6px 14px;">Refresh Stats</span>
+        <span class="hits-toggle" onclick="toggleNflBackfillForm()" style="padding:6px 14px;">Manual Backfill (Passing)</span>
       </div>
-      <div id="nfl-refresh-status" class="settings-hint"></div>
+      <div id="nfl-points-refresh-status" class="settings-hint"></div>
 
       <div id="nfl-backfill-form" style="display:none; background:var(--card); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:14px; margin-bottom:16px;">
         <div class="settings-hint" style="margin-bottom:10px;">
-          For weeks the automated sync can't get real per-game data for (see notes above) - look up a QB's actual stats for one game on any public source (ESPN, Pro Football Reference, NFL.com) and add it here. Add as many rows as you like, then submit them all at once.
+          For weeks the automated sync can't get real per-game passing data for - look up a QB's actual stats for one game on any public source (ESPN, Pro Football Reference, NFL.com) and add it here. Add as many rows as you like, then submit them all at once.
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-bottom:10px;">
           <div><label style="font-size:0.75rem; color:var(--muted); display:block;">GSIS ID</label>
@@ -255,42 +253,6 @@
         </div>
         <div id="nfl-backfill-status" class="settings-hint" style="margin-top:8px;"></div>
       </div>
-
-      <div id="nfl-content">Loading...</div>
-    </div>
-
-    <div id="subtab-content-nfl-rushing" style="display:none;">
-      <div class="sub">NFL Rushing Yards - current week's real matchups, every qualifying RB's own season-to-date average (no opponent adjustment - a committee backfield shows multiple rows).</div>
-      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-        <div>
-          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
-          <input id="nfl-rushing-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
-        </div>
-        <div>
-          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
-          <input id="nfl-rushing-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
-        </div>
-        <span class="hits-toggle" onclick="refreshNflRushingStats()" style="padding:6px 14px;">Refresh Stats</span>
-      </div>
-      <div id="nfl-rushing-refresh-status" class="settings-hint"></div>
-
-      <div id="nfl-rushing-content">Loading...</div>
-    </div>
-
-    <div id="subtab-content-nfl-points" style="display:none;">
-      <div class="sub">NFL Team Points - current week's real matchups, each team's predicted points scored, plus the combined game total.</div>
-      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-        <div>
-          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Season</label>
-          <input id="nfl-points-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
-        </div>
-        <div>
-          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
-          <input id="nfl-points-week-input" type="number" step="1" min="1" max="18" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
-        </div>
-        <span class="hits-toggle" onclick="refreshNflPointsStats()" style="padding:6px 14px;">Refresh Stats</span>
-      </div>
-      <div id="nfl-points-refresh-status" class="settings-hint"></div>
 
       <div id="nfl-points-content">Loading...</div>
     </div>
@@ -2416,7 +2378,7 @@
     } else if (tab === "npb") {
       loadNpbTab();
     } else if (tab === "nfl") {
-      loadNflTab();
+      loadNflPointsTab();
     } else if (tab === "cfb") {
       loadCfbTab();
     } else if (tab === "nhl") {
@@ -2443,17 +2405,10 @@
   }
 
   function switchNflSubTab(subtab) {
-    document.getElementById("subtab-content-nfl-passing").style.display = subtab === "passing" ? "block" : "none";
-    document.getElementById("subtab-content-nfl-rushing").style.display = subtab === "rushing" ? "block" : "none";
     document.getElementById("subtab-content-nfl-points").style.display = subtab === "points" ? "block" : "none";
     document.getElementById("subtab-content-nfl-byposition").style.display = subtab === "byposition" ? "block" : "none";
-    document.getElementById("subtab-btn-nfl-passing").classList.toggle("active", subtab === "passing");
-    document.getElementById("subtab-btn-nfl-rushing").classList.toggle("active", subtab === "rushing");
     document.getElementById("subtab-btn-nfl-points").classList.toggle("active", subtab === "points");
     document.getElementById("subtab-btn-nfl-byposition").classList.toggle("active", subtab === "byposition");
-    if (subtab === "rushing") {
-      loadNflRushingTab();
-    }
     if (subtab === "points") {
       loadNflPointsTab();
     }
@@ -3209,7 +3164,7 @@
   function updateNflThreshold(team, value) {
     const state = getNflBetState(team);
     state.threshold = Math.max(1, parseInt(value, 10) || 250);
-    renderNflFromCache();
+    renderNflPointsFromCache();
   }
 
   function updateNflBetField(team, field, value) {
@@ -3221,7 +3176,7 @@
     } else {
       state[field] = value;
     }
-    renderNflFromCache();
+    renderNflPointsFromCache();
   }
 
   async function toggleNflTrack(team, checked, qbName, line, modelProb, marketPct, wager, profit) {
@@ -3253,90 +3208,65 @@
       state.tracked = false;
       state.trackedId = null;
     }
-    renderNflFromCache();
+    renderNflPointsFromCache();
   }
 
   let nflDataCache = null;
 
-  async function loadNflTab() {
-    const container = document.getElementById("nfl-content");
-    container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+  // Fetch-only - no DOM container of its own anymore (Passing Yards moved
+  // inside each Team Points game card, see nflPassingSectionHtml below).
+  // Called from loadNflPointsTab()/refreshNflPointsStats() alongside
+  // Team Points and Rushing Yards.
+  async function fetchNflPassingData() {
     try {
       const res = await fetch(`${API_BASE}/api/nfl/games`);
       nflDataCache = await res.json();
-      if (nflDataCache.season != null) document.getElementById("nfl-season-input").value = nflDataCache.season;
-      if (nflDataCache.week != null) document.getElementById("nfl-week-input").value = nflDataCache.week;
-      renderNflFromCache();
     } catch (e) {
-      container.innerHTML = `<div class="settings-hint">Couldn't load NFL data.</div>`;
+      nflDataCache = null;
     }
   }
 
-  async function refreshNflStats() {
-    const season = document.getElementById("nfl-season-input").value;
-    const week = document.getElementById("nfl-week-input").value;
-    if (!season || !week) {
-      document.getElementById("nfl-refresh-status").textContent = "Enter both a season and a week first.";
-      return;
+  // One team's Passing Yards O/U box - same hits-batter grid look as
+  // nflTeamBlockHtml's Team Points row, just this prop's own Normal
+  // distribution/state (unchanged from the old standalone tab).
+  function nflPassingBlockHtml(g) {
+    if (!g) {
+      return `<div class="settings-hint">No Passing Yards data for this team yet.</div>`;
     }
-    const statusEl = document.getElementById("nfl-refresh-status");
-    statusEl.textContent = `Refreshing NFL stats for ${season} week ${week} - this fetches real data and can take a little while...`;
-    try {
-      await fetch(`${API_BASE}/api/admin/refresh-nfl-stats?season=${season}&week=${week}`);
-      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
-      loadNflTab();
-    } catch (e) {
-      statusEl.textContent = "Refresh failed - check the season/week and try again.";
-    }
-  }
-
-  function renderNflFromCache() {
-    const container = document.getElementById("nfl-content");
-    if (!nflDataCache) return;
-    const games = nflDataCache.games || [];
-    if (!games.length) {
-      container.innerHTML = `<div class="settings-hint">No NFL data yet - enter a season/week above and click Refresh Stats.</div>`;
-      return;
-    }
-
-    const header = `
-      <div class="nfl-row nfl-row-header">
-        <span>QB (most recent starter)</span><span>Team</span><span>Opponent</span><span>Mean</span><span>Index</span>
-        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
-        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-      </div>`;
-
-    const rows = games.map(g => {
-      if (g.predicted_mean == null) {
-        return `
-          <div class="nfl-row">
-            <span>${g.qb_name || "Not enough data"}</span><span>${g.team}</span><span>${g.opponent}</span>
-            <span>—</span><span>—</span><span>—</span><span>N/A</span><span>N/A</span><span></span><span></span><span></span><span></span><span></span><span></span>
-          </div>`;
-      }
-      const state = getNflBetState(g.team);
-      const line = state.threshold;
-      const yesPct = probNflOverAtLeast(g.predicted_mean, line) * 100;
-      const noPct = 100 - yesPct;
-      const modelPct = state.yn === "yes" ? yesPct : noPct;
-      const modelProb = modelPct != null ? modelPct / 100 : null;
-      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-      const profit = profitIfWon(wager, state.market);
-      const marketVal = state.market != null ? state.market : "";
-      const wagerHtml = state.useKelly
-        ? `<span>$${wager.toFixed(2)}</span>`
-        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflBetField('${g.team}','manualWager',this.value)" />`;
-      const trackArgs = `'${g.team}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
-      const qbIndexStr = g.qb_index != null ? g.qb_index.toFixed(2) : "—";
-      const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
-
+    if (g.predicted_mean == null) {
       return `
-        <div class="nfl-row">
-          <span>${g.qb_name || "TBD"}</span>
-          <span>${g.team}</span>
-          <span>${g.opponent}</span>
-          <span>${g.predicted_mean.toFixed(1)}</span>
-          <span>${qbIndexStr} vs ${oppIndexStr}</span>
+        <div>
+          <div class="teams"><span>${g.qb_name || g.team} <span class="meta" style="margin-bottom:0;">(${g.team})</span></span></div>
+          <div class="settings-hint">Not enough data yet</div>
+        </div>`;
+    }
+    const state = getNflBetState(g.team);
+    const line = state.threshold;
+    const yesPct = probNflOverAtLeast(g.predicted_mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflBetField('${g.team}','manualWager',this.value)" />`;
+    const trackArgs = `'${g.team}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const qbIndexStr = g.qb_index != null ? g.qb_index.toFixed(2) : "—";
+    const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
+
+    return `
+      <div>
+        <div class="teams">
+          <span>${g.qb_name || "TBD"} (${g.team})</span>
+          <span class="score">${g.predicted_mean.toFixed(1)}</span>
+        </div>
+        <div class="meta">vs ${g.opponent} · Index ${qbIndexStr} vs ${oppIndexStr}</div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <input type="number" min="1" step="10" value="${line}" style="text-align:center;" onchange="updateNflThreshold('${g.team}',this.value)" />
           <span class="prob-yes">${Math.round(yesPct)}%</span>
           <span class="prob-no">${Math.round(noPct)}%</span>
@@ -3349,10 +3279,21 @@
           ${wagerHtml}
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
           <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTrack(${trackArgs})" />
-        </div>`;
-    }).join("");
+        </div>
+      </div>`;
+  }
 
-    container.innerHTML = header + rows;
+  // Both teams' Passing Yards boxes for one game - looked up from the
+  // already-fetched nflDataCache by team name (one row per team, QB
+  // passing is a single-starter prop so no committee-backfield case
+  // here, unlike Rushing below).
+  function nflPassingSectionHtml(awayTeam, homeTeam) {
+    if (!nflDataCache || !nflDataCache.games) {
+      return `<div class="settings-hint">No Passing Yards data yet - click Refresh Stats above.</div>`;
+    }
+    const awayG = nflDataCache.games.find(g => g.team === awayTeam);
+    const homeG = nflDataCache.games.find(g => g.team === homeTeam);
+    return `${nflPassingBlockHtml(awayG)}${nflPassingBlockHtml(homeG)}`;
   }
 
   // ---- NFL Rushing Yards prop - same estimation-forced pattern as NFL
@@ -3381,7 +3322,7 @@
   function updateNflRushingThreshold(gsisId, value) {
     const state = getNflRushingBetState(gsisId);
     state.threshold = Math.max(1, parseInt(value, 10) || 50);
-    renderNflRushingFromCache();
+    renderNflPointsFromCache();
   }
 
   function updateNflRushingBetField(gsisId, field, value) {
@@ -3393,7 +3334,7 @@
     } else {
       state[field] = value;
     }
-    renderNflRushingFromCache();
+    renderNflPointsFromCache();
   }
 
   async function toggleNflRushingTrack(gsisId, checked, rbName, team, line, modelProb, marketPct, wager, profit) {
@@ -3441,81 +3382,52 @@
       state.tracked = false;
       state.trackedId = null;
     }
-    renderNflRushingFromCache();
+    renderNflPointsFromCache();
   }
 
   let nflRushingDataCache = null;
 
-  async function loadNflRushingTab() {
-    const container = document.getElementById("nfl-rushing-content");
-    container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+  // Fetch-only - no DOM container of its own anymore (Rushing Yards
+  // moved inside each Team Points game card, see nflRushingSectionHtml
+  // below). Called from loadNflPointsTab()/refreshNflPointsStats().
+  async function fetchNflRushingData() {
     try {
       const res = await fetch(`${API_BASE}/api/nfl/rushing-games`);
       nflRushingDataCache = await res.json();
-      if (nflRushingDataCache.season != null) document.getElementById("nfl-rushing-season-input").value = nflRushingDataCache.season;
-      if (nflRushingDataCache.week != null) document.getElementById("nfl-rushing-week-input").value = nflRushingDataCache.week;
-      renderNflRushingFromCache();
     } catch (e) {
-      container.innerHTML = `<div class="settings-hint">Couldn't load NFL Rushing Yards data.</div>`;
+      nflRushingDataCache = null;
     }
   }
 
-  async function refreshNflRushingStats() {
-    const season = document.getElementById("nfl-rushing-season-input").value;
-    const week = document.getElementById("nfl-rushing-week-input").value;
-    if (!season || !week) {
-      document.getElementById("nfl-rushing-refresh-status").textContent = "Enter both a season and a week first.";
-      return;
-    }
-    const statusEl = document.getElementById("nfl-rushing-refresh-status");
-    statusEl.textContent = `Refreshing NFL Rushing Yards stats for ${season} week ${week} - this fetches real data and can take a little while...`;
-    try {
-      await fetch(`${API_BASE}/api/admin/refresh-nfl-rushing-stats?season=${season}&week=${week}`);
-      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
-      loadNflRushingTab();
-    } catch (e) {
-      statusEl.textContent = "Refresh failed - check the season/week and try again.";
-    }
-  }
+  // One RB's Rushing Yards O/U box - same hits-batter grid look as
+  // nflPassingBlockHtml above (unchanged state/math from the old
+  // standalone tab).
+  function nflRushingRowHtml(r) {
+    const state = getNflRushingBetState(r.gsis_id);
+    const line = state.threshold;
+    const yesPct = probNflRushingOverAtLeast(r.predicted_mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflRushingBetField('${r.gsis_id}','manualWager',this.value)" />`;
+    const trackArgs = `'${r.gsis_id}',this.checked,'${(r.rb_name || "").replace(/'/g, "\\'")}','${r.team}',${line},${modelProb},${state.market},${wager},${profit}`;
 
-  function renderNflRushingFromCache() {
-    const container = document.getElementById("nfl-rushing-content");
-    if (!nflRushingDataCache) return;
-    const rbs = nflRushingDataCache.rbs || [];
-    if (!rbs.length) {
-      container.innerHTML = `<div class="settings-hint">No NFL Rushing Yards data yet - enter a season/week above and click Refresh Stats.</div>`;
-      return;
-    }
-
-    const header = `
-      <div class="nfl-row nfl-row-header">
-        <span>RB</span><span>Team</span><span>Opponent</span><span>Mean</span><span>Carries</span>
-        <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span>
-        <span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-      </div>`;
-
-    const rows = rbs.map(r => {
-      const state = getNflRushingBetState(r.gsis_id);
-      const line = state.threshold;
-      const yesPct = probNflRushingOverAtLeast(r.predicted_mean, line) * 100;
-      const noPct = 100 - yesPct;
-      const modelPct = state.yn === "yes" ? yesPct : noPct;
-      const modelProb = modelPct != null ? modelPct / 100 : null;
-      const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-      const profit = profitIfWon(wager, state.market);
-      const marketVal = state.market != null ? state.market : "";
-      const wagerHtml = state.useKelly
-        ? `<span>$${wager.toFixed(2)}</span>`
-        : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflRushingBetField('${r.gsis_id}','manualWager',this.value)" />`;
-      const trackArgs = `'${r.gsis_id}',this.checked,'${(r.rb_name || "").replace(/'/g, "\\'")}','${r.team}',${line},${modelProb},${state.market},${wager},${profit}`;
-
-      return `
-        <div class="nfl-row">
-          <span>${r.rb_name}</span>
-          <span>${r.team}</span>
-          <span>${r.opponent}</span>
-          <span>${r.predicted_mean != null ? r.predicted_mean.toFixed(1) : "—"}</span>
-          <span>${r.carries != null ? r.carries : "—"}</span>
+    return `
+      <div>
+        <div class="teams">
+          <span>${r.rb_name} (${r.team})</span>
+          <span class="score">${r.predicted_mean != null ? r.predicted_mean.toFixed(1) : "—"}</span>
+        </div>
+        <div class="meta">vs ${r.opponent}${r.carries != null ? ` · Carries ${r.carries}` : ""}</div>
+        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+          <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <input type="number" min="1" step="5" value="${line}" style="text-align:center;" onchange="updateNflRushingThreshold('${r.gsis_id}',this.value)" />
           <span class="prob-yes">${Math.round(yesPct)}%</span>
           <span class="prob-no">${Math.round(noPct)}%</span>
@@ -3528,10 +3440,23 @@
           ${wagerHtml}
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
           <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflRushingTrack(${trackArgs})" />
-        </div>`;
-    }).join("");
+        </div>
+      </div>`;
+  }
 
-    container.innerHTML = header + rows;
+  // Every qualifying RB for EITHER team in this game - a committee
+  // backfield shows multiple rows per team, same as the old standalone
+  // tab (no opponent adjustment in the model itself, see
+  // nfl_rushing_yards_sync.py).
+  function nflRushingSectionHtml(awayTeam, homeTeam) {
+    if (!nflRushingDataCache || !nflRushingDataCache.rbs) {
+      return `<div class="settings-hint">No Rushing Yards data yet - click Refresh Stats above.</div>`;
+    }
+    const rbs = nflRushingDataCache.rbs.filter(r => r.team === awayTeam || r.team === homeTeam);
+    if (!rbs.length) {
+      return `<div class="settings-hint">No qualifying RBs for this game yet.</div>`;
+    }
+    return rbs.map(nflRushingRowHtml).join("");
   }
 
   // ---- NFL "By Position" -> QB Defense-vs-Position props (passing
@@ -4995,12 +4920,15 @@
   const NFL_GAME_TOTAL_OVERDISPERSION = 4.4;
   const nflPointsBetState = {};
   const nflTotalBetState = {};
-  // Expand/collapse toggle at the bottom of each card, revealing the
-  // Game Lines (combined total) section - same show/hide-on-click
-  // pattern as MLB's "Show Lineup ▾" toggle (expandedLineupGames/
-  // toggleLineup above), just simpler: nothing to lazy-fetch here, both
-  // sections already live in nflPointsDataCache.
+  // Expand/collapse toggle at the bottom of each card, revealing a
+  // Game Lines / Passing Yards / Rushing Yards tab bar - same show/
+  // hide-on-click + in-card-tabs pattern as MLB's "Show Lineup ▾"
+  // toggle (expandedLineupGames/toggleLineup/activeLineupTab above),
+  // just simpler: nothing to lazy-fetch here, all three sections'
+  // data already lives in nflPointsDataCache/nflDataCache/
+  // nflRushingDataCache by the time a card renders.
   const expandedNflLinesGames = new Set();
+  const activeNflPropTab = {}; // gameId -> "lines" | "passing" | "rushing", defaults to "lines"
 
   function toggleNflLines(gameId) {
     if (expandedNflLinesGames.has(gameId)) {
@@ -5008,6 +4936,11 @@
     } else {
       expandedNflLinesGames.add(gameId);
     }
+    renderNflPointsFromCache();
+  }
+
+  function switchNflPropTab(gameId, tab) {
+    activeNflPropTab[gameId] = tab;
     renderNflPointsFromCache();
   }
 
@@ -5147,6 +5080,11 @@
 
   let nflPointsDataCache = null;
 
+  // Loads Team Points plus the two props now living inside each card
+  // (Passing Yards, Rushing Yards) together, since all three render
+  // into the same game boxes. Passing/Rushing fetch in parallel with
+  // Team Points - a failure in either just leaves that section showing
+  // "No data yet" inside the card rather than blocking the page.
   async function loadNflPointsTab() {
     const container = document.getElementById("nfl-points-content");
     container.innerHTML = `<div class="settings-hint">Loading...</div>`;
@@ -5155,12 +5093,18 @@
       nflPointsDataCache = await res.json();
       if (nflPointsDataCache.season != null) document.getElementById("nfl-points-season-input").value = nflPointsDataCache.season;
       if (nflPointsDataCache.week != null) document.getElementById("nfl-points-week-input").value = nflPointsDataCache.week;
+      await Promise.all([fetchNflPassingData(), fetchNflRushingData()]);
       renderNflPointsFromCache();
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load NFL Team Points data.</div>`;
     }
   }
 
+  // One "Refresh Stats" click now refreshes all three NFL props that
+  // share this tab's season/week (Team Points, Passing Yards, Rushing
+  // Yards) - they used to have their own separate season/week pickers
+  // on three different sub-tabs, but now that Passing/Rushing render
+  // inside the Team Points game boxes, one picker drives all three.
   async function refreshNflPointsStats() {
     const season = document.getElementById("nfl-points-season-input").value;
     const week = document.getElementById("nfl-points-week-input").value;
@@ -5169,9 +5113,13 @@
       return;
     }
     const statusEl = document.getElementById("nfl-points-refresh-status");
-    statusEl.textContent = `Refreshing NFL Team Points stats for ${season} week ${week} - this fetches real data and can take a little while...`;
+    statusEl.textContent = `Refreshing NFL Team Points, Passing Yards and Rushing Yards for ${season} week ${week} - this fetches real data and can take a little while...`;
     try {
-      await fetch(`${API_BASE}/api/admin/refresh-nfl-points-stats?season=${season}&week=${week}`);
+      await Promise.all([
+        fetch(`${API_BASE}/api/admin/refresh-nfl-points-stats?season=${season}&week=${week}`),
+        fetch(`${API_BASE}/api/admin/refresh-nfl-stats?season=${season}&week=${week}`),
+        fetch(`${API_BASE}/api/admin/refresh-nfl-rushing-stats?season=${season}&week=${week}`),
+      ]);
       statusEl.textContent = `Refreshed for ${season} week ${week}.`;
       loadNflPointsTab();
     } catch (e) {
@@ -5305,14 +5253,32 @@
   function nflPointsCardHtml(gameId, pair, season, week) {
     const gameday = (pair.home && pair.home.gameday) || (pair.away && pair.away.gameday) || null;
     const expanded = expandedNflLinesGames.has(gameId);
+    const tab = activeNflPropTab[gameId] || "lines";
+    const awayTeam = pair.away ? pair.away.team : null;
+    const homeTeam = pair.home ? pair.home.team : null;
+    let tabContentHtml = "";
+    if (tab === "lines") {
+      tabContentHtml = nflTotalRowHtml(gameId, pair.home, pair.away);
+    } else if (tab === "passing") {
+      tabContentHtml = nflPassingSectionHtml(awayTeam, homeTeam);
+    } else if (tab === "rushing") {
+      tabContentHtml = nflRushingSectionHtml(awayTeam, homeTeam);
+    }
+    const expandedHtml = expanded ? `
+          <div class="lineup-tabs">
+            <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','lines')">Game Lines</span>
+            <span class="lineup-tab ${tab === "passing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','passing')">Passing Yards</span>
+            <span class="lineup-tab ${tab === "rushing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','rushing')">Rushing Yards</span>
+          </div>
+          <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${formatGamedayOnly(gameday)}</div>
         ${nflTeamBlockHtml(pair.away, false)}
         ${nflTeamBlockHtml(pair.home, true)}
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
-          <span class="hits-toggle" onclick="toggleNflLines('${gameId}')">${expanded ? "Hide Game Lines ▴" : "Show Game Lines ▾"}</span>
-          ${expanded ? `<div style="margin-top:10px;">${nflTotalRowHtml(gameId, pair.home, pair.away)}</div>` : ""}
+          <span class="hits-toggle" onclick="toggleNflLines('${gameId}')">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
+          ${expandedHtml}
         </div>
       </div>`;
   }
@@ -5411,7 +5377,7 @@
       statusEl.textContent = "Add at least one row first.";
       return;
     }
-    const season = parseInt(document.getElementById("nfl-season-input").value, 10);
+    const season = parseInt(document.getElementById("nfl-points-season-input").value, 10);
     statusEl.textContent = "Submitting...";
     try {
       const res = await fetch(`${API_BASE}/api/admin/nfl-manual-backfill`, {
@@ -5426,7 +5392,7 @@
       if (!failed.length) {
         nflBackfillBatch = [];
         renderNflBackfillBatch();
-        loadNflTab();
+        loadNflPointsTab();
       }
     } catch (e) {
       statusEl.textContent = "Submit failed - check the values and try again.";
