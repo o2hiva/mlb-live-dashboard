@@ -4995,10 +4995,19 @@
   const NFL_GAME_TOTAL_OVERDISPERSION = 4.4;
   const nflPointsBetState = {};
   const nflTotalBetState = {};
-  const activeNflPointsTab = {}; // gameId -> "points" | "total", defaults to "points"
+  // Expand/collapse toggle at the bottom of each card, revealing the
+  // Game Lines (combined total) section - same show/hide-on-click
+  // pattern as MLB's "Show Lineup ▾" toggle (expandedLineupGames/
+  // toggleLineup above), just simpler: nothing to lazy-fetch here, both
+  // sections already live in nflPointsDataCache.
+  const expandedNflLinesGames = new Set();
 
-  function switchNflPointsTab(gameId, tab) {
-    activeNflPointsTab[gameId] = tab;
+  function toggleNflLines(gameId) {
+    if (expandedNflLinesGames.has(gameId)) {
+      expandedNflLinesGames.delete(gameId);
+    } else {
+      expandedNflLinesGames.add(gameId);
+    }
     renderNflPointsFromCache();
   }
 
@@ -5288,24 +5297,23 @@
   }
 
   // One box per game, same MLB-style .grid/.card layout the CFB tab
-  // uses, with Team Points / Total Points as an in-card tab switch -
-  // same .lineup-tabs/.lineup-tab look as the MLB card's Hits/HRR/etc
-  // tabs, just switching between two already-fetched sections instead
-  // of lazy-loading each one.
+  // uses: the two team boxes always shown, then a "Show Game Lines ▾"
+  // toggle at the BOTTOM of the card - same expand-on-click pattern as
+  // MLB's "Show Lineup ▾" (toggleLineup/expandedLineupGames above).
+  // Expanding reveals the combined Game Lines section, which is the
+  // Total Points O/U bet (nflTotalRowHtml) under its MLB-style name.
   function nflPointsCardHtml(gameId, pair, season, week) {
     const gameday = (pair.home && pair.home.gameday) || (pair.away && pair.away.gameday) || null;
-    const tab = activeNflPointsTab[gameId] || "points";
-    const tabContent = tab === "total"
-      ? nflTotalRowHtml(gameId, pair.home, pair.away)
-      : `${nflTeamBlockHtml(pair.away, false)}${nflTeamBlockHtml(pair.home, true)}`;
+    const expanded = expandedNflLinesGames.has(gameId);
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${formatGamedayOnly(gameday)}</div>
-        <div class="lineup-tabs">
-          <span class="lineup-tab ${tab === "points" ? "active" : ""}" onclick="switchNflPointsTab('${gameId}','points')">Team Points</span>
-          <span class="lineup-tab ${tab === "total" ? "active" : ""}" onclick="switchNflPointsTab('${gameId}','total')">Total Points</span>
+        ${nflTeamBlockHtml(pair.away, false)}
+        ${nflTeamBlockHtml(pair.home, true)}
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+          <span class="hits-toggle" onclick="toggleNflLines('${gameId}')">${expanded ? "Hide Game Lines ▴" : "Show Game Lines ▾"}</span>
+          ${expanded ? `<div style="margin-top:10px;">${nflTotalRowHtml(gameId, pair.home, pair.away)}</div>` : ""}
         </div>
-        ${tabContent}
       </div>`;
   }
 
