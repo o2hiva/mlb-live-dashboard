@@ -80,6 +80,7 @@ _ensure_column("nfl_qb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_rb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_points_games", "gameday", "VARCHAR")
 _ensure_column("cfb_games", "start_date_utc", "VARCHAR")
+_ensure_column("cfb_games", "neutral_site", "BOOLEAN DEFAULT FALSE")
 _ensure_column("nfl_rb_defense_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
@@ -1177,10 +1178,20 @@ def manual_refresh_cfb_stats(season: int, week: int):
 @app.get("/api/cfb/games")
 def cfb_games(db: Session = Depends(get_db)):
     """
-    Every team's real current-week matchup and predicted points, from
-    whatever the last /api/admin/refresh-cfb-stats call populated.
-    Unlike NFL, this is exact (not an estimation) - CFBD's real
-    per-game final scores feed the history directly.
+    Every team's real current-week matchup, predicted points, and
+    moneyline win probability, from whatever the last
+    /api/admin/refresh-cfb-stats call populated. Unlike NFL, this is
+    exact (not an estimation) - CFBD's real per-game final scores feed
+    the history directly.
+
+    Moneyline (home_win_prob/away_win_prob via moneyline_win_prob below,
+    see cfb_points_sync.compute_cfb_moneyline) is computed ONCE PER GAME
+    (needs both sides' predictions together), not once per team-row, so
+    games are grouped by game_id first. "moneyline_trusted": false means
+    "no pick yet" - either side lacked enough history
+    (MIN_PRIOR_GAMES) - and moneyline_win_prob is None in that case,
+    NEVER 0%. The frontend must render that as "no pick yet", not 0%
+    and not crash on the null.
     """
     from models_db import CfbGame
     import cfb_points_sync
@@ -1191,9 +1202,26 @@ def cfb_games(db: Session = Depends(get_db)):
 
     league_avg = cfb_points_sync.get_league_avg_points(db)
 
+    by_game: dict = {}
+    for g in games:
+        by_game.setdefault(g.game_id, {})["home" if g.is_home else "away"] = g
+
+    moneyline_by_game: dict = {}
+    for game_id, pair in by_game.items():
+        home_g, away_g = pair.get("home"), pair.get("away")
+        if home_g and away_g:
+            moneyline_by_game[game_id] = cfb_points_sync.compute_cfb_moneyline(
+                home_g.team, away_g.team, db, league_avg=league_avg,
+                neutral_site=bool(home_g.neutral_site),
+            )
+        else:
+            moneyline_by_game[game_id] = {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
     rows = []
     for g in games:
         inputs = cfb_points_sync.compute_cfb_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
+        ml = moneyline_by_game.get(g.game_id, {"home_win_probability": None, "away_win_probability": None, "trusted": False})
+        own_win_prob = ml["home_win_probability"] if g.is_home else ml["away_win_probability"]
         rows.append({
             "team": g.team,
             "opponent": g.opponent,
@@ -1205,6 +1233,8 @@ def cfb_games(db: Session = Depends(get_db)):
             "opp_index": inputs["opp_index"] if inputs else None,
             "team_games_sample": inputs["team_games_sample"] if inputs else None,
             "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+            "moneyline_win_prob": own_win_prob,
+            "moneyline_trusted": ml["trusted"],
         })
 
     return {"games": rows, "season": games[0].season, "week": games[0].week}

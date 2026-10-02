@@ -57,6 +57,15 @@ DATA SOURCES, one per bet_type:
     reused across every bet sharing it - same pattern as the boxscore
     cache above.
 
+  - "cfb_moneyline_home" / "cfb_moneyline_away": which side (home/away,
+    stored in team_side) actually won the game, fetched fresh from CFBD
+    for the bet's own recorded season/week - same cache/lookup-by-
+    game-id as "cfb_team_points" above (batter_id holds CFBD's own
+    numeric game id). A tie gives 0.0 to both sides (no push, same
+    convention as every other moneyline bet_type here, e.g.
+    "f5_moneyline_home"/"away"). None (still pending) until CFBD marks
+    that game "completed".
+
   - "nfl_passing_yards": NOT gradeable by this module. The only real
     per-game data available for the third-party NFL API is season-
     cumulative totals (see nfl_passing_yards_sync.py's docstring for
@@ -156,6 +165,7 @@ log = logging.getLogger("bet_grading")
 # nfldata.org's own game_type+scores check, or - for NFL Passing Yards -
 # the permanent "not gradeable" case).
 NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
+                          "cfb_moneyline_home", "cfb_moneyline_away",
                           "nfl_team_points", "nfl_game_total",
                           "nfl_qb_dvp_passing_yards", "nfl_qb_dvp_passing_tds",
                           "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds",
@@ -308,6 +318,40 @@ def _cfb_game_total_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | No
     return None
 
 
+def _cfb_moneyline_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | None:
+    """Real moneyline outcome (1.0/0.0) for this CFB Moneyline bet's side
+    ("home"/"away"), fetched fresh from CFBD for the bet's own recorded
+    season/week - same cache and lookup-by-game-id as
+    _cfb_team_points_actual. A tie gives 0.0 to both sides (no push -
+    same convention as every other bet_type here, e.g.
+    _f5_moneyline_actual)."""
+    if bet.cfb_season is None or bet.cfb_week is None or bet.batter_id is None or not bet.team_side:
+        return None
+    cache_key = (bet.cfb_season, bet.cfb_week)
+    if cache_key not in cfb_games_cache:
+        try:
+            cfb_games_cache[cache_key] = cfb_points_sync.get_week_games(bet.cfb_season, bet.cfb_week)
+        except Exception:
+            log.exception("Failed to fetch CFB week %s/%s games for grading", bet.cfb_season, bet.cfb_week)
+            cfb_games_cache[cache_key] = None
+    games = cfb_games_cache[cache_key]
+    if games is None:
+        return None
+    for game in games:
+        if game.get("id") == bet.batter_id:
+            if not game.get("completed"):
+                return None
+            home_pts, away_pts = game.get("homePoints"), game.get("awayPoints")
+            if home_pts is None or away_pts is None:
+                return None
+            if bet.team_side == "home":
+                return 1.0 if home_pts > away_pts else 0.0
+            if bet.team_side == "away":
+                return 1.0 if away_pts > home_pts else 0.0
+            return None
+    return None
+
+
 def _nfl_week_games(bet_season: int, bet_week: int, nfl_games_cache: dict) -> list | None:
     """Shared fetch+cache helper for both NFL Team Points and NFL Game
     Total grading - keyed the same way as CFB's cache, just against
@@ -428,6 +472,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
 
     if bet.bet_type == "cfb_game_total":
         return _cfb_game_total_actual(bet, cfb_games_cache)
+
+    if bet.bet_type.startswith("cfb_moneyline_"):
+        return _cfb_moneyline_actual(bet, cfb_games_cache)
 
     if bet.bet_type == "nfl_passing_yards":
         # No working per-game data source exists for this - see module

@@ -660,6 +660,7 @@ class CfbGame(Base):
     season = Column(Integer)
     week = Column(Integer)
     start_date_utc = Column(String, nullable=True)  # ISO8601 UTC kickoff, once CFBD's real field name is confirmed live - see cfb_points_sync.py
+    neutral_site = Column(Boolean, default=False)  # CFBD's real "neutralSite" field - moneyline's win-probability model zeroes out home-field advantage for these (see cfb_points_sync.win_probability)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

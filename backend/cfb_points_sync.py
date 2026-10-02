@@ -36,6 +36,7 @@ cheap (at most ~15 API calls for a full season) - no incremental/
 snapshot state to keep in sync.
 """
 import logging
+import math
 import os
 from datetime import datetime, timedelta
 
@@ -58,6 +59,17 @@ DEFAULT_TEAM_OVERDISPERSION = 5.2         # validated: sd_z = 0.994 on 1080 real
 # Validated empirical value from ncaa_points_total_progress_2025.json's
 # league_points_pool: 1522 real 2025 FBS-vs-FBS team-games, sum/len = 26.239159900131406
 LEAGUE_AVG_POINTS_STATIC = 26.24
+
+# Moneyline win-probability layer (ported from core_ncaa_moneyline.py,
+# validated out-of-sample: Brier=0.1886, log loss=0.5542, both clearly
+# beating the naive "always 50%" baseline of 0.25/0.693 - see
+# compute_cfb_moneyline's docstring for the small, accepted, documented
+# residual calibration bias noted in that script). Same
+# DEFAULT_TEAM_OVERDISPERSION=5.2 constant above doubles as this layer's
+# variance term, exactly as the source script uses its own matching
+# TEAM_OVERDISPERSION=5.2.
+HOME_FIELD_POINTS = 5.0
+VARIANCE_SCALE = 1.0
 
 CACHE_TTL = timedelta(hours=6)
 _league_avg_cache = {"value": None, "computed_at": None}
@@ -255,10 +267,16 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 # API, this one DOES carry a real kickoff time, so CFB Team
                 # Points can show/order by actual time, not just date.
                 start_date_utc = game.get("startDate")
+                # CFBD's real "neutralSite" boolean - a neutral-site game gets
+                # no home-field-advantage bump in the moneyline model below
+                # (see win_probability's effective_hfa).
+                neutral_site = bool(game.get("neutralSite"))
                 db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
-                                season=season, week=current_week, start_date_utc=start_date_utc))
+                                season=season, week=current_week, start_date_utc=start_date_utc,
+                                neutral_site=neutral_site))
                 db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
-                                season=season, week=current_week, start_date_utc=start_date_utc))
+                                season=season, week=current_week, start_date_utc=start_date_utc,
+                                neutral_site=neutral_site))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written
@@ -305,4 +323,68 @@ def compute_cfb_team_points_prediction(team: str, opponent: str, db, league_avg:
         "team_games_sample": team_row.games,
         "opp_games_sample": opp_row.games,
         "league_avg_points": league_avg,
+    }
+
+
+def _normal_cdf(x: float, mean: float, sigma: float) -> float:
+    """Pure-stdlib Normal CDF via math.erf - this dashboard avoids scipy/
+    numpy/pandas entirely (every validated-model module here uses only
+    math.lgamma/math.erf etc.), so core_ncaa_moneyline.py's
+    scipy.stats.norm.sf(...) call is ported to this instead of adding a
+    new dependency to the Railway deploy."""
+    if sigma <= 0:
+        return 1.0 if x < mean else 0.0
+    z = (x - mean) / (sigma * math.sqrt(2))
+    return 0.5 * (1.0 + math.erf(z))
+
+
+def win_probability(home_predicted: float | None, away_predicted: float | None, neutral_site: bool = False,
+                     home_field_points: float = HOME_FIELD_POINTS, variance_scale: float = VARIANCE_SCALE) -> float | None:
+    """P(home team wins), ported verbatim (formula-wise) from
+    core_ncaa_moneyline.py's win_probability - a Normal approximation to
+    the scoring-differential distribution, built on top of each side's
+    already-validated predicted points (compute_cfb_team_points_prediction's
+    "mean"). Returns None (never 0%/100%) if either side's predicted
+    points is missing or non-positive, same "can't trust this one" signal
+    the source script calls `trusted`."""
+    if home_predicted is None or away_predicted is None or home_predicted <= 0 or away_predicted <= 0:
+        return None
+    effective_hfa = 0.0 if neutral_site else home_field_points
+    predicted_diff = (home_predicted - away_predicted) + effective_hfa
+    variance_diff = variance_scale * (DEFAULT_TEAM_OVERDISPERSION * home_predicted + DEFAULT_TEAM_OVERDISPERSION * away_predicted)
+    sigma = math.sqrt(variance_diff) if variance_diff > 0 else 1.0
+    # P(home wins) = P(diff > 0) = 1 - CDF(0) = norm.sf(0, loc=predicted_diff, scale=sigma)
+    return 1.0 - _normal_cdf(0.0, predicted_diff, sigma)
+
+
+def compute_cfb_moneyline(home_team: str, away_team: str, db, league_avg: float | None = None,
+                           neutral_site: bool = False) -> dict:
+    """Returns {"home_win_probability":, "away_win_probability":, "trusted":}
+    for one matchup, built on top of compute_cfb_team_points_prediction's
+    already-validated per-team predicted points (same shrinkage/
+    overdispersion constants), adding the win-probability layer from
+    core_ncaa_moneyline.py.
+
+    "trusted" is False - and both probabilities are None, NEVER 0% - when
+    either side doesn't have MIN_PRIOR_GAMES of its own history yet
+    (compute_cfb_team_points_prediction already returns None in that
+    case). This is the exact contract the source script calls
+    `trusted: False` / `home_win_probability: null` - the frontend must
+    render that as "no pick yet", not 0% and not a crash."""
+    if league_avg is None:
+        league_avg = get_league_avg_points(db)
+
+    home_pred = compute_cfb_team_points_prediction(home_team, away_team, db, league_avg=league_avg)
+    away_pred = compute_cfb_team_points_prediction(away_team, home_team, db, league_avg=league_avg)
+    if home_pred is None or away_pred is None:
+        return {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
+    home_prob = win_probability(home_pred["mean"], away_pred["mean"], neutral_site=neutral_site)
+    if home_prob is None:
+        return {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
+    return {
+        "home_win_probability": home_prob,
+        "away_win_probability": 1.0 - home_prob,
+        "trusted": True,
     }

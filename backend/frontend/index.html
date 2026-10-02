@@ -2511,6 +2511,7 @@
     { label: "NFL RB Anytime TD", filter: b => b.bet_type === "nfl_rb_dvp_anytime_td" },
     { label: "CFB Points", filter: b => b.bet_type === "cfb_team_points" },
     { label: "CFB Total", filter: b => b.bet_type === "cfb_game_total" },
+    { label: "CFB Moneyline", filter: b => b.bet_type.startsWith("cfb_moneyline_") },
     { label: "NFL Points", filter: b => b.bet_type === "nfl_team_points" },
     { label: "NFL Total", filter: b => b.bet_type === "nfl_game_total" },
     { label: "NHL Goalie Saves", filter: b => b.bet_type === "nhl_goalie_saves" },
@@ -4428,6 +4429,110 @@
     }
   }
 
+  // ---- CFB Moneyline - server already returns the exact win
+  // probability (cfb_points_sync.compute_cfb_moneyline, see
+  // /api/cfb/games), so there's no client-side math here, same pattern
+  // as the MLB/F5 moneyline bet rows (moneylineBetRowCellsHtml /
+  // f5MoneylineBetRowCellsHtml above). "moneyline_trusted": false means
+  // "no pick yet" - the server already returns moneyline_win_prob as
+  // null in that case (never 0%), and this code must never Math.round()
+  // a null or substitute 0% for it - see cfbMoneylineSectionHtml below. ----
+  const cfbMoneylineBetState = {};
+
+  function getCfbMoneylineBetState(gameId, side) {
+    if (!cfbMoneylineBetState[gameId]) cfbMoneylineBetState[gameId] = {};
+    if (!cfbMoneylineBetState[gameId][side]) {
+      cfbMoneylineBetState[gameId][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return cfbMoneylineBetState[gameId][side];
+  }
+
+  function updateCfbMoneylineBetField(gameId, side, field, value) {
+    const state = getCfbMoneylineBetState(gameId, side);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderCfbFromCache(); // cheap - rebuilds from already-fetched data, no network call
+  }
+
+  async function toggleCfbMoneylineTrack(gameId, side, checked, teamName, modelProb, marketPct, wager, profit) {
+    const state = getCfbMoneylineBetState(gameId, side);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "cfb_moneyline_" + side, batter_name: teamName + " ML",
+            batter_id: gameId, team_side: side, yn: "yes",
+            model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            cfb_season: cfbDataCache ? cfbDataCache.season : null,
+            cfb_week: cfbDataCache ? cfbDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderCfbFromCache();
+  }
+
+  function cfbMoneylineBetRowCellsHtml(gameId, side, teamName, winPct) {
+    const state = getCfbMoneylineBetState(gameId, side);
+    const modelProb = winPct != null ? winPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+
+    const wagerHtml = state.useKelly
+      ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbMoneylineBetField(${gameId},'${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbMoneylineBetField(${gameId},'${side}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbMoneylineBetField(${gameId},'${side}','useKelly',this.checked)" />
+      ${wagerHtml}
+      <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbMoneylineTrack(${trackArgs})" />
+    `;
+  }
+
+  // Null-safe: row.moneyline_trusted === false (or moneyline_win_prob ==
+  // null) means the model doesn't trust either side's data enough yet -
+  // rendered as "No pick yet", never 0% and never crashing on the null.
+  function cfbMoneylineSectionHtml(row, side, mlPct) {
+    if (mlPct == null) {
+      return `<div class="settings-hint" style="margin-top:8px;">Moneyline: no pick yet</div>`;
+    }
+    return `
+      <div class="hits-batter hits-batter-header" style="grid-template-columns: 1fr 44px 30px 56px 48px 40px; margin-top:10px;">
+        <span>Moneyline</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>
+      <div class="hits-batter" style="grid-template-columns: 1fr 44px 30px 56px 48px 40px;">
+        <span class="prob-yes">${mlPct}%</span>
+        ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
+      </div>`;
+  }
+
   // ---- CFB team box (one per side within a matchup card) - mirrors the
   // MLB tab's .card/.teams/.meta box look instead of NFL's flat table
   // rows, since /api/cfb/games returns one row PER TEAM PER GAME (home +
@@ -4437,14 +4542,21 @@
     const side = row.is_home ? "home" : "away";
     const sideLabel = row.is_home ? "Home" : "Away";
 
+    // Win probability next to the team name - null-safe (never 0% when
+    // moneyline_trusted is false/moneyline_win_prob is null; see
+    // cfbMoneylineSectionHtml for the "no pick yet" row below).
+    const mlPct = (row.moneyline_trusted && row.moneyline_win_prob != null) ? Math.round(row.moneyline_win_prob * 100) : null;
+    const mlNameSuffix = mlPct != null ? ` <span class="prob-yes">${mlPct}%</span>` : "";
+
     if (row.predicted_mean == null) {
       return `
         <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
           <div class="teams">
-            <span>${row.team} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
+            <span>${row.team}${mlNameSuffix} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
           </div>
           <div class="meta">vs ${row.opponent}</div>
           <div class="settings-hint">Not enough data yet</div>
+          ${cfbMoneylineSectionHtml(row, side, mlPct)}
         </div>`;
     }
 
@@ -4467,7 +4579,7 @@
     return `
       <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
         <div class="teams">
-          <span>${row.team} (${sideLabel})</span>
+          <span>${row.team}${mlNameSuffix} (${sideLabel})</span>
           <span class="score">${Math.round(row.predicted_mean)}</span>
         </div>
         <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
@@ -4488,6 +4600,7 @@
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
           <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTrack(${trackArgs})" />
         </div>
+        ${cfbMoneylineSectionHtml(row, side, mlPct)}
       </div>`;
   }
 
