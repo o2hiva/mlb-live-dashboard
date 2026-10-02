@@ -4971,12 +4971,17 @@
 
   // ---- NFL Team Points / Game Total - ported from core_nfl_points.py,
   // same log5-style index-multiplication + Negative Binomial pattern as
-  // CFB's team-points prop (cfbTeamBlockHtml/cfbTotalRowHtml above),
-  // just with NFL's own validated constants: shrinkage_k=8 (flat curve,
-  // chosen as a single round value across k=5..20), team overdispersion
-  // AND game-total overdispersion BOTH = 4.4 (landed on almost the same
-  // value here, unlike CFB's team=5.2/game=4.6 split - not assumed,
-  // that's just what the real 2023 NFL backtest showed).
+  // CFB's team-points prop (cfbTeamBlockHtml above), just with NFL's own
+  // validated constants: shrinkage_k=8 (flat curve, chosen as a single
+  // round value across k=5..20), team overdispersion AND game-total
+  // overdispersion BOTH = 4.4 (the real 2023 NFL backtest). One box per
+  // game (MLB-style .grid/.card layout), with Team Points and Total
+  // Points as an IN-CARD tab switch - same pattern as the MLB card's
+  // Hits/HRR/HR/K/P-Hits/1st 5/Game Lines lineup tabs
+  // (activeLineupTab/switchLineupTab/renderLineupSection above), just
+  // simpler: both tabs' data is already in nflPointsDataCache (no
+  // per-game lazy fetch needed), so switching tabs is a synchronous
+  // local re-render via renderNflPointsFromCache(), not a fetch.
   //
   // GRADING DIFFERENCE FROM CFB: api.nfldata.org's /v1/games has no
   // per-game numeric id (unlike CFBD), so there's nothing to store in
@@ -4990,6 +4995,12 @@
   const NFL_GAME_TOTAL_OVERDISPERSION = 4.4;
   const nflPointsBetState = {};
   const nflTotalBetState = {};
+  const activeNflPointsTab = {}; // gameId -> "points" | "total", defaults to "points"
+
+  function switchNflPointsTab(gameId, tab) {
+    activeNflPointsTab[gameId] = tab;
+    renderNflPointsFromCache();
+  }
 
   function getNflPointsBetState(team) {
     if (!nflPointsBetState[team]) {
@@ -5223,11 +5234,13 @@
 
   // ---- Combined NFL game total - same sum-of-two-predictions approach
   // as cfbTotalRowHtml, using the SEPARATE (though numerically equal
-  // here, 4.4 vs 4.4) validated game-total overdispersion. ----
+  // here, 4.4 vs 4.4) validated game-total overdispersion. Rendered as
+  // its own in-card tab (see nflPointsCardHtml) rather than stacked
+  // under the team boxes. ----
   function nflTotalRowHtml(gameId, homeRow, awayRow) {
     if (!homeRow || !awayRow || homeRow.predicted_mean == null || awayRow.predicted_mean == null) {
       return `
-        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+        <div>
           <div class="teams"><span>Total Points</span></div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
@@ -5249,9 +5262,9 @@
     const trackArgs = `'${gameId}',this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+      <div>
         <div class="teams">
-          <span>Total Points</span>
+          <span>${awayRow.team} @ ${homeRow.team} - Total Points</span>
           <span class="score">${Math.round(totalMean)}</span>
         </div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
@@ -5274,14 +5287,25 @@
       </div>`;
   }
 
+  // One box per game, same MLB-style .grid/.card layout the CFB tab
+  // uses, with Team Points / Total Points as an in-card tab switch -
+  // same .lineup-tabs/.lineup-tab look as the MLB card's Hits/HRR/etc
+  // tabs, just switching between two already-fetched sections instead
+  // of lazy-loading each one.
   function nflPointsCardHtml(gameId, pair, season, week) {
     const gameday = (pair.home && pair.home.gameday) || (pair.away && pair.away.gameday) || null;
+    const tab = activeNflPointsTab[gameId] || "points";
+    const tabContent = tab === "total"
+      ? nflTotalRowHtml(gameId, pair.home, pair.away)
+      : `${nflTeamBlockHtml(pair.away, false)}${nflTeamBlockHtml(pair.home, true)}`;
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${formatGamedayOnly(gameday)}</div>
-        ${nflTeamBlockHtml(pair.away, false)}
-        ${nflTeamBlockHtml(pair.home, true)}
-        ${nflTotalRowHtml(gameId, pair.home, pair.away)}
+        <div class="lineup-tabs">
+          <span class="lineup-tab ${tab === "points" ? "active" : ""}" onclick="switchNflPointsTab('${gameId}','points')">Team Points</span>
+          <span class="lineup-tab ${tab === "total" ? "active" : ""}" onclick="switchNflPointsTab('${gameId}','total')">Total Points</span>
+        </div>
+        ${tabContent}
       </div>`;
   }
 
