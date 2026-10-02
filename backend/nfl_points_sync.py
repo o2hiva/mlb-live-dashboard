@@ -45,6 +45,7 @@ and refetching each week's real games. Simple, always correct, cheap (at
 most ~18 weeks of API calls for a full season).
 """
 import logging
+import math
 from datetime import datetime, timedelta
 
 import requests
@@ -63,6 +64,28 @@ MIN_QUALIFYING_TEAMS_FOR_LIVE_BASELINE = 16  # half the NFL's 32 teams - see cor
 DEFAULT_POINTS_SHRINKAGE_K = 8.0          # validated via 2023 season k-sweep (flat curve - chosen as a single round value)
 DEFAULT_TEAM_OVERDISPERSION = 4.4         # validated: sd_z = 0.996 on 448 real 2023 team-games
 DEFAULT_GAME_TOTAL_OVERDISPERSION = 4.4   # validated: sd_z = 1.001 on 224 real 2023 full games
+
+# ---- NFL Moneyline (win probability) - validated params straight from
+# core_nfl_moneyline.py (the user-supplied production module), itself
+# ported from core_ncaa_moneyline.py the same way cfb_points_sync.py's
+# win_probability/compute_cfb_moneyline already are for CFB:
+#   SHRINKAGE_K=8.0, TEAM_OVERDISPERSION=4.4 (both already defined above,
+#   shared with the Team Points prop), HOME_FIELD_POINTS=3.0,
+#   VARIANCE_SCALE=1.0. Out-of-sample: Brier=0.2205, log loss=0.6289 (real
+#   2025 holdout) - a real edge over the naive 50% baseline, smaller than
+#   CFB's own (0.1886), consistent with the NFL being more parity-driven.
+#
+# UNLIKE cfb_points_sync.win_probability, this takes no neutral_site flag:
+# core_nfl_moneyline.py's own docstring documents a KNOWN GAP that
+# HOME_FIELD_POINTS is applied to EVERY game, including the ~3-5/season
+# International Series games (London, Munich, Madrid, Sao Paulo) that are
+# a true neutral site - api.nfldata.org's /v1/games response has not been
+# confirmed to expose any neutral-site field this dashboard could use to
+# suppress it the way CFBD's neutralSite flag lets the CFB side do. This
+# ports that exact (documented, accepted) limitation rather than guessing
+# at a flag that may not exist. ----
+HOME_FIELD_POINTS = 3.0       # VALIDATED - core_nfl_moneyline.py / backtest_nfl_win_probability.py --holdout (real 2025 data)
+VARIANCE_SCALE = 1.0          # VALIDATED - core_nfl_moneyline.py / backtest_nfl_win_probability.py --holdout (real 2025 data)
 
 # Validated empirical value from core_nfl_points.py: league_points_pool in
 # nfl_points_total_progress_2023.json, 544 real 2023 team-games,
@@ -240,4 +263,72 @@ def compute_nfl_team_points_prediction(team: str, opponent: str, db, league_avg:
         "team_games_sample": team_row.games,
         "opp_games_sample": opp_row.games,
         "league_avg_points": league_avg,
+    }
+
+
+def _normal_cdf(x: float, mean: float, sigma: float) -> float:
+    """Pure-stdlib Normal CDF via math.erf - same reasoning as
+    cfb_points_sync._normal_cdf: this dashboard avoids scipy/numpy/pandas
+    entirely, so core_nfl_moneyline.py's scipy.stats.norm.sf(...) call is
+    ported to this instead of adding a new dependency to the Railway
+    deploy."""
+    if sigma <= 0:
+        return 1.0 if x < mean else 0.0
+    z = (x - mean) / (sigma * math.sqrt(2))
+    return 0.5 * (1.0 + math.erf(z))
+
+
+def win_probability(home_predicted: float | None, away_predicted: float | None,
+                     home_field_points: float = HOME_FIELD_POINTS, variance_scale: float = VARIANCE_SCALE) -> float | None:
+    """P(home team wins), ported verbatim (formula-wise) from
+    core_nfl_moneyline.py's win_probability - a Normal approximation to
+    the scoring-differential distribution, built on top of each side's
+    already-validated predicted points
+    (compute_nfl_team_points_prediction's "mean"). Returns None (never
+    0%/100%) if either side's predicted points is missing or
+    non-positive, same "can't trust this one" signal the source script
+    calls `trusted`.
+
+    No neutral_site suppression, unlike cfb_points_sync.win_probability -
+    see this module's HOME_FIELD_POINTS comment above for why."""
+    if home_predicted is None or away_predicted is None or home_predicted <= 0 or away_predicted <= 0:
+        return None
+    predicted_diff = (home_predicted - away_predicted) + home_field_points
+    variance_diff = variance_scale * (DEFAULT_TEAM_OVERDISPERSION * home_predicted + DEFAULT_TEAM_OVERDISPERSION * away_predicted)
+    sigma = math.sqrt(variance_diff) if variance_diff > 0 else 1.0
+    # P(home wins) = P(diff > 0) = 1 - CDF(0) = norm.sf(0, loc=predicted_diff, scale=sigma)
+    return 1.0 - _normal_cdf(0.0, predicted_diff, sigma)
+
+
+def compute_nfl_moneyline(home_team: str, away_team: str, db, league_avg: float | None = None) -> dict:
+    """Returns {"home_win_probability":, "away_win_probability":,
+    "trusted":} for one matchup, built on top of
+    compute_nfl_team_points_prediction's already-validated per-team
+    predicted points (same shrinkage/overdispersion constants), adding
+    the win-probability layer from core_nfl_moneyline.py. Mirrors
+    cfb_points_sync.compute_cfb_moneyline's shape exactly (minus the
+    neutral_site param NFL can't confirm) for consistency across the
+    dashboard's moneyline endpoints.
+
+    "trusted" is False - and both probabilities are None, NEVER 0% - when
+    either side doesn't have MIN_PRIOR_GAMES of its own history yet
+    (compute_nfl_team_points_prediction already returns None in that
+    case). This is the exact contract the frontend must render as "no
+    pick yet", not 0% and not a crash."""
+    if league_avg is None:
+        league_avg = get_league_avg_points(db)
+
+    home_pred = compute_nfl_team_points_prediction(home_team, away_team, db, league_avg=league_avg)
+    away_pred = compute_nfl_team_points_prediction(away_team, home_team, db, league_avg=league_avg)
+    if home_pred is None or away_pred is None:
+        return {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
+    home_prob = win_probability(home_pred["mean"], away_pred["mean"])
+    if home_prob is None:
+        return {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
+    return {
+        "home_win_probability": home_prob,
+        "away_win_probability": 1.0 - home_prob,
+        "trusted": True,
     }

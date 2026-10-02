@@ -1266,6 +1266,15 @@ def nfl_points_games(db: Session = Depends(get_db)):
     synthetic sorted-team-pair string (e.g. "BUF|KC"), stable and
     identical for both sides of the same matchup either way it's
     computed, which is all the frontend's grouping-by-game_id needs.
+
+    Moneyline (home_win_prob/away_win_prob via moneyline_win_prob below,
+    see nfl_points_sync.compute_nfl_moneyline) is computed ONCE PER GAME
+    (needs both sides' predictions together), not once per team-row, so
+    rows are grouped by game_id first - same pattern as /api/cfb/games.
+    "moneyline_trusted": false means "no pick yet" - either side lacked
+    enough history (MIN_PRIOR_GAMES) - and moneyline_win_prob is None in
+    that case, NEVER 0%. The frontend must render that as "no pick yet",
+    not 0% and not crash on the null.
     """
     from models_db import NflPointsGame
     import nfl_points_sync
@@ -1276,13 +1285,30 @@ def nfl_points_games(db: Session = Depends(get_db)):
 
     league_avg = nfl_points_sync.get_league_avg_points(db)
 
+    by_game: dict = {}
+    for g in games:
+        by_game.setdefault("|".join(sorted([g.team, g.opponent])), {})["home" if g.is_home else "away"] = g
+
+    moneyline_by_game: dict = {}
+    for game_id, pair in by_game.items():
+        home_g, away_g = pair.get("home"), pair.get("away")
+        if home_g and away_g:
+            moneyline_by_game[game_id] = nfl_points_sync.compute_nfl_moneyline(
+                home_g.team, away_g.team, db, league_avg=league_avg,
+            )
+        else:
+            moneyline_by_game[game_id] = {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+
     rows = []
     for g in games:
+        game_id = "|".join(sorted([g.team, g.opponent]))
         inputs = nfl_points_sync.compute_nfl_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
+        ml = moneyline_by_game.get(game_id, {"home_win_probability": None, "away_win_probability": None, "trusted": False})
+        own_win_prob = ml["home_win_probability"] if g.is_home else ml["away_win_probability"]
         rows.append({
             "team": g.team,
             "opponent": g.opponent,
-            "game_id": "|".join(sorted([g.team, g.opponent])),
+            "game_id": game_id,
             "is_home": g.is_home,
             "gameday": g.gameday,
             "predicted_mean": inputs["mean"] if inputs else None,
@@ -1290,6 +1316,8 @@ def nfl_points_games(db: Session = Depends(get_db)):
             "opp_index": inputs["opp_index"] if inputs else None,
             "team_games_sample": inputs["team_games_sample"] if inputs else None,
             "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
+            "moneyline_win_prob": own_win_prob,
+            "moneyline_trusted": ml["trusted"],
         })
 
     return {"games": rows, "season": games[0].season, "week": games[0].week}

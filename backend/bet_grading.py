@@ -110,6 +110,18 @@ DATA SOURCES, one per bet_type:
     identifying the whole game - both real final scores are summed
     once that exact away/home pair is found completed.
 
+  - "nfl_moneyline": same fetch/cache as nfl_team_points (team_side
+    holds the bet's own team NAME, matched against that week's real
+    schedule the same way, since api.nfldata.org has no numeric game id
+    to key off of the way CFBD's cfb_moneyline_home/away can). Unlike
+    CFB, this is a SINGLE bet_type rather than a home/away split - the
+    team name alone is enough to find the right game and side. Actual is
+    1.0 if that team's real final score beat the opponent's, 0.0
+    otherwise - a tie (possible in the NFL, unlike CFB) gives 0.0, same
+    no-push convention as every other moneyline bet_type here. None
+    (still pending) until that game shows both scores and
+    game_type == "REG".
+
   - "nhl_goalie_saves": NOT gradeable by this module. The NHL Goalie
     Saves prop's own presumed-starter pick (see
     nhl_goalie_saves_sync.py's docstring) means the goalie who actually
@@ -166,7 +178,7 @@ log = logging.getLogger("bet_grading")
 # the permanent "not gradeable" case).
 NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
                           "cfb_moneyline_home", "cfb_moneyline_away",
-                          "nfl_team_points", "nfl_game_total",
+                          "nfl_team_points", "nfl_game_total", "nfl_moneyline",
                           "nfl_qb_dvp_passing_yards", "nfl_qb_dvp_passing_tds",
                           "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds",
                           "nfl_rb_dvp_rushing_yards", "nfl_rb_dvp_rushing_tds",
@@ -410,6 +422,30 @@ def _nfl_game_total_actual(bet: TrackedBet, nfl_games_cache: dict) -> float | No
     return None
 
 
+def _nfl_moneyline_actual(bet: TrackedBet, nfl_games_cache: dict) -> float | None:
+    """Real moneyline outcome (1.0/0.0) for this NFL Moneyline bet's
+    team, fetched fresh from api.nfldata.org for the bet's own recorded
+    season/week - same cache/fetch and team-name matching as
+    _nfl_team_points_actual (team_side holds the team's own NAME, since
+    there's no numeric game id to match by the way CFB's
+    cfb_moneyline_home/away can). A tie gives 0.0 (no push - same
+    convention as every other moneyline bet_type here, e.g.
+    _cfb_moneyline_actual)."""
+    if bet.nfl_season is None or bet.nfl_week is None or not bet.team_side:
+        return None
+    games = _nfl_week_games(bet.nfl_season, bet.nfl_week, nfl_games_cache)
+    if games is None:
+        return None
+    for game in games:
+        if not nfl_points_sync.is_completed_reg(game):
+            continue
+        if game.get("home_team") == bet.team_side:
+            return 1.0 if game["home_score"] > game["away_score"] else 0.0
+        if game.get("away_team") == bet.team_side:
+            return 1.0 if game["away_score"] > game["home_score"] else 0.0
+    return None
+
+
 def _npb_yrfi_actual(db, bet: TrackedBet) -> float | None:
     """Real 1st-inning-scored outcome for this NPB YRFI bet, read
     directly from our own already-collected NpbGame row - no live NPB
@@ -503,6 +539,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
 
     if bet.bet_type == "nfl_game_total":
         return _nfl_game_total_actual(bet, nfl_games_cache)
+
+    if bet.bet_type == "nfl_moneyline":
+        return _nfl_moneyline_actual(bet, nfl_games_cache)
 
     # Self-heal: a bug (now fixed) in the Pitcher K tracking UI never
     # sent the pitcher's id, only their name - any bet caught by that

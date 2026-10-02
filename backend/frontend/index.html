@@ -5131,16 +5131,129 @@
   // structure to cfbTeamBlockHtml above, just NFL's own overdispersion
   // and bet-tracking wiring (team name in team_side, no home/away side
   // needed for grading - see module comment above). ----
+  // ---- NFL Moneyline - server already returns the exact win
+  // probability (nfl_points_sync.compute_nfl_moneyline, see
+  // /api/nfl/points-games), same pattern as CFB's moneyline bet row
+  // (cfbMoneylineBetRowCellsHtml above) - no client-side math here.
+  // "moneyline_trusted": false means "no pick yet" - the server already
+  // returns moneyline_win_prob as null in that case (never 0%), and this
+  // code must never Math.round() a null or substitute 0% for it - see
+  // nflTeamBlockHtml below. gameId is NFL's synthetic sorted-team-pair
+  // STRING (e.g. "BUF|KC", unlike CFB's numeric CFBD id), so every place
+  // that embeds it in a JS call keeps it quoted. ----
+  const nflMoneylineBetState = {};
+
+  function getNflMoneylineBetState(gameId, side) {
+    if (!nflMoneylineBetState[gameId]) nflMoneylineBetState[gameId] = {};
+    if (!nflMoneylineBetState[gameId][side]) {
+      nflMoneylineBetState[gameId][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return nflMoneylineBetState[gameId][side];
+  }
+
+  function updateNflMoneylineBetField(gameId, side, field, value) {
+    const state = getNflMoneylineBetState(gameId, side);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderNflPointsFromCache(); // cheap - rebuilds from already-fetched data, no network call
+  }
+
+  async function toggleNflMoneylineTrack(gameId, side, checked, teamName, modelProb, marketPct, wager, profit) {
+    const state = getNflMoneylineBetState(gameId, side);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "nfl_moneyline", batter_name: teamName + " ML",
+            team_side: teamName, yn: "yes",
+            model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            nfl_season: nflPointsDataCache ? nflPointsDataCache.season : null,
+            nfl_week: nflPointsDataCache ? nflPointsDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderNflPointsFromCache();
+  }
+
+  function nflMoneylineBetRowCellsHtml(gameId, side, teamName, winPct) {
+    const state = getNflMoneylineBetState(gameId, side);
+    const modelProb = winPct != null ? winPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+
+    const wagerHtml = state.useKelly
+      ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflMoneylineBetField('${gameId}','${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `'${gameId}','${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflMoneylineBetField('${gameId}','${side}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflMoneylineBetField('${gameId}','${side}','useKelly',this.checked)" />
+      ${wagerHtml}
+      <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflMoneylineTrack(${trackArgs})" />
+    `;
+  }
+
   function nflTeamBlockHtml(row, isSecondInCard) {
     if (!row) return "";
+    const side = row.is_home ? "home" : "away";
     const sideLabel = row.is_home ? "Home" : "Away";
+
+    // Win probability + the Market/Kelly/Wager/Profit/Track cells sit in
+    // ONE row right next to the team name, same merged-row layout as
+    // cfbTeamBlockHtml. Null-safe: row.moneyline_trusted === false (or
+    // moneyline_win_prob == null) means the model doesn't trust either
+    // side's data enough yet - rendered as "no pick yet", never 0% and
+    // never crashing on the null.
+    const mlPct = (row.moneyline_trusted && row.moneyline_win_prob != null) ? Math.round(row.moneyline_win_prob * 100) : null;
+    const mlHeaderHtml = mlPct != null ? `
+      <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
+        <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
+      </div>` : "";
+    const mlNameCellHtml = mlPct != null
+      ? `${row.team} (${sideLabel}) <span class="prob-yes">${mlPct}%</span>`
+      : `${row.team} (${sideLabel})`;
 
     if (row.predicted_mean == null) {
       return `
         <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+          ${mlHeaderHtml}
+          ${mlPct != null ? `
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+            <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+            ${nflMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
+            <span></span>
+          </div>` : `
           <div class="teams">
-            <span>${row.team} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
+            <span>${mlNameCellHtml}</span>
           </div>
+          <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
           <div class="meta">vs ${row.opponent}</div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
@@ -5164,10 +5277,18 @@
 
     return `
       <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+        ${mlHeaderHtml}
+        ${mlPct != null ? `
+        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+          ${nflMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
+          <span class="score">${Math.round(row.predicted_mean)}</span>
+        </div>` : `
         <div class="teams">
-          <span>${row.team} (${sideLabel})</span>
+          <span>${mlNameCellHtml}</span>
           <span class="score">${Math.round(row.predicted_mean)}</span>
         </div>
+        <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
         <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
