@@ -149,11 +149,15 @@
   .weekly-row-current { font-weight: 600; }
   .tracked-bets-list { font-size: 0.85rem; }
   .tracked-bet-row {
-    display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.6fr;
+    display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.7fr 0.6fr 0.6fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
   }
   .tracked-bet-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
   .tracked-bet-remove { color: var(--live); cursor: pointer; font-size: 0.75rem; text-decoration: underline; }
+  .tracked-bet-grade { display: flex; gap: 8px; }
+  .tracked-bet-grade span { cursor: pointer; font-weight: 700; font-size: 0.8rem; text-decoration: underline; }
+  .tracked-bet-grade .grade-w { color: #4ade80; }
+  .tracked-bet-grade .grade-l { color: #f87171; }
 </style>
 </head>
 <body>
@@ -2687,7 +2691,7 @@
       const header = `
         <div class="tracked-bet-row tracked-bet-header">
           <span>Batter</span><span>Matchup</span><span>Y/N</span><span>Line</span>
-          <span>Market</span><span>Wager</span><span>Result</span><span></span>
+          <span>Market</span><span>Wager</span><span>Result</span><span>Profit</span><span></span><span>Grade</span>
         </div>`;
       const rows = bets.map(b => {
         let resultCell;
@@ -2695,9 +2699,28 @@
           resultCell = `<span class="settings-hint" style="margin:0;">Pending</span>`;
         } else if (b.result === "win") {
           resultCell = `<span class="prob-yes">Win (${b.actual_value})</span>`;
-        } else {
+        } else if (b.result === "loss") {
           resultCell = `<span class="prob-no">Loss (${b.actual_value})</span>`;
+        } else {
+          resultCell = `<span class="settings-hint" style="margin:0;">Push</span>`;
         }
+        // Manual grading escape hatch - for props the automated grader
+        // can never reach (nfl_passing_yards/nfl_rushing_yards, the DvP
+        // props, nhl_goalie_saves, etc. - see bet_grading.py's module
+        // docstring) or any other bet a human wants to call by hand.
+        // Clicking W/L hits the same /api/admin/manual-resolve-bet
+        // endpoint the backend already exposes, which sets
+        // resolved+result - loadTrackedBets() then re-fetches, so
+        // Profit and every hit-rate box (overall/by-sport/by-bet-type/
+        // weekly) picks up the change automatically, same as an
+        // automated grade. A resolved bet shows "—" here - this module
+        // has no "undo", matching manual_resolve_bet's own docstring.
+        const gradeCell = b.resolved
+          ? `<span class="settings-hint" style="margin:0;">—</span>`
+          : `<div class="tracked-bet-grade">
+               <span class="grade-w" onclick="manualGradeBet(${b.id},'win')">W</span>
+               <span class="grade-l" onclick="manualGradeBet(${b.id},'loss')">L</span>
+             </div>`;
         return `
         <div class="tracked-bet-row">
           <span>${b.batter_name}</span>
@@ -2707,7 +2730,9 @@
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
+          ${profitLossHtml(betProfitLoss(b))}
           <span class="tracked-bet-remove" onclick="removeTrackedBet(${b.id})">Remove</span>
+          ${gradeCell}
         </div>`;
       }).join("");
       container.innerHTML = header + rows;
@@ -2719,6 +2744,15 @@
   async function removeTrackedBet(id) {
     try {
       await fetch(`${API_BASE}/api/bet-tracker/track/${id}`, { method: "DELETE" });
+    } catch (e) {
+      // Best-effort - reloading the list will show the true current state either way.
+    }
+    loadTrackedBets();
+  }
+
+  async function manualGradeBet(id, result) {
+    try {
+      await fetch(`${API_BASE}/api/admin/manual-resolve-bet/${id}?result=${result}`, { method: "POST" });
     } catch (e) {
       // Best-effort - reloading the list will show the true current state either way.
     }
