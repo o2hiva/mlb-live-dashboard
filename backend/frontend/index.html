@@ -4436,7 +4436,7 @@
   // f5MoneylineBetRowCellsHtml above). "moneyline_trusted": false means
   // "no pick yet" - the server already returns moneyline_win_prob as
   // null in that case (never 0%), and this code must never Math.round()
-  // a null or substitute 0% for it - see cfbMoneylineBetCellsHtml below. ----
+  // a null or substitute 0% for it - see cfbTeamBlockHtml below. ----
   const cfbMoneylineBetState = {};
 
   function getCfbMoneylineBetState(gameId, side) {
@@ -4516,26 +4516,6 @@
     `;
   }
 
-  // Win% itself is shown once, next to the team name (see mlNameSuffix in
-  // cfbTeamBlockHtml) - this just renders the Market/Kelly/Wager/Profit/
-  // Track cells right under the name/pct line, above the Points O/U
-  // section. Null-safe: row.moneyline_trusted === false (or
-  // moneyline_win_prob == null) means the model doesn't trust either
-  // side's data enough yet - rendered as "No pick yet", never 0% and
-  // never crashing on the null.
-  function cfbMoneylineBetCellsHtml(row, side, mlPct) {
-    if (mlPct == null) {
-      return `<div class="settings-hint" style="margin:2px 0 8px;">Moneyline: no pick yet</div>`;
-    }
-    return `
-      <div class="hits-batter-header" style="grid-template-columns: 44px 30px 56px 48px 40px; margin-top:2px;">
-        <span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
-      </div>
-      <div class="hits-batter" style="grid-template-columns: 44px 30px 56px 48px 40px;">
-        ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
-      </div>`;
-  }
-
   // ---- CFB team box (one per side within a matchup card) - mirrors the
   // MLB tab's .card/.teams/.meta box look instead of NFL's flat table
   // rows, since /api/cfb/games returns one row PER TEAM PER GAME (home +
@@ -4545,21 +4525,36 @@
     const side = row.is_home ? "home" : "away";
     const sideLabel = row.is_home ? "Home" : "Away";
 
-    // Win probability next to the team name - shown ONCE here, null-safe
-    // (never 0% when moneyline_trusted is false/moneyline_win_prob is
-    // null; see cfbMoneylineBetCellsHtml for the "no pick yet" row below,
-    // which renders only the Market/Kelly/Wager/Profit/Track cells, not
-    // the percentage again).
+    // Win probability + the Market/Kelly/Wager/Profit/Track cells sit
+    // in ONE row right next to the team name, exactly like the MLB tab's
+    // moneyline row (moneylineBetRowCellsHtml) - not a separate row
+    // underneath. Null-safe: row.moneyline_trusted === false (or
+    // moneyline_win_prob == null) means the model doesn't trust either
+    // side's data enough yet - rendered as "No pick yet", never 0% and
+    // never crashing on the null.
     const mlPct = (row.moneyline_trusted && row.moneyline_win_prob != null) ? Math.round(row.moneyline_win_prob * 100) : null;
-    const mlNameSuffix = mlPct != null ? ` <span class="prob-yes">${mlPct}%</span>` : "";
+    const mlHeaderHtml = mlPct != null ? `
+      <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
+        <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
+      </div>` : "";
+    const mlNameCellHtml = mlPct != null
+      ? `${row.team} (${sideLabel}) <span class="prob-yes">${mlPct}%</span>`
+      : `${row.team} (${sideLabel})`;
 
     if (row.predicted_mean == null) {
       return `
         <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+          ${mlHeaderHtml}
+          ${mlPct != null ? `
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+            <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+            ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
+            <span></span>
+          </div>` : `
           <div class="teams">
-            <span>${row.team}${mlNameSuffix} <span class="meta" style="margin-bottom:0;">(${sideLabel})</span></span>
+            <span>${mlNameCellHtml}</span>
           </div>
-          ${cfbMoneylineBetCellsHtml(row, side, mlPct)}
+          <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
           <div class="meta">vs ${row.opponent}</div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
@@ -4583,11 +4578,18 @@
 
     return `
       <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+        ${mlHeaderHtml}
+        ${mlPct != null ? `
+        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+          ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
+          <span class="score">${Math.round(row.predicted_mean)}</span>
+        </div>` : `
         <div class="teams">
-          <span>${row.team}${mlNameSuffix} (${sideLabel})</span>
+          <span>${mlNameCellHtml}</span>
           <span class="score">${Math.round(row.predicted_mean)}</span>
         </div>
-        ${cfbMoneylineBetCellsHtml(row, side, mlPct)}
+        <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
         <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
