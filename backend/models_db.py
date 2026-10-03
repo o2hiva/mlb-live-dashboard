@@ -661,6 +661,8 @@ class CfbGame(Base):
     week = Column(Integer)
     start_date_utc = Column(String, nullable=True)  # ISO8601 UTC kickoff, once CFBD's real field name is confirmed live - see cfb_points_sync.py
     neutral_site = Column(Boolean, default=False)  # CFBD's real "neutralSite" field - moneyline's win-probability model zeroes out home-field advantage for these (see cfb_points_sync.win_probability)
+    home_spread = Column(Float, nullable=True)  # real market spread line, HOME team's perspective (negative = home favored) - from CFBD's /lines endpoint, one preferred provider picked per game (see cfb_points_sync.pick_provider_line). None if no line posted yet. Stored the same on both the home and away row of a game - the away side's own spread is just its negation.
+    spread_provider = Column(String, nullable=True)  # which sportsbook the home_spread above came from (e.g. "DraftKings") - see cfb_points_sync.PREFERRED_PROVIDERS
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

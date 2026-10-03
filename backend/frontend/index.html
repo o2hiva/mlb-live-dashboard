@@ -4475,6 +4475,152 @@
     `;
   }
 
+  // ---- CFB Spread (cover probability) - server already returns the
+  // exact cover probability (cfb_points_sync.compute_cfb_spread, see
+  // /api/cfb/games), same no-client-math pattern as CFB Moneyline above.
+  // "spread_trusted": false means "no pick yet" - either no real
+  // sportsbook line has been posted for this game yet, or the points
+  // prediction itself isn't trusted - spread_cover_prob is null in that
+  // case (never 0%). "spread_lopsided": true means the real line is
+  // |spread| >= 13 points - core_ncaa_spread.py's own 3-season-confirmed
+  // finding that cover probabilities are OVERCONFIDENT that one-sided,
+  // so this must be visibly caveated, not shown with the same confidence
+  // as a moderate line. Rendered inside each card's "Show Props ▾"
+  // expand as its own tab, alongside Game Lines - see cfbCardHtml. No
+  // "line" is ever sent when tracking a Spread bet (unlike the O/U props
+  // above, which send their own threshold) - bet_grading.py re-fetches
+  // the real posted line at grading time instead of trusting a snapshot
+  // that could go stale if the market moves, so bet.line stays None and
+  // _grade's own 0.5 default applies against the 1.0/0.0 cover outcome,
+  // same convention as CFB Moneyline. ----
+  const cfbSpreadBetState = {};
+
+  function getCfbSpreadBetState(gameId, side) {
+    if (!cfbSpreadBetState[gameId]) cfbSpreadBetState[gameId] = {};
+    if (!cfbSpreadBetState[gameId][side]) {
+      cfbSpreadBetState[gameId][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    }
+    return cfbSpreadBetState[gameId][side];
+  }
+
+  function updateCfbSpreadBetField(gameId, side, field, value) {
+    const state = getCfbSpreadBetState(gameId, side);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    renderCfbFromCache(); // cheap - rebuilds from already-fetched data, no network call
+  }
+
+  async function toggleCfbSpreadTrack(gameId, side, checked, teamName, spreadVal, modelProb, marketPct, wager, profit) {
+    const state = getCfbSpreadBetState(gameId, side);
+    if (checked) {
+      try {
+        const spreadLabel = (spreadVal >= 0 ? "+" : "") + spreadVal.toFixed(1);
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "cfb_spread_" + side, batter_name: `${teamName} ${spreadLabel}`,
+            batter_id: gameId, team_side: side, yn: "yes",
+            model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+            cfb_season: cfbDataCache ? cfbDataCache.season : null,
+            cfb_week: cfbDataCache ? cfbDataCache.week : null,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true;
+        state.trackedId = data.id;
+      } catch (e) {
+        state.tracked = false;
+      }
+    } else if (state.trackedId != null) {
+      try {
+        await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+      } catch (e) {
+        // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    renderCfbFromCache();
+  }
+
+  function cfbSpreadBetRowCellsHtml(gameId, side, teamName, spreadVal, coverPct) {
+    const state = getCfbSpreadBetState(gameId, side);
+    const modelProb = coverPct != null ? coverPct / 100 : null;
+
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+
+    const wagerHtml = state.useKelly
+      ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbSpreadBetField(${gameId},'${side}','manualWager',this.value)" />`;
+
+    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${spreadVal},${modelProb},${state.market},${wager},${profit}`;
+
+    return `
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbSpreadBetField(${gameId},'${side}','market',this.value)" />
+      <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbSpreadBetField(${gameId},'${side}','useKelly',this.checked)" />
+      ${wagerHtml}
+      <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+      <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbSpreadTrack(${trackArgs})" />
+    `;
+  }
+
+  // One team's Spread row - team name + real spread + cover% merged into
+  // one grid row with the Market/Kelly/Wager/Profit/Track cells, same
+  // layout as cfbTeamBlockHtml's moneyline row.
+  function cfbSpreadTeamRowHtml(gameId, row, isSecondInCard) {
+    if (!row) return "";
+    const side = row.is_home ? "home" : "away";
+    const spreadTrusted = row.spread_trusted && row.spread_cover_prob != null && row.spread != null;
+    const coverPct = spreadTrusted ? Math.round(row.spread_cover_prob * 100) : null;
+    const spreadLabel = row.spread != null ? (row.spread >= 0 ? "+" : "") + row.spread.toFixed(1) : null;
+    const spacerStyle = isSecondInCard ? "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);" : "";
+
+    if (!spreadTrusted) {
+      const reason = row.spread == null ? "no real line posted yet" : "not enough data yet";
+      return `
+        <div style="${spacerStyle}">
+          <div class="teams"><span>${row.team}${spreadLabel != null ? ` ${spreadLabel}` : ""}</span></div>
+          <div class="settings-hint">Spread: ${reason}</div>
+        </div>`;
+    }
+
+    const nameCellHtml = `${row.team} ${spreadLabel} <span class="prob-yes">${coverPct}%</span>`;
+    return `
+      <div style="${spacerStyle}">
+        <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
+          <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <span style="font-size:1rem; font-weight:600;">${nameCellHtml}</span>
+          ${cfbSpreadBetRowCellsHtml(gameId, side, row.team, row.spread, coverPct)}
+          <span></span>
+        </div>
+        ${row.spread_lopsided ? `<div class="settings-hint" style="margin-top:2px;">⚠ Lopsided line (|spread| ≥ 13) - cover % confirmed overconfident here, use with caution</div>` : ""}
+      </div>`;
+  }
+
+  function cfbSpreadSectionHtml(gameId, homeRow, awayRow) {
+    if (!homeRow && !awayRow) {
+      return `<div><div class="teams"><span>Spread</span></div><div class="settings-hint">Not enough data yet</div></div>`;
+    }
+    const provider = (homeRow && homeRow.spread_provider) || (awayRow && awayRow.spread_provider) || null;
+    return `
+      <div>
+        ${cfbSpreadTeamRowHtml(gameId, awayRow, false)}
+        ${cfbSpreadTeamRowHtml(gameId, homeRow, true)}
+        ${provider ? `<div class="meta" style="margin-top:8px; margin-bottom:0;">Line: ${provider}</div>` : ""}
+      </div>`;
+  }
+
   // ---- CFB team box (one per side within a matchup card) - mirrors the
   // MLB tab's .card/.teams/.meta box look instead of NFL's flat table
   // rows, since /api/cfb/games returns one row PER TEAM PER GAME (home +
@@ -4581,7 +4727,7 @@
   function cfbTotalRowHtml(gameId, homeRow, awayRow) {
     if (!homeRow || !awayRow || homeRow.predicted_mean == null || awayRow.predicted_mean == null) {
       return `
-        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+        <div>
           <div class="teams"><span>Total Points</span></div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
@@ -4603,7 +4749,7 @@
     const trackArgs = `${gameId},this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
 
     return `
-      <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+      <div>
         <div class="teams">
           <span>Total Points</span>
           <span class="score">${Math.round(totalMean)}</span>
@@ -4628,14 +4774,51 @@
       </div>`;
   }
 
+  // ---- "Show Props ▾" expand toggle at the bottom of each CFB card -
+  // same pattern as NFL's toggleNflLines/expandedNflLinesGames/
+  // activeNflPropTab/switchNflPropTab (nflPointsCardHtml above): Game
+  // Lines (the combined Total Points O/U, cfbTotalRowHtml) and Spread
+  // (cfbSpreadSectionHtml) live as tabs inside the expand instead of
+  // being stacked unconditionally under the team boxes. ----
+  const expandedCfbLinesGames = new Set();
+  const activeCfbPropTab = {}; // gameId -> "lines" | "spread", defaults to "lines"
+
+  function toggleCfbLines(gameId) {
+    if (expandedCfbLinesGames.has(gameId)) {
+      expandedCfbLinesGames.delete(gameId);
+    } else {
+      expandedCfbLinesGames.add(gameId);
+    }
+    renderCfbFromCache();
+  }
+
+  function switchCfbPropTab(gameId, tab) {
+    activeCfbPropTab[gameId] = tab;
+    renderCfbFromCache();
+  }
+
   function cfbCardHtml(gameId, pair, season, week) {
     const startDateUtc = (pair.home && pair.home.start_date_utc) || (pair.away && pair.away.start_date_utc) || null;
+    const expanded = expandedCfbLinesGames.has(gameId);
+    const tab = activeCfbPropTab[gameId] || "lines";
+    const tabContentHtml = tab === "spread"
+      ? cfbSpreadSectionHtml(gameId, pair.home, pair.away)
+      : cfbTotalRowHtml(gameId, pair.home, pair.away);
+    const expandedHtml = expanded ? `
+          <div class="lineup-tabs">
+            <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchCfbPropTab(${gameId},'lines')">Game Lines</span>
+            <span class="lineup-tab ${tab === "spread" ? "active" : ""}" onclick="switchCfbPropTab(${gameId},'spread')">Spread</span>
+          </div>
+          <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${formatKickoffPacific(startDateUtc)}</div>
         ${cfbTeamBlockHtml(pair.away, false)}
         ${cfbTeamBlockHtml(pair.home, true)}
-        ${cfbTotalRowHtml(gameId, pair.home, pair.away)}
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+          <span class="hits-toggle" onclick="toggleCfbLines(${gameId})">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
+          ${expandedHtml}
+        </div>
       </div>`;
   }
 

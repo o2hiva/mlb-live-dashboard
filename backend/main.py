@@ -83,6 +83,8 @@ _ensure_column("nfl_points_games", "kickoff_utc", "VARCHAR")
 _ensure_column("nfl_points_games", "neutral_site", "BOOLEAN DEFAULT FALSE")
 _ensure_column("cfb_games", "start_date_utc", "VARCHAR")
 _ensure_column("cfb_games", "neutral_site", "BOOLEAN DEFAULT FALSE")
+_ensure_column("cfb_games", "home_spread", "FLOAT")
+_ensure_column("cfb_games", "spread_provider", "VARCHAR")
 _ensure_column("nfl_rb_defense_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_prop_stats", "receptions_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_rb_defense_allowed_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
@@ -1194,6 +1196,20 @@ def cfb_games(db: Session = Depends(get_db)):
     (MIN_PRIOR_GAMES) - and moneyline_win_prob is None in that case,
     NEVER 0%. The frontend must render that as "no pick yet", not 0%
     and not crash on the null.
+
+    Spread (cover_probability/spread below, see
+    cfb_points_sync.compute_cfb_spread) is likewise computed once per
+    game - needs the real market home_spread CfbGame already carries
+    (fetched from CFBD's /lines during refresh, see
+    refresh_cfb_points_stats) plus both sides' predictions. "spread": own
+    team's perspective (home_spread as-is for the home row, negated for
+    the away row). "spread_trusted": false means either no real line has
+    been posted yet OR the points prediction itself isn't trusted - cover_
+    probability is None in that case, NEVER a guess. "lopsided": true
+    means |spread| >= cfb_points_sync.LOPSIDED_THRESHOLD - core_ncaa_
+    spread.py's own 3-season-confirmed finding that cover probabilities
+    are OVERCONFIDENT on lines this one-sided; the frontend must caveat
+    these, not show them with the same confidence as a moderate line.
     """
     from models_db import CfbGame
     import cfb_points_sync
@@ -1209,6 +1225,7 @@ def cfb_games(db: Session = Depends(get_db)):
         by_game.setdefault(g.game_id, {})["home" if g.is_home else "away"] = g
 
     moneyline_by_game: dict = {}
+    spread_by_game: dict = {}
     for game_id, pair in by_game.items():
         home_g, away_g = pair.get("home"), pair.get("away")
         if home_g and away_g:
@@ -1216,14 +1233,22 @@ def cfb_games(db: Session = Depends(get_db)):
                 home_g.team, away_g.team, db, league_avg=league_avg,
                 neutral_site=bool(home_g.neutral_site),
             )
+            spread_by_game[game_id] = cfb_points_sync.compute_cfb_spread(
+                home_g.team, away_g.team, home_g.home_spread, db, league_avg=league_avg,
+                neutral_site=bool(home_g.neutral_site),
+            )
         else:
             moneyline_by_game[game_id] = {"home_win_probability": None, "away_win_probability": None, "trusted": False}
+            spread_by_game[game_id] = {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
     rows = []
     for g in games:
         inputs = cfb_points_sync.compute_cfb_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
         ml = moneyline_by_game.get(g.game_id, {"home_win_probability": None, "away_win_probability": None, "trusted": False})
         own_win_prob = ml["home_win_probability"] if g.is_home else ml["away_win_probability"]
+        sp = spread_by_game.get(g.game_id, {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None})
+        own_cover_prob = sp["home_covers_probability"] if g.is_home else sp["away_covers_probability"]
+        own_spread = g.home_spread if (g.is_home or g.home_spread is None) else -g.home_spread
         rows.append({
             "team": g.team,
             "opponent": g.opponent,
@@ -1237,6 +1262,11 @@ def cfb_games(db: Session = Depends(get_db)):
             "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
             "moneyline_win_prob": own_win_prob,
             "moneyline_trusted": ml["trusted"],
+            "spread": own_spread,
+            "spread_provider": g.spread_provider,
+            "spread_cover_prob": own_cover_prob,
+            "spread_trusted": sp["trusted"],
+            "spread_lopsided": sp["lopsided"],
         })
 
     return {"games": rows, "season": games[0].season, "week": games[0].week}

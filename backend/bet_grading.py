@@ -66,6 +66,28 @@ DATA SOURCES, one per bet_type:
     "f5_moneyline_home"/"away"). None (still pending) until CFBD marks
     that game "completed".
 
+  - "cfb_spread_home" / "cfb_spread_away": which side (home/away, stored
+    in team_side) actually covered the spread, fetched fresh from CFBD
+    for the bet's own recorded season/week - both the real final score
+    (same /games cache/lookup-by-game-id as cfb_moneyline_home/away,
+    batter_id holds CFBD's own numeric game id) AND the real line itself
+    (a SEPARATE /lines refetch, same pick_provider_line used at tracking
+    time - deliberately NOT read from bet.line, which is left None here
+    so _grade's own 0.5 default applies against this function's 1.0/0.0
+    output, same convention as cfb_moneyline_home/away/full_game_
+    moneyline_*). Re-fetching the line rather than storing a snapshot at
+    tracking time matches this module's "never trust stale state, always
+    ask the real source" discipline used everywhere else (e.g.
+    cfb_team_points re-fetches the real score instead of trusting a
+    cached prediction) - CFBD keeps returning a completed game's posted
+    line, so this is safe after the fact. home_margin = home final -
+    away final; home covers iff home_margin + home_spread > 0, away iff
+    < 0. An exact push (sum == 0 - possible with a whole-number line)
+    gives 0.0 to both sides, same no-push simplification as every other
+    moneyline-shaped bet_type here. None (still pending) until CFBD
+    marks the game "completed" AND still has a usable posted line for
+    it.
+
   - "nfl_passing_yards": NOT gradeable by this module. The only real
     per-game data available for the third-party NFL API is season-
     cumulative totals (see nfl_passing_yards_sync.py's docstring for
@@ -178,6 +200,7 @@ log = logging.getLogger("bet_grading")
 # the permanent "not gradeable" case).
 NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_points", "cfb_game_total",
                           "cfb_moneyline_home", "cfb_moneyline_away",
+                          "cfb_spread_home", "cfb_spread_away",
                           "nfl_team_points", "nfl_game_total", "nfl_moneyline",
                           "nfl_qb_dvp_passing_yards", "nfl_qb_dvp_passing_tds",
                           "nfl_qb_dvp_rushing_yards", "nfl_qb_dvp_rushing_tds",
@@ -364,6 +387,60 @@ def _cfb_moneyline_actual(bet: TrackedBet, cfb_games_cache: dict) -> float | Non
     return None
 
 
+def _cfb_spread_actual(bet: TrackedBet, cfb_games_cache: dict, cfb_lines_cache: dict) -> float | None:
+    """Real spread-cover outcome (1.0/0.0) for this CFB Spread bet's side
+    ("home"/"away", in team_side) - see module docstring for why the
+    real line is RE-FETCHED here rather than read from bet.line. home_
+    margin = home final - away final; home covers iff home_margin +
+    home_spread > 0, away iff < 0. An exact push (sum == 0) gives 0.0 to
+    both sides, same no-push convention as _cfb_moneyline_actual."""
+    if bet.cfb_season is None or bet.cfb_week is None or bet.batter_id is None or not bet.team_side:
+        return None
+    cache_key = (bet.cfb_season, bet.cfb_week)
+    if cache_key not in cfb_games_cache:
+        try:
+            cfb_games_cache[cache_key] = cfb_points_sync.get_week_games(bet.cfb_season, bet.cfb_week)
+        except Exception:
+            log.exception("Failed to fetch CFB week %s/%s games for grading", bet.cfb_season, bet.cfb_week)
+            cfb_games_cache[cache_key] = None
+    games = cfb_games_cache[cache_key]
+    if games is None:
+        return None
+
+    if cache_key not in cfb_lines_cache:
+        try:
+            cfb_lines_cache[cache_key] = {
+                lg.get("id"): lg for lg in cfb_points_sync.get_week_lines(bet.cfb_season, bet.cfb_week)
+            }
+        except Exception:
+            log.exception("Failed to fetch CFB week %s/%s lines for grading", bet.cfb_season, bet.cfb_week)
+            cfb_lines_cache[cache_key] = None
+    line_games_by_id = cfb_lines_cache[cache_key]
+    if line_games_by_id is None:
+        return None
+    line_game = line_games_by_id.get(bet.batter_id)
+    if line_game is None:
+        return None
+    _provider, home_spread = cfb_points_sync.pick_provider_line(line_game)
+    if home_spread is None:
+        return None
+
+    for game in games:
+        if game.get("id") == bet.batter_id:
+            if not game.get("completed"):
+                return None
+            home_pts, away_pts = game.get("homePoints"), game.get("awayPoints")
+            if home_pts is None or away_pts is None:
+                return None
+            home_margin_vs_line = (home_pts - away_pts) + home_spread
+            if bet.team_side == "home":
+                return 1.0 if home_margin_vs_line > 0 else 0.0
+            if bet.team_side == "away":
+                return 1.0 if home_margin_vs_line < 0 else 0.0
+            return None
+    return None
+
+
 def _nfl_week_games(bet_season: int, bet_week: int, nfl_games_cache: dict) -> list | None:
     """Shared fetch+cache helper for both NFL Team Points and NFL Game
     Total grading - keyed the same way as CFB's cache, just against
@@ -477,7 +554,7 @@ def _player_game_stats(boxscore: dict, team_side: str, player_id: int) -> dict |
     return stats if stats else None
 
 
-def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_cache: dict, nfl_games_cache: dict) -> float | None:
+def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_cache: dict, cfb_lines_cache: dict, nfl_games_cache: dict) -> float | None:
     """Returns the real outcome for one bet, in whatever unit its
     bet_type uses. None means "can't grade yet" (data not available),
     NOT "the outcome was zero" - callers must check for None explicitly."""
@@ -511,6 +588,9 @@ def _actual_value_for_bet(db, bet: TrackedBet, boxscore_cache: dict, cfb_games_c
 
     if bet.bet_type.startswith("cfb_moneyline_"):
         return _cfb_moneyline_actual(bet, cfb_games_cache)
+
+    if bet.bet_type.startswith("cfb_spread_"):
+        return _cfb_spread_actual(bet, cfb_games_cache, cfb_lines_cache)
 
     if bet.bet_type == "nfl_passing_yards":
         # No working per-game data source exists for this - see module
@@ -617,6 +697,7 @@ def grade_pending_bets() -> dict:
         pending = db.query(TrackedBet).filter_by(resolved=False).all()
         boxscore_cache = {}
         cfb_games_cache = {}
+        cfb_lines_cache = {}
         nfl_games_cache = {}
         graded, wins, losses, still_pending = 0, 0, 0, 0
 
@@ -643,7 +724,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            actual = _actual_value_for_bet(db, bet, boxscore_cache, cfb_games_cache, nfl_games_cache)
+            actual = _actual_value_for_bet(db, bet, boxscore_cache, cfb_games_cache, cfb_lines_cache, nfl_games_cache)
             if actual is None:
                 still_pending += 1
                 continue

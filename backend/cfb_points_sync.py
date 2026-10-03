@@ -71,6 +71,35 @@ LEAGUE_AVG_POINTS_STATIC = 26.24
 HOME_FIELD_POINTS = 5.0
 VARIANCE_SCALE = 1.0
 
+# Spread cover-probability layer (ported from core_ncaa_spread.py, the
+# user-supplied production module - validated against REAL sportsbook
+# market lines across three seasons, 2023/2024/2025, 1608 games total,
+# not just the model's own outcomes). DELIBERATELY uses its OWN
+# home-field constant, different from the moneyline one above:
+# core_ncaa_spread.py's HOME_FIELD_POINTS=3.19 was re-estimated directly
+# against real market lines via a closed-form solve, while the
+# moneyline's HOME_FIELD_POINTS=5.0 above was tuned only against the
+# model's own outcomes - both are "correct" for their own purpose (see
+# that script's docstring for why they diverge; a pooled 3-season
+# re-estimate landed at 2.95, close enough to 3.19 to treat as confirmed
+# rather than revise again). SPREAD_VARIANCE_SCALE coincides with the
+# moneyline VARIANCE_SCALE's value (1.0) but is kept as its own constant
+# since the two layers were validated independently.
+SPREAD_HOME_FIELD_POINTS = 3.19   # VALIDATED against real market lines (core_ncaa_spread.py) - NOT the same as moneyline's HOME_FIELD_POINTS above
+SPREAD_VARIANCE_SCALE = 1.0       # VALIDATED - a global rescale sweep against real market outcomes was tried and found to be a dead end (core_ncaa_spread.py's docstring, Finding 2)
+
+# CONFIRMED (Oct 2026) against real 2025 week-5 CFBD /lines data - see
+# core_ncaa_spread.py / backtest_ncaa_spread_probability.py's module
+# docstrings for the full sign-convention/provider confirmation.
+PREFERRED_PROVIDERS = ["DraftKings", "ESPN Bet", "Bovada"]
+
+# CONFIRMED across 3 real seasons (2023/2024/2025) as where spread
+# cover-probability overconfidence concentrates (Finding 3 in
+# core_ncaa_spread.py's own findings doc). Games at or above this get
+# flagged `lopsided=True`, not suppressed - the frontend decides how to
+# caveat them rather than hiding them.
+LOPSIDED_THRESHOLD = 13.0
+
 CACHE_TTL = timedelta(hours=6)
 _league_avg_cache = {"value": None, "computed_at": None}
 
@@ -97,6 +126,43 @@ def get_week_games(year: int, week: int, season_type: str = "regular") -> list[d
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def get_week_lines(year: int, week: int, season_type: str = "regular") -> list[dict]:
+    """Every game's real posted lines for one week, from CFBD's /lines
+    endpoint - confirmed shape (per core_ncaa_spread.py / backtest_ncaa_
+    spread_probability.py): a list of game entries, each with "id"
+    (matching the same numeric game id /games returns) and a nested
+    "lines" array of {"provider":, "spread":, ...} per sportsbook. A
+    game with no book posted yet (common well before kickoff) just has
+    an empty/missing "lines" array - handled by pick_provider_line, not
+    here."""
+    resp = requests.get(
+        f"{API_BASE}/lines",
+        params={"year": year, "week": week, "seasonType": season_type},
+        headers={"Authorization": f"Bearer {get_api_key()}"},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def pick_provider_line(game: dict, preferred_providers: list[str] = PREFERRED_PROVIDERS) -> tuple[str | None, float | None]:
+    """Picks ONE line per game from its nested 'lines' array: the first
+    preferred provider (in order) that has a non-null spread, or failing
+    that, the first entry in the array with a non-null spread. Returns
+    (provider_name, home_spread) or (None, None) if the game has no
+    usable line at all yet - ported verbatim from core_ncaa_spread.py."""
+    lines = game.get("lines") or []
+    by_provider = {l.get("provider"): l for l in lines if l.get("provider")}
+    for provider in preferred_providers:
+        line = by_provider.get(provider)
+        if line is not None and line.get("spread") is not None:
+            return provider, float(line["spread"])
+    for line in lines:
+        if line.get("spread") is not None:
+            return line.get("provider"), float(line["spread"])
+    return None, None
 
 
 def is_fbs_vs_fbs(game: dict) -> bool:
@@ -257,6 +323,23 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
         # exhausted), keep whatever CfbGame already has rather than
         # wiping it out to empty.
         if this_week_games:
+            # Real posted spread lines for this same week - a SEPARATE CFBD
+            # call (one more call per refresh, same monthly-budget caution
+            # as everything else here), keyed by CFBD's own numeric game id
+            # so each game below can pick its own line. A game with no book
+            # posted yet (common well before kickoff) just has no entry -
+            # pick_provider_line returns (None, None) for it, which
+            # compute_cfb_spread treats as untrusted rather than guessed.
+            # A fetch failure here never blocks the rest of the refresh -
+            # every game's spread fields simply come back null/untrusted
+            # (the points/moneyline predictions are unaffected).
+            line_games_by_id: dict = {}
+            try:
+                for line_game in get_week_lines(season, current_week):
+                    line_games_by_id[line_game.get("id")] = line_game
+            except requests.exceptions.RequestException:
+                log.exception("Failed to fetch CFB week %s real spread lines", current_week)
+
             db.query(CfbGame).delete()
             for game in this_week_games:
                 home, away = game.get("homeTeam"), game.get("awayTeam")
@@ -271,12 +354,14 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 # no home-field-advantage bump in the moneyline model below
                 # (see win_probability's effective_hfa).
                 neutral_site = bool(game.get("neutralSite"))
+                line_game = line_games_by_id.get(game.get("id"))
+                spread_provider, home_spread = pick_provider_line(line_game) if line_game else (None, None)
                 db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
                                 season=season, week=current_week, start_date_utc=start_date_utc,
-                                neutral_site=neutral_site))
+                                neutral_site=neutral_site, home_spread=home_spread, spread_provider=spread_provider))
                 db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
                                 season=season, week=current_week, start_date_utc=start_date_utc,
-                                neutral_site=neutral_site))
+                                neutral_site=neutral_site, home_spread=home_spread, spread_provider=spread_provider))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written
@@ -387,4 +472,70 @@ def compute_cfb_moneyline(home_team: str, away_team: str, db, league_avg: float 
         "home_win_probability": home_prob,
         "away_win_probability": 1.0 - home_prob,
         "trusted": True,
+    }
+
+
+def spread_cover_probability(home_predicted: float | None, away_predicted: float | None, home_spread: float | None,
+                              neutral_site: bool = False, home_field_points: float = SPREAD_HOME_FIELD_POINTS,
+                              variance_scale: float = SPREAD_VARIANCE_SCALE) -> float | None:
+    """P(home team covers `home_spread`), ported verbatim (formula-wise)
+    from core_ncaa_spread.py's spread_cover_probability - the same
+    Normal score-differential model as win_probability above, just
+    evaluated at an arbitrary threshold (-home_spread) instead of always
+    0, and using the spread layer's OWN home-field constant (see
+    SPREAD_HOME_FIELD_POINTS's comment - deliberately different from
+    win_probability's HOME_FIELD_POINTS). home_spread convention: HOME
+    team's perspective, negative = home favored (confirmed against real
+    CFBD data). Returns None if either predicted points is missing or
+    non-positive, or home_spread itself is None (no real line posted
+    yet) - never a guessed probability."""
+    if home_predicted is None or away_predicted is None or home_predicted <= 0 or away_predicted <= 0 or home_spread is None:
+        return None
+    effective_hfa = 0.0 if neutral_site else home_field_points
+    predicted_diff = (home_predicted - away_predicted) + effective_hfa
+    variance_diff = variance_scale * (DEFAULT_TEAM_OVERDISPERSION * home_predicted + DEFAULT_TEAM_OVERDISPERSION * away_predicted)
+    sigma = math.sqrt(variance_diff) if variance_diff > 0 else 1.0
+    # P(home covers) = P(diff > -home_spread) = norm.sf(-home_spread, loc=predicted_diff, scale=sigma)
+    return 1.0 - _normal_cdf(-home_spread, predicted_diff, sigma)
+
+
+def compute_cfb_spread(home_team: str, away_team: str, home_spread: float | None, db,
+                        league_avg: float | None = None, neutral_site: bool = False) -> dict:
+    """Returns {"home_covers_probability":, "away_covers_probability":,
+    "trusted":, "lopsided":} for one matchup's REAL market spread line
+    (home_spread - already fetched from CFBD's /lines during
+    refresh_cfb_points_stats and stored on CfbGame, see
+    pick_provider_line), built on top of compute_cfb_team_points_
+    prediction's already-validated per-team predicted points.
+
+    Gated independently from the points prediction and from moneyline:
+    "trusted" is False - both probabilities None, NEVER 0% - whenever
+    EITHER side lacks MIN_PRIOR_GAMES of history yet, OR no sportsbook
+    has posted a line for this game yet (home_spread is None, common
+    well before kickoff). "lopsided" is True when |home_spread| >=
+    LOPSIDED_THRESHOLD - core_ncaa_spread.py's own 3-season-confirmed
+    finding that cover probabilities are OVERCONFIDENT on lopsided
+    lines; None (not False) whenever not trusted, since "not lopsided"
+    would be a claim this function can't back up without a real line.
+    The frontend must caveat lopsided=True predictions rather than
+    showing them with the same confidence as a moderate line."""
+    if league_avg is None:
+        league_avg = get_league_avg_points(db)
+    if home_spread is None:
+        return {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
+
+    home_pred = compute_cfb_team_points_prediction(home_team, away_team, db, league_avg=league_avg)
+    away_pred = compute_cfb_team_points_prediction(away_team, home_team, db, league_avg=league_avg)
+    if home_pred is None or away_pred is None:
+        return {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
+
+    home_cover_prob = spread_cover_probability(home_pred["mean"], away_pred["mean"], home_spread, neutral_site=neutral_site)
+    if home_cover_prob is None:
+        return {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
+
+    return {
+        "home_covers_probability": home_cover_prob,
+        "away_covers_probability": 1.0 - home_cover_prob,
+        "trusted": True,
+        "lopsided": abs(home_spread) >= LOPSIDED_THRESHOLD,
     }
