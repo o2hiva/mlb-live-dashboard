@@ -79,6 +79,8 @@ _ensure_column("nfl_defense_allowed_prop_stats", "rushing_attempts_sum", "INTEGE
 _ensure_column("nfl_qb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_rb_defense_prop_games", "gameday", "VARCHAR")
 _ensure_column("nfl_points_games", "gameday", "VARCHAR")
+_ensure_column("nfl_points_games", "kickoff_utc", "VARCHAR")
+_ensure_column("nfl_points_games", "neutral_site", "BOOLEAN DEFAULT FALSE")
 _ensure_column("cfb_games", "start_date_utc", "VARCHAR")
 _ensure_column("cfb_games", "neutral_site", "BOOLEAN DEFAULT FALSE")
 _ensure_column("nfl_rb_defense_prop_stats", "carries_sum", "INTEGER DEFAULT 0")
@@ -1311,6 +1313,8 @@ def nfl_points_games(db: Session = Depends(get_db)):
             "game_id": game_id,
             "is_home": g.is_home,
             "gameday": g.gameday,
+            "kickoff_utc": g.kickoff_utc,
+            "neutral_site": bool(g.neutral_site),
             "predicted_mean": inputs["mean"] if inputs else None,
             "team_index": inputs["team_index"] if inputs else None,
             "opp_index": inputs["opp_index"] if inputs else None,

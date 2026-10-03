@@ -697,7 +697,9 @@ class NflPointsGame(Base):
     is_home = Column(Boolean, default=False)
     season = Column(Integer)
     week = Column(Integer)
-    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_points_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
+    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - DAY-ONLY fallback ordering, kept for when the ESPN kickoff lookup below fails (see nfl_points_sync.py; api.nfldata.org's own "gametime" field is confirmed always null)
+    kickoff_utc = Column(String, nullable=True)  # ISO8601 UTC real kickoff time, from ESPN's public scoreboard API (site.api.espn.com) - api.nfldata.org itself never provides one, so this is a second data source merged in by team-pair match (see nfl_points_sync.fetch_espn_week_kickoffs). None if that lookup failed for this game.
+    neutral_site = Column(Boolean, default=False)  # ESPN's own "neutralSite" flag (International Series games - London/Dublin/Munich/Madrid/Sao Paulo) - same role as CfbGame.neutral_site
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

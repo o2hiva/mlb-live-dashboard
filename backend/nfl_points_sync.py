@@ -96,6 +96,86 @@ CACHE_TTL = timedelta(hours=6)
 _league_avg_cache = {"value": None, "computed_at": None}
 
 
+ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+
+# api.nfldata.org's team abbreviations don't always match ESPN's for a
+# handful of franchises with a known historical abbreviation split -
+# Washington ("WAS" here vs ESPN's "WSH") and Jacksonville ("JAC" here vs
+# ESPN's "JAX") are the two confirmed-common mismatches across NFL data
+# feeds. This maps OUR abbreviation -> ESPN's so the team-pair match in
+# fetch_espn_week_kickoffs doesn't silently miss those two teams' games
+# every week. NOT yet verified against this dashboard's own live
+# api.nfldata.org abbreviations (that would need a real response to
+# confirm) - if either side turns out already using the same letters as
+# ESPN, this alias is simply a harmless no-op for that team.
+ESPN_TEAM_ABBR_ALIASES = {"WAS": "WSH", "JAC": "JAX"}
+
+
+def _to_espn_abbr(team: str) -> str:
+    return ESPN_TEAM_ABBR_ALIASES.get(team, team)
+
+
+def fetch_espn_week_kickoffs(season: int, week: int) -> dict:
+    """Real per-game kickoff times (+ neutral-site flag) for one NFL week,
+    from ESPN's public scoreboard API - a SECOND data source, merged in
+    purely to fill the gap api.nfldata.org leaves (its own "gametime"
+    field is confirmed always null, so it can only place games by DAY,
+    never by time-of-day - see this module's HOME_FIELD_POINTS comment
+    and models_db.py's NflPointsGame docstring). Returns
+    {frozenset({home_abbr, away_abbr}): {"kickoff_utc": <ISO8601 str>,
+    "neutral_site": bool}}, keyed by the team pair (order-independent) so
+    the caller can look up a match by home/away in either order. An
+    empty dict means the fetch failed or returned nothing usable - the
+    caller must fall back to day-only ordering/display in that case,
+    never guess at a time.
+
+    seasontype=2 is ESPN's own code for the regular season (matches this
+    dashboard's REG-only scope everywhere else)."""
+    try:
+        resp = requests.get(
+            ESPN_SCOREBOARD_URL,
+            params={"week": week, "seasontype": 2, "year": season},
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.RequestException:
+        log.exception("Failed to fetch ESPN scoreboard for NFL week %s/%s kickoff times", season, week)
+        return {}
+
+    kickoffs = {}
+    for event in data.get("events", []):
+        competitions = event.get("competitions") or []
+        if not competitions:
+            continue
+        comp = competitions[0]
+        competitors = comp.get("competitors") or []
+        if len(competitors) != 2:
+            continue
+        abbrs = [c.get("team", {}).get("abbreviation") for c in competitors]
+        if not all(abbrs):
+            continue
+        kickoff_utc = comp.get("date") or event.get("date")
+        if not kickoff_utc:
+            continue
+        key = frozenset(abbrs)
+        kickoffs[key] = {
+            "kickoff_utc": kickoff_utc,
+            "neutral_site": bool(comp.get("neutralSite")),
+        }
+    return kickoffs
+
+
+def lookup_espn_kickoff(espn_kickoffs: dict, team: str, opponent: str) -> dict | None:
+    """Looks up one game's kickoff info from fetch_espn_week_kickoffs's
+    result by our own team/opponent abbreviations, applying
+    ESPN_TEAM_ABBR_ALIASES first. None if that pair wasn't found (the
+    week's fetch failed, or a still-unconfirmed abbreviation mismatch
+    beyond the two aliased above)."""
+    key = frozenset({_to_espn_abbr(team), _to_espn_abbr(opponent)})
+    return espn_kickoffs.get(key)
+
+
 def get_week_games(season: int, week: int) -> list[dict]:
     """Every game for one week, straight from api.nfldata.org/v1/games -
     real fields confirmed already working in nfl_passing_yards_sync.py:
@@ -212,6 +292,13 @@ def refresh_nfl_points_stats(season: int, current_week: int) -> dict:
         except requests.exceptions.RequestException:
             log.exception("Failed to fetch NFL current week %s schedule", current_week)
             this_week_games = []
+
+        # Real kickoff times (api.nfldata.org never has one - see
+        # fetch_espn_week_kickoffs) merged in by team-pair match. An empty
+        # dict here (ESPN fetch failed) just means every game below falls
+        # back to gameday-only ordering/display - never blocks the refresh.
+        espn_kickoffs = fetch_espn_week_kickoffs(season, current_week)
+
         for game in this_week_games:
             if game.get("game_type") != "REG":
                 continue
@@ -219,8 +306,13 @@ def refresh_nfl_points_stats(season: int, current_week: int) -> dict:
             if not home or not away:
                 continue
             gameday = game.get("gameday")
-            db.add(NflPointsGame(team=home, opponent=away, is_home=True, season=season, week=current_week, gameday=gameday))
-            db.add(NflPointsGame(team=away, opponent=home, is_home=False, season=season, week=current_week, gameday=gameday))
+            espn_info = lookup_espn_kickoff(espn_kickoffs, home, away)
+            kickoff_utc = espn_info["kickoff_utc"] if espn_info else None
+            neutral_site = bool(espn_info["neutral_site"]) if espn_info else False
+            db.add(NflPointsGame(team=home, opponent=away, is_home=True, season=season, week=current_week,
+                                  gameday=gameday, kickoff_utc=kickoff_utc, neutral_site=neutral_site))
+            db.add(NflPointsGame(team=away, opponent=home, is_home=False, season=season, week=current_week,
+                                  gameday=gameday, kickoff_utc=kickoff_utc, neutral_site=neutral_site))
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written

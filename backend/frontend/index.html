@@ -5373,6 +5373,12 @@
   // Total Points O/U bet (nflTotalRowHtml) under its MLB-style name.
   function nflPointsCardHtml(gameId, pair, season, week) {
     const gameday = (pair.home && pair.home.gameday) || (pair.away && pair.away.gameday) || null;
+    const kickoffUtc = (pair.home && pair.home.kickoff_utc) || (pair.away && pair.away.kickoff_utc) || null;
+    // Real kickoff time (merged in from ESPN - see nfl_points_sync.
+    // fetch_espn_week_kickoffs) when we have it, 24-hour Pacific, same
+    // format as CFB's formatKickoffPacific. Falls back to the day-only
+    // label only when that lookup failed for this game.
+    const gamedayLabel = kickoffUtc ? formatKickoffPacific(kickoffUtc) : formatGamedayOnly(gameday);
     const expanded = expandedNflLinesGames.has(gameId);
     const tab = activeNflPropTab[gameId] || "lines";
     const awayTeam = pair.away ? pair.away.team : null;
@@ -5394,7 +5400,7 @@
           <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
     return `
       <div class="card">
-        <div class="meta">Season ${season} · Week ${week} · ${formatGamedayOnly(gameday)}</div>
+        <div class="meta">Season ${season} · Week ${week} · ${gamedayLabel}</div>
         ${nflTeamBlockHtml(pair.away, false)}
         ${nflTeamBlockHtml(pair.home, true)}
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
@@ -5424,10 +5430,24 @@
       byGame.get(g.game_id)[g.is_home ? "home" : "away"] = g;
     }
 
-    // Order boxes by real kickoff day (Thursday Night Football first,
-    // Monday Night Football last) - each pair's gameday comes from
-    // either side (same value on both).
+    // Order boxes by REAL kickoff time when we have it (kickoff_utc,
+    // merged in from ESPN's scoreboard - see nfl_points_sync.
+    // fetch_espn_week_kickoffs) - this is what correctly puts an
+    // early-kickoff International Series game (e.g. a Sunday-morning
+    // London/Dublin game) ahead of same-day games that kick off later,
+    // which day-only gameday ordering can't do. Falls back to gameday
+    // (Thursday Night Football first, Monday Night Football last) only
+    // for a pair where the ESPN lookup failed (kickoff_utc missing on
+    // both sides) - never mixes a real time against a missing one, since
+    // a parsed "missing" timestamp would otherwise sort arbitrarily.
     const orderedPairs = Array.from(byGame.entries()).sort(([, pairA], [, pairB]) => {
+      const kickoffA = (pairA.home && pairA.home.kickoff_utc) || (pairA.away && pairA.away.kickoff_utc) || null;
+      const kickoffB = (pairB.home && pairB.home.kickoff_utc) || (pairB.away && pairB.away.kickoff_utc) || null;
+      if (kickoffA && kickoffB) {
+        const ta = new Date(kickoffA).getTime();
+        const tb = new Date(kickoffB).getTime();
+        if (!isNaN(ta) && !isNaN(tb)) return ta - tb;
+      }
       const da = (pairA.home && pairA.home.gameday) || (pairA.away && pairA.away.gameday) || "9999-99-99";
       const db_ = (pairB.home && pairB.home.gameday) || (pairB.away && pairB.away.gameday) || "9999-99-99";
       return da < db_ ? -1 : da > db_ ? 1 : 0;
