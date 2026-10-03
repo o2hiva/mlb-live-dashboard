@@ -1262,6 +1262,7 @@ def cfb_games(db: Session = Depends(get_db)):
             "opp_games_sample": inputs["opp_games_sample"] if inputs else None,
             "moneyline_win_prob": own_win_prob,
             "moneyline_trusted": ml["trusted"],
+            "neutral_site": bool(g.neutral_site),
             "spread": own_spread,
             "spread_provider": g.spread_provider,
             "spread_cover_prob": own_cover_prob,

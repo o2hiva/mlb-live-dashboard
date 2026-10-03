@@ -4493,6 +4493,45 @@
   // that could go stale if the market moves, so bet.line stays None and
   // _grade's own 0.5 default applies against the 1.0/0.0 cover outcome,
   // same convention as CFB Moneyline. ----
+  // Client-side mirror of cfb_points_sync.py's spread_cover_probability -
+  // constants MUST stay numerically identical to that file (SPREAD_HOME_
+  // FIELD_POINTS, SPREAD_VARIANCE_SCALE, DEFAULT_TEAM_OVERDISPERSION,
+  // LOPSIDED_THRESHOLD) since this lets the user type in their OWN spread
+  // line (instead of the real posted one) and see the cover % recompute
+  // instantly in the browser, with no round trip - same "recomputes
+  // instantly" pattern as probAtLeastHits/probKAtLeast above, just for a
+  // continuous Normal-diff model instead of discrete counts.
+  const CFB_SPREAD_HOME_FIELD_POINTS = 3.19;
+  const CFB_SPREAD_VARIANCE_SCALE = 1.0;
+  const CFB_TEAM_OVERDISPERSION = 5.2;
+  const CFB_SPREAD_LOPSIDED_THRESHOLD = 13.0;
+
+  function cfbSpreadCoverProbability(homePredicted, awayPredicted, homeSpread, neutralSite) {
+    if (homePredicted == null || awayPredicted == null || homePredicted <= 0 || awayPredicted <= 0 || homeSpread == null) {
+      return null;
+    }
+    const hfa = neutralSite ? 0 : CFB_SPREAD_HOME_FIELD_POINTS;
+    const predictedDiff = (homePredicted - awayPredicted) + hfa;
+    const varianceDiff = CFB_SPREAD_VARIANCE_SCALE * (CFB_TEAM_OVERDISPERSION * homePredicted + CFB_TEAM_OVERDISPERSION * awayPredicted);
+    const sigma = varianceDiff > 0 ? Math.sqrt(varianceDiff) : 1.0;
+    // P(home covers) = P(diff > -home_spread)
+    return Math.max(0, Math.min(1, 1 - normCdf(-homeSpread, predictedDiff, sigma)));
+  }
+
+  // gameId -> user-entered spread line, always stored in HOME-team
+  // perspective (negative = home favored) regardless of which side's
+  // input box the user actually typed into - same convention main.py
+  // uses for CfbGame.home_spread. null means "no override yet, use the
+  // real posted line".
+  const cfbSpreadOverride = {};
+
+  function updateCfbSpreadLine(gameId, side, value) {
+    const parsed = value === "" ? null : parseFloat(value);
+    if (parsed != null && isNaN(parsed)) return;
+    cfbSpreadOverride[gameId] = parsed == null ? null : (side === "home" ? parsed : -parsed);
+    renderCfbFromCache(); // cheap - recomputes client-side, no network call
+  }
+
   const cfbSpreadBetState = {};
 
   function getCfbSpreadBetState(gameId, side) {
@@ -4573,38 +4612,52 @@
     `;
   }
 
-  // One team's Spread row - team name + real spread + cover% merged into
-  // one grid row with the Market/Kelly/Wager/Profit/Track cells, same
-  // layout as cfbTeamBlockHtml's moneyline row.
-  function cfbSpreadTeamRowHtml(gameId, row, isSecondInCard) {
+  // One team's Spread row - team name + an EDITABLE spread line (defaults
+  // to the real posted line, but the user can type their own and the
+  // cover % recomputes instantly via cfbSpreadCoverProbability, no
+  // network call) + cover% merged into one grid row with the Market/
+  // Kelly/Wager/Profit/Track cells, same layout as cfbTeamBlockHtml's
+  // moneyline row. dataTrusted reflects ONLY whether the points
+  // prediction itself has enough history (independent of whether any
+  // line - real or user-entered - exists yet); coverProb/lopsided are
+  // pre-computed by cfbSpreadSectionHtml from the EFFECTIVE (possibly
+  // overridden) line, same for both this row and its counterpart.
+  function cfbSpreadTeamRowHtml(gameId, row, isSecondInCard, spreadVal, coverProb, dataTrusted, lopsided) {
     if (!row) return "";
     const side = row.is_home ? "home" : "away";
-    const spreadTrusted = row.spread_trusted && row.spread_cover_prob != null && row.spread != null;
-    const coverPct = spreadTrusted ? Math.round(row.spread_cover_prob * 100) : null;
-    const spreadLabel = row.spread != null ? (row.spread >= 0 ? "+" : "") + row.spread.toFixed(1) : null;
     const spacerStyle = isSecondInCard ? "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);" : "";
+    const spreadInputHtml = `<input type="number" step="0.5" value="${spreadVal != null ? spreadVal.toFixed(1) : ""}" placeholder="line" title="Edit the spread line to see the cover % update" style="width:56px; text-align:center;" onchange="updateCfbSpreadLine(${gameId},'${side}',this.value)" />`;
 
-    if (!spreadTrusted) {
-      const reason = row.spread == null ? "no real line posted yet" : "not enough data yet";
+    if (!dataTrusted) {
       return `
         <div style="${spacerStyle}">
-          <div class="teams"><span>${row.team}${spreadLabel != null ? ` ${spreadLabel}` : ""}</span></div>
-          <div class="settings-hint">Spread: ${reason}</div>
+          <div class="teams"><span>${row.team}</span> ${spreadInputHtml}</div>
+          <div class="settings-hint">Spread: not enough data yet</div>
+        </div>`;
+    }
+    if (coverProb == null) {
+      // Prediction is trusted, but there's no line yet - neither a real
+      // posted one nor a user-entered override - to grade against.
+      return `
+        <div style="${spacerStyle}">
+          <div class="teams"><span>${row.team}</span> ${spreadInputHtml}</div>
+          <div class="settings-hint">Spread: no line posted yet - enter one above to see cover %</div>
         </div>`;
     }
 
-    const nameCellHtml = `${row.team} ${spreadLabel} <span class="prob-yes">${coverPct}%</span>`;
+    const coverPct = Math.round(coverProb * 100);
+    const nameCellHtml = `${row.team} <span class="prob-yes">${coverPct}%</span>`;
     return `
       <div style="${spacerStyle}">
         <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
           <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
         </div>
-        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
-          <span style="font-size:1rem; font-weight:600;">${nameCellHtml}</span>
-          ${cfbSpreadBetRowCellsHtml(gameId, side, row.team, row.spread, coverPct)}
+        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0; align-items:center;">
+          <span style="font-size:1rem; font-weight:600;">${nameCellHtml} ${spreadInputHtml}</span>
+          ${cfbSpreadBetRowCellsHtml(gameId, side, row.team, spreadVal, coverPct)}
           <span></span>
         </div>
-        ${row.spread_lopsided ? `<div class="settings-hint" style="margin-top:2px;">⚠ Lopsided line (|spread| ≥ 13) - cover % confirmed overconfident here, use with caution</div>` : ""}
+        ${lopsided ? `<div class="settings-hint" style="margin-top:2px;">⚠ Lopsided line (|spread| ≥ 13) - cover % confirmed overconfident here, use with caution</div>` : ""}
       </div>`;
   }
 
@@ -4613,11 +4666,28 @@
       return `<div><div class="teams"><span>Spread</span></div><div class="settings-hint">Not enough data yet</div></div>`;
     }
     const provider = (homeRow && homeRow.spread_provider) || (awayRow && awayRow.spread_provider) || null;
+    const neutralSite = !!((homeRow && homeRow.neutral_site) || (awayRow && awayRow.neutral_site));
+    const homePredicted = homeRow ? homeRow.predicted_mean : null;
+    const awayPredicted = awayRow ? awayRow.predicted_mean : null;
+    const dataTrusted = homePredicted != null && awayPredicted != null && homePredicted > 0 && awayPredicted > 0;
+
+    // Default (home-perspective) line is the real posted one if either
+    // side carries it; a user override replaces it entirely once set.
+    const defaultHomeSpread = homeRow && homeRow.spread != null ? homeRow.spread
+      : (awayRow && awayRow.spread != null ? -awayRow.spread : null);
+    const override = cfbSpreadOverride[gameId];
+    const effectiveHomeSpread = override !== undefined && override !== null ? override : defaultHomeSpread;
+    const isAdjusted = override !== undefined && override !== null;
+
+    const homeCoverProb = dataTrusted ? cfbSpreadCoverProbability(homePredicted, awayPredicted, effectiveHomeSpread, neutralSite) : null;
+    const awayCoverProb = homeCoverProb != null ? 1 - homeCoverProb : null;
+    const lopsided = effectiveHomeSpread != null && Math.abs(effectiveHomeSpread) >= CFB_SPREAD_LOPSIDED_THRESHOLD;
+
     return `
       <div>
-        ${cfbSpreadTeamRowHtml(gameId, awayRow, false)}
-        ${cfbSpreadTeamRowHtml(gameId, homeRow, true)}
-        ${provider ? `<div class="meta" style="margin-top:8px; margin-bottom:0;">Line: ${provider}</div>` : ""}
+        ${cfbSpreadTeamRowHtml(gameId, awayRow, false, effectiveHomeSpread != null ? -effectiveHomeSpread : null, awayCoverProb, dataTrusted, lopsided)}
+        ${cfbSpreadTeamRowHtml(gameId, homeRow, true, effectiveHomeSpread, homeCoverProb, dataTrusted, lopsided)}
+        ${provider ? `<div class="meta" style="margin-top:8px; margin-bottom:0;">Line: ${provider}${isAdjusted ? " (adjusted)" : ""}</div>` : ""}
       </div>`;
   }
 
