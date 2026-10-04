@@ -4427,7 +4427,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             game_pk: null, bet_type: "cfb_moneyline_" + side, batter_name: teamName + " ML",
-            batter_id: gameId, team_side: side, yn: "yes",
+            batter_id: gameId, team_side: side, yn: "yes", spread_line: spreadVal,
             model_probability: modelProb, market_probability: marketPct,
             wager: wager, potential_profit: profit,
             cfb_season: cfbDataCache ? cfbDataCache.season : null,

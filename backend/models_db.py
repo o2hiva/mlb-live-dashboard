@@ -292,6 +292,7 @@ class TrackedBet(Base):
     # team was on - reusing existing columns rather than adding more.
     cfb_season = Column(Integer, nullable=True)
     cfb_week = Column(Integer, nullable=True)
+    spread_line = Column(Float, nullable=True)  # CFB Spread only: the line the user actually bet at, own-team perspective (Hawaii +10.5 -> 10.5). Kept separate from `line`, which _grade treats as a win/loss threshold.
 
     # NFL Team Points / Game Total only: season/week needed to re-fetch this
     # week's real games from api.nfldata.org at grading time (that API has no

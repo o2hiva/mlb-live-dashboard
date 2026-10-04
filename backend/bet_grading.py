@@ -181,6 +181,7 @@ clean win for "yes" (>=), never a push. Pitcher K lines are always
 X.5, so an exact tie is mathematically impossible - also never a push.
 """
 import logging
+import re
 from datetime import datetime
 
 import mlb_client
@@ -407,23 +408,37 @@ def _cfb_spread_actual(bet: TrackedBet, cfb_games_cache: dict, cfb_lines_cache: 
     if games is None:
         return None
 
-    if cache_key not in cfb_lines_cache:
-        try:
-            cfb_lines_cache[cache_key] = {
-                lg.get("id"): lg for lg in cfb_points_sync.get_week_lines(bet.cfb_season, bet.cfb_week)
-            }
-        except Exception:
-            log.exception("Failed to fetch CFB week %s/%s lines for grading", bet.cfb_season, bet.cfb_week)
-            cfb_lines_cache[cache_key] = None
-    line_games_by_id = cfb_lines_cache[cache_key]
-    if line_games_by_id is None:
-        return None
-    line_game = line_games_by_id.get(bet.batter_id)
-    if line_game is None:
-        return None
-    _provider, home_spread = cfb_points_sync.pick_provider_line(line_game)
-    if home_spread is None:
-        return None
+    # The line the user actually bet at, own-team perspective (Hawaii
+    # +10.5 -> +10.5). Preferred source is bet.spread_line, saved at
+    # track time. Older bets lack it, so fall back to the number in the
+    # display label ("Hawaii +10.5"). Only if neither exists do we
+    # fall back to re-fetching the real posted line (converted to this
+    # side's perspective) - that fallback can differ from what the user
+    # bet if they adjusted the line, which is why it is last.
+    own_spread = bet.spread_line
+    if own_spread is None and bet.batter_name:
+        m = re.search(r"([+-]?\d+(?:\.\d+)?)\s*$", bet.batter_name)
+        if m:
+            own_spread = float(m.group(1))
+    if own_spread is None:
+        if cache_key not in cfb_lines_cache:
+            try:
+                cfb_lines_cache[cache_key] = {
+                    lg.get("id"): lg for lg in cfb_points_sync.get_week_lines(bet.cfb_season, bet.cfb_week)
+                }
+            except Exception:
+                log.exception("Failed to fetch CFB week %s/%s lines for grading", bet.cfb_season, bet.cfb_week)
+                cfb_lines_cache[cache_key] = None
+        line_games_by_id = cfb_lines_cache[cache_key]
+        if line_games_by_id is None:
+            return None
+        line_game = line_games_by_id.get(bet.batter_id)
+        if line_game is None:
+            return None
+        _provider, home_spread = cfb_points_sync.pick_provider_line(line_game)
+        if home_spread is None:
+            return None
+        own_spread = home_spread if bet.team_side == "home" else -home_spread
 
     for game in games:
         if game.get("id") == bet.batter_id:
@@ -432,12 +447,13 @@ def _cfb_spread_actual(bet: TrackedBet, cfb_games_cache: dict, cfb_lines_cache: 
             home_pts, away_pts = game.get("homePoints"), game.get("awayPoints")
             if home_pts is None or away_pts is None:
                 return None
-            home_margin_vs_line = (home_pts - away_pts) + home_spread
             if bet.team_side == "home":
-                return 1.0 if home_margin_vs_line > 0 else 0.0
-            if bet.team_side == "away":
-                return 1.0 if home_margin_vs_line < 0 else 0.0
-            return None
+                own_margin = home_pts - away_pts
+            elif bet.team_side == "away":
+                own_margin = away_pts - home_pts
+            else:
+                return None
+            return 1.0 if own_margin + own_spread > 0 else 0.0
     return None
 
 

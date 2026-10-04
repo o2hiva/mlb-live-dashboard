@@ -68,6 +68,7 @@ _ensure_column("batter_platoon_splits", "bat_side", "VARCHAR")
 _ensure_column("batter_platoon_splits", "bat_side_updated_at", "TIMESTAMP")
 _ensure_column("tracked_bets", "cfb_season", "INTEGER")
 _ensure_column("tracked_bets", "cfb_week", "INTEGER")
+_ensure_column("tracked_bets", "spread_line", "FLOAT")
 _ensure_column("tracked_bets", "nfl_season", "INTEGER")
 _ensure_column("tracked_bets", "nfl_week", "INTEGER")
 _ensure_column("nfl_qb_defense_prop_stats", "passing_completions_sum", "INTEGER DEFAULT 0")
@@ -1637,6 +1638,7 @@ class TrackedBetCreate(BaseModel):
     potential_profit: float | None = None
     cfb_season: int | None = None  # CFB team-points bets only - needed to re-fetch the real final score at grading time
     cfb_week: int | None = None
+    spread_line: float | None = None  # CFB Spread bets only - the line actually bet at, own-team perspective
     nfl_season: int | None = None  # NFL team-points/game-total bets only - needed to re-fetch that week's real games at grading time (no numeric id to store, see nfl_points_sync.py)
     nfl_week: int | None = None
     external_player_id: str | None = None  # gsis_id, for NFL rushing yards / by-position props - batter_id can't hold this (see models_db.py)
@@ -1695,6 +1697,33 @@ def manual_resolve_bet(tracked_bet_id: int, result: str, actual_value: float | N
         row.actual_value = actual_value
     db.commit()
     return {"id": row.id, "resolved": row.resolved, "result": row.result, "actual_value": row.actual_value}
+
+
+@app.post("/api/admin/regrade-cfb-spread")
+def regrade_cfb_spread(name: str, db: Session = Depends(get_db)):
+    """Un-resolves already-graded CFB Spread bets whose label contains
+    `name` (e.g. "Hawaii") and re-grades them against the line they were
+    bet at. Returns each bet's before/after result."""
+    from models_db import TrackedBet
+    import bet_grading
+    rows = (
+        db.query(TrackedBet)
+        .filter(TrackedBet.bet_type.in_(["cfb_spread_home", "cfb_spread_away"]))
+        .filter(TrackedBet.batter_name.ilike(f"%{name}%"))
+        .all()
+    )
+    before = {r.id: r.result for r in rows}
+    for r in rows:
+        r.resolved = False
+        r.result = None
+        r.actual_value = None
+    db.commit()
+    bet_grading.grade_pending_bets()
+    db.expire_all()
+    return [
+        {"id": r.id, "bet": r.batter_name, "before": before[r.id], "after": r.result, "resolved": r.resolved}
+        for r in db.query(TrackedBet).filter(TrackedBet.id.in_(list(before))).all()
+    ]
 
 
 @app.get("/api/bet-tracker/tracked")
