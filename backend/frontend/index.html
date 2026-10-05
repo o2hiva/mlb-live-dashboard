@@ -398,6 +398,9 @@
     <h2 style="margin-top:32px;">Hit rates by bet type</h2>
     <div class="platform-grid" id="bet-type-hit-rate-boxes">Loading...</div>
 
+    <h2 style="margin-top:32px;">Hit Rates by Month</h2>
+    <div id="monthly-hit-rate-table">Loading...</div>
+
     <h2 style="margin-top:32px;">Hit Rates by Week</h2>
     <div id="weekly-hit-rate-table">Loading...</div>
 
@@ -2598,6 +2601,60 @@
     return `${fmt(monday)} - ${fmt(sunday)}`;
   }
 
+  // Monthly roll-up shown above the weekly table. Same bucketing date as
+  // the weekly table (game_date, else the Pacific date the bet was placed)
+  // so the two tables always agree on which day a bet belongs to. Starts
+  // at October 2026 - anything dated before MONTHLY_TABLE_START is left
+  // out on purpose.
+  const MONTHLY_TABLE_START = "2026-10-01";
+
+  function formatMonthLabel(monthKey) {
+    const [y, m] = monthKey.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", year: "numeric" });
+  }
+
+  function renderMonthlyHitRateTable(bets) {
+    const container = document.getElementById("monthly-hit-rate-table");
+    const resolved = bets.filter(b => b.resolved && (b.game_date || b.placed_at));
+
+    const byMonth = {};
+    for (const b of resolved) {
+      const dateStr = b.game_date || pacificDateStr(b.placed_at);
+      if (!dateStr || dateStr < MONTHLY_TABLE_START) continue;
+      const monthKey = dateStr.slice(0, 7);
+      if (!byMonth[monthKey]) byMonth[monthKey] = [];
+      byMonth[monthKey].push(b);
+    }
+
+    // Current month always appears first, even with no graded bets yet.
+    const thisMonth = pacificDateStr(new Date()).slice(0, 7);
+    if (thisMonth >= MONTHLY_TABLE_START.slice(0, 7) && !byMonth[thisMonth]) byMonth[thisMonth] = [];
+
+    const months = Object.keys(byMonth).sort().reverse();
+    const header = `
+      <div class="weekly-row weekly-row-header">
+        <span>Month</span><span>Bets</span><span>Wins</span><span>Losses</span><span>Hit Rate</span><span>Profit/Loss</span>
+      </div>`;
+    const rows = months.map(monthKey => {
+      const monthBets = byMonth[monthKey];
+      const rate = hitRateFor(monthBets);
+      const pl = totalProfitLoss(monthBets);
+      const isCurrent = monthKey === thisMonth;
+      const rowClass = isCurrent ? "weekly-row weekly-row-current" : "weekly-row";
+      const label = formatMonthLabel(monthKey) + (isCurrent ? " (This Month)" : "");
+      return `
+        <div class="${rowClass}">
+          <span>${label}</span>
+          <span>${rate ? rate.total : 0}</span>
+          <span class="prob-yes">${rate ? rate.wins : 0}</span>
+          <span class="prob-no">${rate ? rate.total - rate.wins : 0}</span>
+          <span>${rate ? rate.pct + "%" : "—"}</span>
+          ${profitLossHtml(pl)}
+        </div>`;
+    }).join("");
+    container.innerHTML = header + rows;
+  }
+
   function renderWeeklyHitRateTable(bets) {
     const container = document.getElementById("weekly-hit-rate-table");
     // game_date only exists for bets tied to an MLB game_pk - every NFL/
@@ -2660,6 +2717,7 @@
       const bets = await res.json();
       renderHitRateBoxes(bets);
       renderBetTypeHitRateBoxes(bets);
+      renderMonthlyHitRateTable(bets);
       renderWeeklyHitRateTable(bets);
       if (!bets.length) {
         container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
