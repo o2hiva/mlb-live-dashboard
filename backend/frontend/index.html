@@ -3226,17 +3226,17 @@
     }
   }
 
-  // One team's Passing Yards O/U box - same hits-batter grid look as
-  // nflTeamBlockHtml's Team Points row, just this prop's own Normal
-  // distribution/state (unchanged from the old standalone tab).
-  function nflPassingBlockHtml(g) {
-    if (!g) {
-      return `<div class="settings-hint">No Passing Yards data for this team yet.</div>`;
-    }
-    if (g.predicted_mean == null) {
+  // Passing Yards O/U section for one team - same section layout as
+  // nflDvpPropSectionHtml (label + index pair + mean, then the O/U row),
+  // but driven by this prop's own older Normal model and its own bet
+  // state (getNflBetState, keyed by team) so existing tracked
+  // nfl_passing_yards bets keep working exactly as before.
+  function nflPassingYardsSectionHtml(g, isFirst) {
+    const spacerStyle = isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
+    if (!g || g.predicted_mean == null) {
       return `
-        <div>
-          <div class="teams"><span>${g.qb_name || g.team} <span class="meta" style="margin-bottom:0;">(${g.team})</span></span></div>
+        <div style="${spacerStyle}">
+          <div class="meta" style="margin-bottom:4px;">Passing Yards</div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
     }
@@ -3257,12 +3257,12 @@
     const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
 
     return `
-      <div>
-        <div class="teams">
-          <span>${g.qb_name || "TBD"} (${g.team})</span>
+      <div style="${spacerStyle}">
+        <div class="teams" style="margin-bottom:4px;">
+          <span>Passing Yards</span>
+          <span class="meta" style="margin-bottom:0;">${qbIndexStr} vs ${oppIndexStr}</span>
           <span class="score">${g.predicted_mean.toFixed(1)}</span>
         </div>
-        <div class="meta">vs ${g.opponent} · Index ${qbIndexStr} vs ${oppIndexStr}</div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
         </div>
@@ -3283,17 +3283,53 @@
       </div>`;
   }
 
-  // Both teams' Passing Yards boxes for one game - looked up from the
-  // already-fetched nflDataCache by team name (one row per team, QB
-  // passing is a single-starter prop so no committee-backfield case
-  // here, unlike Rushing below).
+  // Fetch-only for the QB Defense-vs-Position data (attempts, completions,
+  // passing TDs) the Passing tab needs - same /api/nfl/qb-defense-props
+  // feed and nflDvpDataCache the "By Position" tab uses, so a QB's line/
+  // market/tracked state for these props is shared between the two views.
+  async function fetchNflDvpData() {
+    try {
+      const res = await fetch(`${API_BASE}/api/nfl/qb-defense-props`);
+      nflDvpDataCache = await res.json();
+    } catch (e) {
+      // Leave any previously loaded cache alone - those props just show
+      // "Not enough data yet" inside the card if there was none.
+    }
+  }
+
+  // One team's whole Passing stack, in the order: Passing Attempts,
+  // Passing Completions, Passing Yards, Passing TDs.
+  function nflPassingTeamHtml(team, dvpRow, yardsRow, isSecondInCard) {
+    const spacerStyle = isSecondInCard ? "margin-top:18px; padding-top:18px; border-top:1px solid rgba(255,255,255,0.12);" : "";
+    const qbName = (dvpRow && dvpRow.qb_name) || (yardsRow && yardsRow.qb_name) || null;
+    const title = qbName ? `${qbName} (${team})` : team;
+    const dvpSection = (prop, isFirst) => dvpRow
+      ? nflDvpPropSectionHtml(prop, dvpRow, isFirst)
+      : `<div style="${isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);"}">
+           <div class="meta" style="margin-bottom:4px;">${NFL_DVP_LABELS[prop]}</div>
+           <div class="settings-hint">Not enough data yet</div>
+         </div>`;
+    return `
+      <div style="${spacerStyle}">
+        <div class="teams" style="margin-bottom:8px;"><span>${title}</span></div>
+        ${dvpSection("passing_attempts", true)}
+        ${dvpSection("passing_completions", false)}
+        ${nflPassingYardsSectionHtml(yardsRow, false)}
+        ${dvpSection("passing_tds", false)}
+      </div>`;
+  }
+
+  // Both teams' Passing stacks for one game - Yards looked up from the
+  // already-fetched nflDataCache and Attempts/Completions/TDs from
+  // nflDvpDataCache, both by team name (one QB row per team).
   function nflPassingSectionHtml(awayTeam, homeTeam) {
     if (!nflDataCache || !nflDataCache.games) {
-      return `<div class="settings-hint">No Passing Yards data yet - click Refresh Stats above.</div>`;
+      return `<div class="settings-hint">No Passing data yet - click Refresh Stats above.</div>`;
     }
-    const awayG = nflDataCache.games.find(g => g.team === awayTeam);
-    const homeG = nflDataCache.games.find(g => g.team === homeTeam);
-    return `${nflPassingBlockHtml(awayG)}${nflPassingBlockHtml(homeG)}`;
+    const dvpQbs = (nflDvpDataCache && nflDvpDataCache.qbs) || [];
+    const find = (list, team) => list.find(g => g.team === team);
+    return `${nflPassingTeamHtml(awayTeam, find(dvpQbs, awayTeam), find(nflDataCache.games, awayTeam), false)}
+            ${nflPassingTeamHtml(homeTeam, find(dvpQbs, homeTeam), find(nflDataCache.games, homeTeam), true)}`;
   }
 
   // ---- NFL Rushing Yards prop - same estimation-forced pattern as NFL
@@ -3543,10 +3579,17 @@
     return nbinomSf(thresholdInt, r, p);
   }
 
+  // The By Position tab and each NFL game box's Passing tab share the
+  // same per-QB bet state, so any edit must redraw both.
+  function rerenderNflDvpViews() {
+    renderNflDvpFromCache();
+    renderNflPointsFromCache();
+  }
+
   function updateNflDvpThreshold(prop, gsisId, value) {
     const state = getNflDvpBetState(prop, gsisId);
     state.threshold = parseFloat(value) || NFL_DVP_DEFAULT_THRESHOLD[prop];
-    renderNflDvpFromCache();
+    rerenderNflDvpViews();
   }
 
   function updateNflDvpBetField(prop, gsisId, field, value) {
@@ -3558,7 +3601,7 @@
     } else {
       state[field] = value;
     }
-    renderNflDvpFromCache();
+    rerenderNflDvpViews();
   }
 
   async function toggleNflDvpTrack(prop, gsisId, checked, qbName, team, line, modelProb, marketPct, wager, profit) {
@@ -3606,7 +3649,7 @@
       state.tracked = false;
       state.trackedId = null;
     }
-    renderNflDvpFromCache();
+    rerenderNflDvpViews();
   }
 
   let nflDvpDataCache = null;
@@ -5346,7 +5389,7 @@
       nflPointsDataCache = await res.json();
       if (nflPointsDataCache.season != null) document.getElementById("nfl-points-season-input").value = nflPointsDataCache.season;
       if (nflPointsDataCache.week != null) document.getElementById("nfl-points-week-input").value = nflPointsDataCache.week;
-      await Promise.all([fetchNflPassingData(), fetchNflRushingData()]);
+      await Promise.all([fetchNflPassingData(), fetchNflRushingData(), fetchNflDvpData()]);
       renderNflPointsFromCache();
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load NFL Team Points data.</div>`;
@@ -5366,12 +5409,13 @@
       return;
     }
     const statusEl = document.getElementById("nfl-points-refresh-status");
-    statusEl.textContent = `Refreshing NFL Team Points, Passing Yards and Rushing Yards for ${season} week ${week} - this fetches real data and can take a little while...`;
+    statusEl.textContent = `Refreshing NFL Team Points, Passing and Rushing Yards for ${season} week ${week} - this fetches real data and can take a little while...`;
     try {
       await Promise.all([
         fetch(`${API_BASE}/api/admin/refresh-nfl-points-stats?season=${season}&week=${week}`),
         fetch(`${API_BASE}/api/admin/refresh-nfl-stats?season=${season}&week=${week}`),
         fetch(`${API_BASE}/api/admin/refresh-nfl-rushing-stats?season=${season}&week=${week}`),
+        fetch(`${API_BASE}/api/admin/refresh-nfl-qb-defense-props-stats?season=${season}&week=${week}`),
       ]);
       statusEl.textContent = `Refreshed for ${season} week ${week}.`;
       loadNflPointsTab();
@@ -5647,7 +5691,7 @@
     const expandedHtml = expanded ? `
           <div class="lineup-tabs">
             <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','lines')">Game Lines</span>
-            <span class="lineup-tab ${tab === "passing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','passing')">Passing Yards</span>
+            <span class="lineup-tab ${tab === "passing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','passing')">Passing</span>
             <span class="lineup-tab ${tab === "rushing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','rushing')">Rushing Yards</span>
           </div>
           <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
