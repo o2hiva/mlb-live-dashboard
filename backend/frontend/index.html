@@ -173,6 +173,9 @@
   .bybets-row > span, .bybets-row-header > span,
   .nfl-row > span, .nfl-row-header > span,
   .nfl-dvp-row > span, .nfl-dvp-row-header > span { text-align: center; }
+  /* Inside the game squares, the name column (team / batter / QB names)
+     stays left-aligned; every other cell stays centered per the pass above. */
+  .card .hits-batter > span:first-child { text-align: left; }
 </style>
 </head>
 <body>
