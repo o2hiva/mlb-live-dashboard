@@ -150,21 +150,29 @@
   /* Every column after the label is centered - in the header AND in the
      rows - so the .prob-yes/.prob-no cells (which center themselves) line
      up with their headers instead of sitting off to one side. */
-  .weekly-row > span:not(:first-child) { text-align: center; }
+  .weekly-row > span { text-align: center; }
   .tracked-bets-list { font-size: 0.85rem; }
   .tracked-bet-row {
     display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.7fr 0.6fr 0.6fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
   }
-  /* .prob-yes/.prob-no center themselves globally, which pushed Result and
-     Profit off from their left-aligned headers - keep them left here. */
-  .tracked-bet-row .prob-yes, .tracked-bet-row .prob-no { text-align: left; }
+  /* Every cell centered, header and rows alike (including the
+     .prob-yes/.prob-no ones, which already center themselves). */
+  .tracked-bet-row > span, .tracked-bet-row > div { text-align: center; }
   .tracked-bet-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
   .tracked-bet-remove { color: var(--live); cursor: pointer; font-size: 0.75rem; text-decoration: underline; }
-  .tracked-bet-grade { display: flex; gap: 8px; }
+  .tracked-bet-grade { display: flex; gap: 8px; justify-content: center; }
   .tracked-bet-grade span { cursor: pointer; font-weight: 700; font-size: 0.8rem; text-decoration: underline; }
   .tracked-bet-grade .grade-w { color: #4ade80; }
   .tracked-bet-grade .grade-l { color: #f87171; }
+  /* Alignment pass: every data cell centered under its (already
+     centered) header, across the MLB/NFL/CFB/NHL prop grids and the wide
+     by-bets / NFL tables. The old rule right-aligning a row's last span
+     is overridden here so e.g. Profit lines up with its header. */
+  .hits-batter > span, .hits-batter > span:last-child { text-align: center; }
+  .bybets-row > span, .bybets-row-header > span,
+  .nfl-row > span, .nfl-row-header > span,
+  .nfl-dvp-row > span, .nfl-dvp-row-header > span { text-align: center; }
 </style>
 </head>
 <body>
