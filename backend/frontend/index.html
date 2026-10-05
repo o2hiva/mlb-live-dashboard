@@ -147,11 +147,18 @@
   }
   .weekly-row-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
   .weekly-row-current { font-weight: 600; }
+  /* Every column after the label is centered - in the header AND in the
+     rows - so the .prob-yes/.prob-no cells (which center themselves) line
+     up with their headers instead of sitting off to one side. */
+  .weekly-row > span:not(:first-child) { text-align: center; }
   .tracked-bets-list { font-size: 0.85rem; }
   .tracked-bet-row {
     display: grid; grid-template-columns: 1.3fr 1fr 0.5fr 0.5fr 0.6fr 0.6fr 0.8fr 0.7fr 0.6fr 0.6fr;
     gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
   }
+  /* .prob-yes/.prob-no center themselves globally, which pushed Result and
+     Profit off from their left-aligned headers - keep them left here. */
+  .tracked-bet-row .prob-yes, .tracked-bet-row .prob-no { text-align: left; }
   .tracked-bet-header { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; }
   .tracked-bet-remove { color: var(--live); cursor: pointer; font-size: 0.75rem; text-decoration: underline; }
   .tracked-bet-grade { display: flex; gap: 8px; }
