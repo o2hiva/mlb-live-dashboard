@@ -3226,67 +3226,129 @@
     }
   }
 
-  // Passing Yards O/U section for one team - same section layout as
-  // nflDvpPropSectionHtml (label + index pair + mean, then the O/U row),
-  // but driven by this prop's own older Normal model and its own bet
-  // state (getNflBetState, keyed by team) so existing tracked
-  // nfl_passing_yards bets keep working exactly as before.
-  function nflPassingYardsSectionHtml(g, isFirst) {
-    const spacerStyle = isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
-    if (!g || g.predicted_mean == null) {
-      return `
-        <div style="${spacerStyle}">
-          <div class="meta" style="margin-bottom:4px;">Passing Yards</div>
-          <div class="settings-hint">Not enough data yet</div>
-        </div>`;
-    }
+  // ---- NFL game box "Passing" tab. One block PER STAT (Passing Attempts,
+  // Passing Completions, Passing Yards, Passing TDs, in that order), each
+  // listing the AWAY QB's line then the HOME QB's line under one shared
+  // column header, instead of one block per QB. Attempts/Completions/TDs
+  // come from the QB Defense-vs-Position feed (same nflDvpDataCache and
+  // per-QB bet state as the By Position tab); Yards keeps its own older
+  // model and per-team bet state so existing nfl_passing_yards tracked
+  // bets work unchanged. ----
+  const NFL_PASSING_GRID = "grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;";
+
+  // Name line for one QB inside a stat block: "Name (TEAM)", index pair, mean.
+  function nflPassingQbLineHtml(qbName, team, meanStr, qbIndex, oppIndex) {
+    const idxStr = (qbIndex != null && oppIndex != null) ? `${qbIndex.toFixed(2)} vs ${oppIndex.toFixed(2)}` : "";
+    return `
+      <div class="teams" style="margin-top:8px; margin-bottom:2px;">
+        <span>${qbName || "TBD"} (${team})</span>
+        <span class="meta" style="margin-bottom:0;">${idxStr}</span>
+        <span class="score">${meanStr}</span>
+      </div>`;
+  }
+
+  function nflPassingNoDataHtml(qbName, team) {
+    return `
+      <div style="margin-top:8px;">
+        <div class="teams" style="margin-bottom:2px;"><span>${qbName || "TBD"} (${team})</span></div>
+        <div class="settings-hint">Not enough data yet</div>
+      </div>`;
+  }
+
+  // Shared O/U + Yes/No + Market/Kelly/Wager/Profit/Track row. The caller
+  // supplies the already-built handler snippets so the same markup serves
+  // both the DvP props and the older Yards state.
+  function nflPassingBetRowHtml(cfg) {
+    const { line, step, yesPct, noPct, state, wager, profit, onThreshold, onField, onTrack } = cfg;
+    const marketVal = state.market != null ? state.market : "";
+    const wagerHtml = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="${onField("manualWager", "this.value")}" />`;
+    return `
+      <div class="hits-batter" style="${NFL_PASSING_GRID}">
+        <input type="number" min="0" step="${step}" value="${line}" style="text-align:center;" onchange="${onThreshold("this.value")}" />
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="${onField("yn", "this.value")}">
+          <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+          <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+        </select>
+        <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="${onField("market", "this.value")}" />
+        <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="${onField("useKelly", "this.checked")}" />
+        ${wagerHtml}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="${onTrack}" />
+      </div>`;
+  }
+
+  // One QB's row for a DvP-backed prop (attempts / completions / TDs).
+  function nflPassingDvpQbHtml(prop, g, team) {
+    if (!g) return nflPassingNoDataHtml(null, team);
+    const mean = g[`${prop}_mean`];
+    if (mean == null || g.qb_gsis_id == null) return nflPassingNoDataHtml(g.qb_name, team);
+
+    const state = getNflDvpBetState(prop, g.qb_gsis_id);
+    const line = state.threshold;
+    const yesPct = probNflDvpAtLeast(prop, mean, line) * 100;
+    const noPct = 100 - yesPct;
+    const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const qbEsc = (g.qb_name || "").replace(/'/g, "\\'");
+    const trackArgs = `'${prop}','${g.qb_gsis_id}',this.checked,'${qbEsc}','${g.team}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const meanStr = prop === "passing_tds" ? mean.toFixed(2) : mean.toFixed(1);
+
+    return nflPassingQbLineHtml(g.qb_name, team, meanStr, g[`${prop}_qb_index`], g[`${prop}_opp_index`]) +
+      nflPassingBetRowHtml({
+        line, step: NFL_DVP_THRESHOLD_STEP[prop], yesPct, noPct, state, wager, profit,
+        onThreshold: v => `updateNflDvpThreshold('${prop}','${g.qb_gsis_id}',${v})`,
+        onField: (field, v) => `updateNflDvpBetField('${prop}','${g.qb_gsis_id}','${field}',${v})`,
+        onTrack: `toggleNflDvpTrack(${trackArgs})`,
+      });
+  }
+
+  // One QB's row for Passing Yards (older model, per-team bet state).
+  function nflPassingYardsQbHtml(g, team) {
+    if (!g || g.predicted_mean == null) return nflPassingNoDataHtml(g ? g.qb_name : null, team);
+
     const state = getNflBetState(g.team);
     const line = state.threshold;
     const yesPct = probNflOverAtLeast(g.predicted_mean, line) * 100;
     const noPct = 100 - yesPct;
-    const modelPct = state.yn === "yes" ? yesPct : noPct;
-    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
     const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
     const profit = profitIfWon(wager, state.market);
-    const marketVal = state.market != null ? state.market : "";
-    const wagerHtml = state.useKelly
-      ? `<span>$${wager.toFixed(2)}</span>`
-      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNflBetField('${g.team}','manualWager',this.value)" />`;
-    const trackArgs = `'${g.team}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
-    const qbIndexStr = g.qb_index != null ? g.qb_index.toFixed(2) : "—";
-    const oppIndexStr = g.opp_index != null ? g.opp_index.toFixed(2) : "—";
+    const qbEsc = (g.qb_name || "").replace(/'/g, "\\'");
+    const trackArgs = `'${g.team}',this.checked,'${qbEsc}',${line},${modelProb},${state.market},${wager},${profit}`;
 
+    return nflPassingQbLineHtml(g.qb_name, team, g.predicted_mean.toFixed(1), g.qb_index, g.opp_index) +
+      nflPassingBetRowHtml({
+        line, step: 10, yesPct, noPct, state, wager, profit,
+        onThreshold: v => `updateNflThreshold('${g.team}',${v})`,
+        onField: (field, v) => `updateNflBetField('${g.team}','${field}',${v})`,
+        onTrack: `toggleNflTrack(${trackArgs})`,
+      });
+  }
+
+  // Stat heading + the shared column header, then the away QB's row and
+  // the home QB's row underneath.
+  function nflPassingStatHtml(label, isFirst, awayHtml, homeHtml) {
+    const spacerStyle = isFirst ? "" : "margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);";
     return `
       <div style="${spacerStyle}">
-        <div class="teams" style="margin-bottom:4px;">
-          <span>Passing Yards</span>
-          <span class="meta" style="margin-bottom:0;">${qbIndexStr} vs ${oppIndexStr}</span>
-          <span class="score">${g.predicted_mean.toFixed(1)}</span>
-        </div>
-        <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
+        <div class="meta" style="margin-bottom:4px;">${label}</div>
+        <div class="hits-batter hits-batter-header" style="${NFL_PASSING_GRID}">
           <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
         </div>
-        <div class="hits-batter" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
-          <input type="number" min="1" step="10" value="${line}" style="text-align:center;" onchange="updateNflThreshold('${g.team}',this.value)" />
-          <span class="prob-yes">${Math.round(yesPct)}%</span>
-          <span class="prob-no">${Math.round(noPct)}%</span>
-          <select onchange="updateNflBetField('${g.team}','yn',this.value)">
-            <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
-            <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
-          </select>
-          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNflBetField('${g.team}','market',this.value)" />
-          <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNflBetField('${g.team}','useKelly',this.checked)" />
-          ${wagerHtml}
-          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
-          <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTrack(${trackArgs})" />
-        </div>
+        ${awayHtml}
+        ${homeHtml}
       </div>`;
   }
 
   // Fetch-only for the QB Defense-vs-Position data (attempts, completions,
-  // passing TDs) the Passing tab needs - same /api/nfl/qb-defense-props
-  // feed and nflDvpDataCache the "By Position" tab uses, so a QB's line/
-  // market/tracked state for these props is shared between the two views.
+  // passing TDs) - same /api/nfl/qb-defense-props feed and nflDvpDataCache
+  // the "By Position" tab uses, so a QB's line/market/tracked state for
+  // these props is shared between the two views.
   async function fetchNflDvpData() {
     try {
       const res = await fetch(`${API_BASE}/api/nfl/qb-defense-props`);
@@ -3297,39 +3359,24 @@
     }
   }
 
-  // One team's whole Passing stack, in the order: Passing Attempts,
-  // Passing Completions, Passing Yards, Passing TDs.
-  function nflPassingTeamHtml(team, dvpRow, yardsRow, isSecondInCard) {
-    const spacerStyle = isSecondInCard ? "margin-top:18px; padding-top:18px; border-top:1px solid rgba(255,255,255,0.12);" : "";
-    const qbName = (dvpRow && dvpRow.qb_name) || (yardsRow && yardsRow.qb_name) || null;
-    const title = qbName ? `${qbName} (${team})` : team;
-    const dvpSection = (prop, isFirst) => dvpRow
-      ? nflDvpPropSectionHtml(prop, dvpRow, isFirst)
-      : `<div style="${isFirst ? "" : "margin-top:14px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.06);"}">
-           <div class="meta" style="margin-bottom:4px;">${NFL_DVP_LABELS[prop]}</div>
-           <div class="settings-hint">Not enough data yet</div>
-         </div>`;
-    return `
-      <div style="${spacerStyle}">
-        <div class="teams" style="margin-bottom:8px;"><span>${title}</span></div>
-        ${dvpSection("passing_attempts", true)}
-        ${dvpSection("passing_completions", false)}
-        ${nflPassingYardsSectionHtml(yardsRow, false)}
-        ${dvpSection("passing_tds", false)}
-      </div>`;
-  }
-
-  // Both teams' Passing stacks for one game - Yards looked up from the
-  // already-fetched nflDataCache and Attempts/Completions/TDs from
-  // nflDvpDataCache, both by team name (one QB row per team).
   function nflPassingSectionHtml(awayTeam, homeTeam) {
     if (!nflDataCache || !nflDataCache.games) {
       return `<div class="settings-hint">No Passing data yet - click Refresh Stats above.</div>`;
     }
     const dvpQbs = (nflDvpDataCache && nflDvpDataCache.qbs) || [];
     const find = (list, team) => list.find(g => g.team === team);
-    return `${nflPassingTeamHtml(awayTeam, find(dvpQbs, awayTeam), find(nflDataCache.games, awayTeam), false)}
-            ${nflPassingTeamHtml(homeTeam, find(dvpQbs, homeTeam), find(nflDataCache.games, homeTeam), true)}`;
+    const awayDvp = find(dvpQbs, awayTeam), homeDvp = find(dvpQbs, homeTeam);
+    const awayYds = find(nflDataCache.games, awayTeam), homeYds = find(nflDataCache.games, homeTeam);
+    return [
+      nflPassingStatHtml("Passing Attempts", true,
+        nflPassingDvpQbHtml("passing_attempts", awayDvp, awayTeam), nflPassingDvpQbHtml("passing_attempts", homeDvp, homeTeam)),
+      nflPassingStatHtml("Passing Completions", false,
+        nflPassingDvpQbHtml("passing_completions", awayDvp, awayTeam), nflPassingDvpQbHtml("passing_completions", homeDvp, homeTeam)),
+      nflPassingStatHtml("Passing Yards", false,
+        nflPassingYardsQbHtml(awayYds, awayTeam), nflPassingYardsQbHtml(homeYds, homeTeam)),
+      nflPassingStatHtml("Passing TDs", false,
+        nflPassingDvpQbHtml("passing_tds", awayDvp, awayTeam), nflPassingDvpQbHtml("passing_tds", homeDvp, homeTeam)),
+    ].join("");
   }
 
   // ---- NFL Rushing Yards prop - same estimation-forced pattern as NFL
