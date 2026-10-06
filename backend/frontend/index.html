@@ -1559,6 +1559,10 @@
   }
 
   function gameLinesSectionHtml(gamePk, data) {
+    // Intentionally blank for now: this tab was meant for COMPLETE-game lines,
+    // which aren't ready. (The 5-inning model that used to live here is the
+    // "1st 5" tab, which backtested as the more accurate of the two.)
+    return `<div class="hits-side-label">Game Lines (complete game) coming soon - for first 5 innings, see the 1st 5 tab.</div>`;
     const header = `
       <div class="hits-batter hits-batter-header" style="grid-template-columns: 1.5fr 60px 28px 34px 34px 46px 52px 30px 60px 46px 40px;">
         <span>Team</span><span>Mean</span><span>O/U</span><span>Yes</span><span>No</span>
