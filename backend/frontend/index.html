@@ -645,6 +645,12 @@
     return Math.max(0, Math.min(1, 1 - normCdf(line - 0.5, mean, sd)));
   }
 
+  // Pitcher K model is Poisson (see pitcher_k_sync.py): P(K >= ceil(line)).
+  function probKAtLeastPoisson(mean, line) {
+    const p = poissonSf(Math.ceil(line) - 1, mean);
+    return p == null ? 0 : p;
+  }
+
   function poissonPmf(k, mean) {
     // Uses lgamma (defined below - hoisted, safe to call from here)
     // for the same reason HRR's negative binomial does: k! via
@@ -2053,7 +2059,7 @@
     const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
     const state = getKBetState(gamePk, side);
     const line = state.threshold;
-    const yesPct = (pitcher.mean != null && pitcher.sd != null) ? probKAtLeast(pitcher.mean, pitcher.sd, line) * 100 : null;
+    const yesPct = (pitcher.mean != null) ? probKAtLeastPoisson(pitcher.mean, line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
@@ -3164,7 +3170,7 @@
           if (!pitcher || pitcher.mean == null) continue;
           const state = getKBetState(gamePk, side);
           const line = state.threshold;
-          const yesPct = probKAtLeast(pitcher.mean, pitcher.sd, line) * 100;
+          const yesPct = probKAtLeastPoisson(pitcher.mean, line) * 100;
           const noPct = 100 - yesPct;
           const modelPct = state.yn === "yes" ? yesPct : noPct;
           const modelProb = modelPct != null ? modelPct / 100 : null;

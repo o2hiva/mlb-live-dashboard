@@ -528,9 +528,11 @@ def _build_pitcher_k_response(db, game, la_b13):
             "pitcher_name": pitcher_name,
             "pitcher_hand": platoon_stats_sync.get_pitcher_hand(pitcher_id, pitcher_name or "") if pitcher_id else None,
             "mean": inputs["mean"] if inputs else None,
-            "sd": inputs["sd"] if inputs else None,
             "pitcher_k_index": inputs["pitcher_k_index"] if inputs else None,
             "opposing_lineup_k_index": inputs["opposing_lineup_k_index"] if inputs else None,
+            "park_factor": inputs["park_factor"] if inputs else None,
+            "bf_exp": inputs["bf_exp"] if inputs else None,
+            "basis": inputs["basis"] if inputs else None,
         }
 
     return {
@@ -1841,49 +1843,26 @@ def manual_grade_bets():
 @app.get("/api/debug/pitcher-k-inputs/{pitcher_id}")
 def debug_pitcher_k_inputs(pitcher_id: int, game_pk: int, batting_team_side: str, db: Session = Depends(get_db)):
     """
-    Diagnostic: shows every raw value feeding into a Pitcher K
-    probability - the stored season stats, the derived med_ip/n, the
-    league rate, and the final mean/sd - so an implausible result (e.g.
-    a probability rounding to 100%) can be traced to its actual cause
-    (a genuine small-sample data quirk vs. a real bug) instead of
-    guessed at. batting_team_side: the side this pitcher FACES (e.g.
-    "away" if he's the home starter).
+    Diagnostic: every raw value feeding the Pitcher K ("bf") model - the
+    league baselines, the pitcher's starts-only log, and the final
+    mean/p/park factor - so a surprising number can be traced.
+    batting_team_side: the side this pitcher FACES (e.g. "away" if he's
+    the home starter).
     """
-    from models_db import PitcherKStat
     import pitcher_k_sync
 
-    pitcher = db.get(PitcherKStat, pitcher_id)
-    if pitcher is None:
-        return {"error": f"No PitcherKStat row for pitcher_id {pitcher_id} - stats haven't synced for them yet"}
-
-    la_b13 = pitcher_k_sync.get_league_k_rate()
-    team_factor, batters_with_data = pitcher_k_sync._lineup_k_factor(db, game_pk, batting_team_side, la_b13)
-
-    raw = {
-        "pitcher_id": pitcher_id,
-        "pitcher_name": pitcher.pitcher_name,
-        "strikeouts": pitcher.strikeouts,
-        "batters_faced": pitcher.batters_faced,
-        "games_started": pitcher.games_started,
-        "outs": pitcher.outs,
-        "meets_min_batters_faced_50": pitcher.batters_faced >= pitcher_k_sync.MIN_PITCHER_BATTERS_FACED,
+    state = pitcher_k_sync.get_league_state()
+    starts = pitcher_k_sync._get_pitcher_starts(pitcher_id)
+    inputs = pitcher_k_sync.compute_pitcher_k_inputs(pitcher_id, game_pk, batting_team_side)
+    return {
+        "league_baselines": state["lg"],
+        "league_state_complete": state.get("complete"),
+        "league_state_computed_at": state.get("ts"),
+        "pitcher_starts_current_season": len(starts["cur"]) if starts else None,
+        "pitcher_starts_prior_season": len(starts["prior"]) if starts else None,
+        "pitcher_last_5_starts": (starts["cur"] + starts["prior"])[-5:] if starts else None,
+        "final_result": inputs,
     }
-
-    med_ip = (pitcher.outs / 3) / pitcher.games_started if pitcher.games_started > 0 else 5
-    n = med_ip * 4.3
-
-    derived = {
-        "la_b13_league_k_rate": la_b13,
-        "med_ip_derived": med_ip,
-        "n_batters_faced_per_start": n,
-        "opposing_lineup_team_factor": team_factor,
-        "opposing_lineup_batters_with_data": batters_with_data,
-        "meets_min_lineup_batters_5": batters_with_data >= pitcher_k_sync.MIN_LINEUP_BATTERS_WITH_DATA,
-    }
-
-    inputs = pitcher_k_sync.compute_pitcher_k_inputs(pitcher_id, game_pk, batting_team_side, la_b13=la_b13)
-
-    return {"raw_stats": raw, "derived_values": derived, "final_result": inputs}
 
 
 @app.get("/api/debug/hrr-inputs/{game_pk}")
