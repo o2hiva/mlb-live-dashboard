@@ -438,9 +438,26 @@ def compute_pitcher_k_inputs(pitcher_id: int, game_pk: int, batting_team_side: s
         game = db.get(Game, game_pk)
         game_date = game.game_date if game else None
         pin = _pitcher_inputs(pitcher_id, game_date, lg)
+        source = "starts"
         if pin is None:
-            return None
-        kp, bf_exp, _n = pin
+            # Start log unavailable (gameLog fetch failed): fall back to the
+            # season-total row synced at lineup confirmation, else league
+            # priors - the prediction must never be blank.
+            source = "season_totals"
+            row = db.get(PitcherKStat, pitcher_id)
+            k = row.strikeouts if row else 0
+            bf = row.batters_faced if row else 0
+            starts = row.games_started if row else 0
+            per_start = (bf / starts) if starts > 0 else None
+            if per_start is None or not (12 <= per_start <= 32):
+                per_start = None  # relief innings mixed in - not a starter BF
+            if row is None:
+                source = "league_prior"
+            kp = (k + K_PA * lgsk) / (bf + K_PA)
+            bf_exp = _ew_mean([per_start] * min(starts, N_HIST) if per_start else [],
+                              DECAY, lg["s_bf"], K_BF)
+        else:
+            kp, bf_exp, _n = pin
 
         opp_k, basis, alpha = None, "league", ALPHA_TEAM
         lineup_k, with_data = _lineup_k(db, game_pk, batting_team_side, lgk)
@@ -473,6 +490,7 @@ def compute_pitcher_k_inputs(pitcher_id: int, game_pk: int, batting_team_side: s
             "bf_exp": bf_exp,
             "p": p,
             "basis": basis,
+            "source": source,
         }
     finally:
         db.close()

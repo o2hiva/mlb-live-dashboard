@@ -533,6 +533,7 @@ def _build_pitcher_k_response(db, game, la_b13):
             "park_factor": inputs["park_factor"] if inputs else None,
             "bf_exp": inputs["bf_exp"] if inputs else None,
             "basis": inputs["basis"] if inputs else None,
+            "source": inputs["source"] if inputs else None,
         }
 
     return {
