@@ -186,6 +186,7 @@
     <span id="tab-btn-nfl" class="tab-btn" onclick="switchTab('nfl')">NFL</span>
     <span id="tab-btn-cfb" class="tab-btn" onclick="switchTab('cfb')">CFB</span>
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
+    <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
   </div>
 
@@ -375,6 +376,24 @@
 
       <div id="nhl-content">Loading...</div>
     </div>
+  </div>
+
+  <div id="tab-content-nba" style="display:none;">
+    <div class="tabs">
+      <span id="nba-stat-btn-pts" class="tab-btn active" onclick="switchNbaStat('pts')">Points</span>
+      <span id="nba-stat-btn-reb" class="tab-btn" onclick="switchNbaStat('reb')">Rebounds</span>
+      <span id="nba-stat-btn-ast" class="tab-btn" onclick="switchNbaStat('ast')">Assists</span>
+      <span id="nba-stat-btn-pra" class="tab-btn" onclick="switchNbaStat('pra')">PRA</span>
+    </div>
+    <div class="sub">NBA player props - Points, Rebounds, Assists and PRA (points + rebounds + assists). Each game's predictions appear only once both starting lineups are announced. "Proj" is the player's projected total; O/U is adjustable and the probabilities update instantly. Regular-season games only (the season opens Oct 22).</div>
+    <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+      <div>
+        <label for="nba-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
+        <input id="nba-date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="loadNbaTab()" />
+      </div>
+    </div>
+    <div id="nba-status" class="settings-hint"></div>
+    <div id="nba-content">Loading...</div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -2396,12 +2415,14 @@
     document.getElementById("tab-content-nfl").style.display = tab === "nfl" ? "block" : "none";
     document.getElementById("tab-content-cfb").style.display = tab === "cfb" ? "block" : "none";
     document.getElementById("tab-content-nhl").style.display = tab === "nhl" ? "block" : "none";
+    document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-npb").classList.toggle("active", tab === "npb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
     document.getElementById("tab-btn-cfb").classList.toggle("active", tab === "cfb");
     document.getElementById("tab-btn-nhl").classList.toggle("active", tab === "nhl");
+    document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     if (tab === "bettracker") {
       loadBetTrackerSettings();
@@ -2414,6 +2435,8 @@
       loadCfbTab();
     } else if (tab === "nhl") {
       loadNhlTab();
+    } else if (tab === "nba") {
+      loadNbaTab();
     }
     // "mlb" needs nothing extra here - its own sub-tabs (switchMlbSubTab)
     // handle their own loading, and "Live Games" (the default MLB
@@ -2505,6 +2528,10 @@
     { label: "NFL Points", filter: b => b.bet_type === "nfl_team_points" },
     { label: "NFL Total", filter: b => b.bet_type === "nfl_game_total" },
     { label: "NHL Goalie Saves", filter: b => b.bet_type === "nhl_goalie_saves" },
+    { label: "NBA Points", filter: b => b.bet_type === "nba_pts" },
+    { label: "NBA Rebounds", filter: b => b.bet_type === "nba_reb" },
+    { label: "NBA Assists", filter: b => b.bet_type === "nba_ast" },
+    { label: "NBA PRA", filter: b => b.bet_type === "nba_pra" },
     { label: "NPB YRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "yes" },
     { label: "NPB NRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "no" },
   ];
@@ -2564,6 +2591,7 @@
     { label: "NFL", filter: b => ["nfl_passing_yards", "nfl_rushing_yards", "nfl_team_points", "nfl_game_total"].includes(b.bet_type) || b.bet_type.startsWith("nfl_qb_dvp_") || b.bet_type.startsWith("nfl_rb_dvp_") },
     { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
     { label: "NHL", filter: b => b.bet_type === "nhl_goalie_saves" },
+    { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
   ];
 
@@ -2789,7 +2817,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? (b.bet_type === "hrr" ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5123,6 +5151,234 @@
 
     container.innerHTML = `<div class="grid">${cards}</div>`;
   }
+
+  // ---- NBA player props (Points / Rebounds / Assists / PRA) - model from nba_platform.py, served by
+  // /api/nba/props (see nba_props_service.py). Each (player, stat) arrives with a survival curve
+  // sf[i] = P(stat >= i+1), so any O/U line is recomputed instantly in the browser. A game's players
+  // only exist once BOTH lineups are announced (lineup_confirmed). Over L (L half-point) = P(stat >= ceil(L));
+  // for a whole-number L "Yes" = P(stat > L) and a tie is a push at grading. ----
+  const NBA_STAT_LABELS = { pts: "Points", reb: "Rebounds", ast: "Assists", pra: "PRA" };
+  let activeNbaStat = "pts";
+  let nbaDataCache = null;
+  const nbaBetState = {};
+
+  function nbaKey(gameId, playerId, stat) { return `${gameId}|${playerId}|${stat}`; }
+
+  function getNbaBetState(gameId, playerId, stat, fairLine) {
+    const k = nbaKey(gameId, playerId, stat);
+    if (!nbaBetState[k]) {
+      nbaBetState[k] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: fairLine != null ? fairLine : 0.5 };
+    }
+    return nbaBetState[k];
+  }
+
+  function nbaProbOver(sf, line) {
+    if (!sf || !sf.length) return null;
+    const k = Math.floor(line) + 1;   // "over L" needs at least floor(L)+1
+    if (k <= 0) return 1;
+    return k - 1 < sf.length ? sf[k - 1] : 0;
+  }
+
+  function nbaFind(gameId, playerId) {
+    if (!nbaDataCache) return null;
+    const game = (nbaDataCache.games || []).find(g => String(g.game_id) === String(gameId));
+    if (!game) return null;
+    const player = game.players.find(p => String(p.player_id) === String(playerId));
+    return player ? { game, player } : null;
+  }
+
+  function nbaRowCalc(gameId, playerId, stat) {
+    const f = nbaFind(gameId, playerId);
+    if (!f) return null;
+    const blk = f.player.props[stat];
+    const state = getNbaBetState(gameId, playerId, stat, blk.fair_line);
+    const line = state.threshold;
+    const over = nbaProbOver(blk.sf, line);
+    const yesPct = over != null ? over * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+    const modelPct = state.yn === "yes" ? yesPct : noPct;
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    return { f, blk, state, line, yesPct, noPct, modelProb, wager, profit };
+  }
+
+  function rerenderNba() {
+    const container = document.getElementById("nba-content");
+    if (!container || !nbaDataCache) return;
+    const data = nbaDataCache;
+    const statusEl = document.getElementById("nba-status");
+    const warn = (data.warnings || []).filter(w => !/box scores are \d+ days old/.test(w));
+    statusEl.textContent = warn.length ? warn.join(" · ") : "";
+    if (data.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(data.warnings || ["NBA data unavailable right now."]).join(" ")}</div>`;
+      return;
+    }
+    const games = data.games || [];
+    if (!games.length) {
+      container.innerHTML = `<div class="settings-hint">No regular-season NBA games on this date. The 2026-27 season opens Oct 22 - pick a date on or after that.</div>`;
+      return;
+    }
+    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));">${games.map(g => nbaGameCardHtml(g)).join("")}</div>`;
+  }
+
+  function nbaGameCardHtml(g) {
+    const tip = g.tip_off ? formatKickoffPacific(g.tip_off) : "Time TBD";
+    let status;
+    if (g.completed) status = "Final";
+    else if (g.started) status = "In progress";
+    else status = tip;
+    const head = `
+      <div class="teams"><span>${g.away_team} @ ${g.home_team}</span></div>
+      <div class="meta">${status}</div>`;
+    if (g.completed) {
+      return `<div class="card">${head}<div class="settings-hint">Game finished.</div></div>`;
+    }
+    if (!g.lineup_confirmed) {
+      return `<div class="card">${head}<div class="settings-hint">Lineups not announced yet - predictions appear once both starting lineups are posted (usually ~30 minutes before tip-off).</div></div>`;
+    }
+    const cols = "minmax(150px, 1.5fr) 40px 50px 34px 34px 46px 52px 30px 58px 54px 40px";
+    const header = `
+      <div class="hits-batter hits-batter-header" style="grid-template-columns: ${cols};">
+        <span>Player</span><span>Proj</span><span>O/U</span><span>Yes</span><span>No</span>
+        <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+      </div>`;
+    const section = (label, players) => `
+      <div class="hits-side-label">${label}</div>
+      ${players.length ? header + players.map(p => nbaPlayerRowHtml(g, p, cols)).join("") : `<div class="settings-hint">No players with enough history.</div>`}`;
+    return `<div class="card">${head}
+      ${section(g.away_team + " (Away)", g.players.filter(p => !p.home))}
+      ${section(g.home_team + " (Home)", g.players.filter(p => p.home))}
+    </div>`;
+  }
+
+  function nbaPlayerRowHtml(g, p, cols) {
+    const stat = activeNbaStat;
+    const c = nbaRowCalc(g.game_id, p.player_id, stat);
+    if (!c) return "";
+    const { blk, state, line, yesPct, noPct, modelProb, wager, profit } = c;
+    const gid = g.game_id, pid = p.player_id;
+    const marketVal = state.market != null ? state.market : "";
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNbaBetField('${gid}','${pid}','${stat}','manualWager',this.value)" />`;
+    const tags = (p.starter ? " ★" : "") + (p.injury_status ? ` (${p.injury_status})` : "");
+    const title = `${Math.round(p.projected_minutes)} min proj` + (blk.last10 != null ? ` · last-10 avg ${blk.last10}` : "") + (p.teammates_out && p.teammates_out.length ? ` · teammates out: ${p.teammates_out.join(", ")}` : "");
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${cols};" title="${title.replace(/"/g, "&quot;")}">
+        <span>${p.player}${tags}</span>
+        <span class="hits-index">${blk.projection.toFixed(1)}</span>
+        <input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+        <select onchange="updateNbaBetField('${gid}','${pid}','${stat}','yn',this.value)">
+          <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+          <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+        </select>
+        <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNbaBetField('${gid}','${pid}','${stat}','market',this.value)" />
+        <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateNbaBetField('${gid}','${pid}','${stat}','useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNbaTrack('${gid}','${pid}','${stat}',this.checked)" />
+      </div>`;
+  }
+
+  function updateNbaThreshold(gameId, playerId, stat, value) {
+    const f = nbaFind(gameId, playerId);
+    const state = getNbaBetState(gameId, playerId, stat, f ? f.player.props[stat].fair_line : 0.5);
+    const v = parseFloat(value);
+    state.threshold = isNaN(v) ? state.threshold : v;
+    rerenderNba();
+  }
+
+  function updateNbaBetField(gameId, playerId, stat, field, value) {
+    const f = nbaFind(gameId, playerId);
+    const state = getNbaBetState(gameId, playerId, stat, f ? f.player.props[stat].fair_line : 0.5);
+    if (field === "market") {
+      state.market = value === "" ? null : parseFloat(value);
+    } else if (field === "manualWager") {
+      state.manualWager = parseFloat(value) || 0;
+    } else {
+      state[field] = value;
+    }
+    rerenderNba();
+  }
+
+  async function toggleNbaTrack(gameId, playerId, stat, checked) {
+    const c = nbaRowCalc(gameId, playerId, stat);
+    if (!c) return;
+    const { f, state, line, modelProb, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: "nba_" + stat, batter_id: parseInt(playerId, 10), external_player_id: String(gameId),
+            batter_name: `${f.player.player} (${NBA_STAT_LABELS[stat]})`,
+            team_side: `${f.game.away_team} @ ${f.game.home_team}`, line: line,
+            yn: state.yn, model_probability: modelProb, market_probability: state.market,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) {
+          state.tracked = true;
+          state.trackedId = data.id;
+        } else {
+          state.tracked = false;
+          state.trackedId = null;
+        }
+      } catch (e) {
+        state.tracked = false;
+        state.trackedId = null;
+      }
+    } else {
+      if (state.trackedId != null) {
+        try {
+          await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" });
+        } catch (e) {
+          // Best-effort - the Bet Tracker tab's Remove button can clean it up.
+        }
+      }
+      state.tracked = false;
+      state.trackedId = null;
+    }
+    rerenderNba();
+  }
+
+  function switchNbaStat(stat) {
+    activeNbaStat = stat;
+    for (const s of Object.keys(NBA_STAT_LABELS)) {
+      document.getElementById(`nba-stat-btn-${s}`).classList.toggle("active", s === stat);
+    }
+    rerenderNba();
+  }
+
+  async function loadNbaTab(silent) {
+    const dateInput = document.getElementById("nba-date-picker");
+    const container = document.getElementById("nba-content");
+    if (!silent) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const q = dateInput.value ? `?date=${dateInput.value.replace(/-/g, "")}` : "";
+      const res = await fetch(`${API_BASE}/api/nba/props${q}`);
+      nbaDataCache = await res.json();
+      if (!dateInput.value && nbaDataCache.date) dateInput.value = nbaDataCache.date;
+      rerenderNba();
+    } catch (e) {
+      if (!silent) container.innerHTML = `<div class="settings-hint">Couldn't load NBA data.</div>`;
+    }
+  }
+
+  // Lineups get announced over time, so quietly re-check once a minute while the NBA tab is open
+  // (skipped while the viewer is typing in one of its inputs, which a re-render would interrupt).
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-nba");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadNbaTab(true);
+  }, 60000);
 
   // ---- NHL Goalie Saves - ported from core_nhl_goalie_saves.py, same
   // log5-style index-multiplication pattern as CFB/NFL Team Points, plus

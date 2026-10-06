@@ -102,6 +102,8 @@ _scheduler = None
 async def lifespan(app: FastAPI):
     global _scheduler
     _scheduler = poller.start_scheduler()
+    import nba_props_service
+    nba_props_service.start_background()
     yield
     if _scheduler:
         _scheduler.shutdown()
@@ -1464,6 +1466,28 @@ def manual_refresh_nhl_goalie_saves_stats(season: str, target_date: str | None =
     return {"status": "refreshed", "season": season, **summary}
 
 
+@app.get("/api/nba/props")
+def nba_props(date: str | None = None):
+    """NBA player props (Points/Rebounds/Assists/PRA) for one date (YYYYMMDD or YYYY-MM-DD, default today US
+    Eastern). One entry per game; a game's players only appear once both lineups are announced. See
+    nba_props_service.py."""
+    import nba_props_service
+    return nba_props_service.get_service().games_payload(date)
+
+
+@app.get("/api/nba/debug/lineup/{game_id}")
+def nba_debug_lineup(game_id: str):
+    """Diagnostic: what ESPN's game summary shows for lineups (state + starters per team)."""
+    import nba_props_service
+    return nba_props_service.get_service().lineup_debug(game_id)
+
+
+@app.get("/api/nba/health")
+def nba_health():
+    import nba_props_service
+    return nba_props_service.get_service().health()
+
+
 @app.get("/api/nhl/goalie-saves")
 def nhl_goalie_saves(target_date: str | None = None, db: Session = Depends(get_db)):
     """
@@ -1753,7 +1777,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else "Unknown matchup",
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if (r.bet_type or "").startswith("nba_") and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

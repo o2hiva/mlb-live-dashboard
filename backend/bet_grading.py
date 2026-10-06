@@ -208,7 +208,30 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nfl_rb_dvp_rushing_yards", "nfl_rb_dvp_rushing_tds",
                           "nfl_rb_dvp_receiving_yards", "nfl_rb_dvp_receiving_tds",
                           "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td",
-                          "nhl_goalie_saves", "npb_yrfi"}
+                          "nhl_goalie_saves", "npb_yrfi",
+                          "nba_pts", "nba_reb", "nba_ast", "nba_pra"}
+
+NBA_BET_STATS = {"nba_pts": "pts", "nba_reb": "reb", "nba_ast": "ast", "nba_pra": "pra"}
+
+
+def _grade_nba_prop(bet: TrackedBet):
+    """NBA player props (Points/Rebounds/Assists/PRA). The bet stores the ESPN game id in external_player_id and the
+    ESPN player id in batter_id. Returns None while the game isn't final yet, else (actual, result) where result is
+    "win" / "loss" / "push". Unlike the MLB props, the line can be a whole number: Over wins on actual > line, Under on
+    actual < line, an exact tie is a push. A player who didn't play (DNP) is a push (sportsbooks void those)."""
+    import nba_props_service
+    if not bet.external_player_id or not bet.batter_id or bet.line is None:
+        return None
+    status, stats = nba_props_service.get_service().final_player_stat(bet.external_player_id, bet.batter_id)
+    if status == "pending":
+        return None
+    if status == "dnp":
+        return 0.0, "push"
+    actual = float(stats[NBA_BET_STATS[bet.bet_type]])
+    if actual == bet.line:
+        return actual, "push"
+    over = actual > bet.line
+    return actual, ("win" if (over if bet.yn == "yes" else not over) else "loss")
 
 
 def _refresh_abstract_status(db, game: Game):
@@ -739,6 +762,23 @@ def grade_pending_bets() -> dict:
                 if game.abstract_status != "Final":
                     still_pending += 1
                     continue
+
+            if bet.bet_type in NBA_BET_STATS:
+                try:
+                    graded_nba = _grade_nba_prop(bet)
+                except Exception:
+                    log.exception("NBA grading failed for bet %s", bet.id)
+                    graded_nba = None
+                if graded_nba is None:
+                    still_pending += 1
+                    continue
+                bet.actual_value, bet.result, bet.resolved = graded_nba[0], graded_nba[1], True
+                graded += 1
+                if graded_nba[1] == "win":
+                    wins += 1
+                elif graded_nba[1] == "loss":
+                    losses += 1
+                continue
 
             actual = _actual_value_for_bet(db, bet, boxscore_cache, cfb_games_cache, cfb_lines_cache, nfl_games_cache)
             if actual is None:

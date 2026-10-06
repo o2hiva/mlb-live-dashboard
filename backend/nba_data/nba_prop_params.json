@@ -1,0 +1,116 @@
+{
+  "minutes": {
+    "decay_m": 0.7,
+    "k_m": 0.25,
+    "cap0": 34,
+    "capc": 0.5
+  },
+  "props": {
+    "pts": {
+      "params": {
+        "form": "min",
+        "opp": "resid",
+        "groups": "three",
+        "k_p": 1,
+        "rd": 0.96,
+        "k_opp": 3000,
+        "gamma": 1.0,
+        "carry": 0.4,
+        "decay_m": 0.7,
+        "k_m": 0.25,
+        "window": 20,
+        "kappa": 1.0,
+        "scale": 1.0,
+        "cap0": 34,
+        "capc": 0.5
+      },
+      "disp": {
+        "kind": "pow",
+        "phi": 4.0,
+        "q1": -0.4,
+        "w": 0.5
+      }
+    },
+    "reb": {
+      "params": {
+        "form": "min",
+        "opp": "resid",
+        "groups": "three",
+        "k_p": 30,
+        "rd": 0.98,
+        "k_opp": 3000,
+        "gamma": 1.0,
+        "carry": 0.4,
+        "decay_m": 0.7,
+        "k_m": 0.25,
+        "window": 20,
+        "kappa": 1.0,
+        "scale": 1.0,
+        "cap0": 34,
+        "capc": 0.5
+      },
+      "disp": {
+        "kind": "pow",
+        "phi": 1.6,
+        "q1": 0.1,
+        "w": 0.75
+      }
+    },
+    "ast": {
+      "params": {
+        "form": "min",
+        "opp": "resid",
+        "groups": "three",
+        "k_p": 30,
+        "rd": 0.96,
+        "k_opp": 6000,
+        "gamma": 1.0,
+        "carry": 0.6,
+        "decay_m": 0.7,
+        "k_m": 0.25,
+        "window": 20,
+        "kappa": 1.0,
+        "scale": 1.0,
+        "cap0": 34,
+        "capc": 0.5
+      },
+      "disp": {
+        "kind": "pow",
+        "phi": 1.3,
+        "q1": 0.0,
+        "w": 1.0
+      }
+    },
+    "pra": {
+      "params": {
+        "form": "min",
+        "opp": "resid",
+        "groups": "three",
+        "k_p": 1,
+        "rd": 0.96,
+        "k_opp": 1500,
+        "gamma": 1.0,
+        "carry": 0.2,
+        "decay_m": 0.7,
+        "k_m": 0.25,
+        "window": 20,
+        "kappa": 1.0,
+        "scale": 1.0,
+        "cap0": 34,
+        "capc": 0.5
+      },
+      "disp": {
+        "kind": "pow",
+        "phi": 5.0,
+        "q1": -0.55,
+        "w": 0.5
+      }
+    }
+  },
+  "pra_sum_disp": {
+    "kind": "pow",
+    "phi": 5.0,
+    "q1": -0.55,
+    "w": 0.5
+  }
+}
