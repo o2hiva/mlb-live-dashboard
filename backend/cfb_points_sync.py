@@ -349,10 +349,15 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 errors.append(f"CFBD week {current_week} spread lines fetch failed: {type(e).__name__} {e}")
 
             db.query(CfbGame).delete()
+            seen_teams: set = set()   # CfbGame's primary key is the team name: a team listed twice in one week would abort the whole refresh
             for game in this_week_games:
                 home, away = game.get("homeTeam"), game.get("awayTeam")
                 if not home or not away:
                     continue
+                if home in seen_teams or away in seen_teams:
+                    errors.append(f"skipped duplicate/second game for {home} vs {away} (id {game.get('id')})")
+                    continue
+                seen_teams.update((home, away))
                 # "startDate" confirmed live (CFBD real field, ISO8601 UTC,
                 # e.g. "2026-09-24T23:00:00.000Z") - unlike NFL's schedule
                 # API, this one DOES carry a real kickoff time, so CFB Team

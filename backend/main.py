@@ -1181,7 +1181,13 @@ def manual_refresh_cfb_stats(season: int, week: int):
     1..week), then refreshes this week's real matchups.
     """
     import cfb_points_sync
-    summary = cfb_points_sync.refresh_cfb_points_stats(season, week)
+    try:
+        summary = cfb_points_sync.refresh_cfb_points_stats(season, week)
+    except Exception as e:
+        # Report the real cause instead of a bare HTTP 500 (the full traceback is in the server log too).
+        import logging
+        logging.getLogger("main").exception("CFB refresh failed")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
     return {"status": "refreshed", "season": season, "week": week, **summary}
 
 
