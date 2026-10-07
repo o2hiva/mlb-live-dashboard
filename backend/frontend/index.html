@@ -4614,10 +4614,10 @@
         return;
       }
       const errs = data.errors || [];
-      if (!data.current_week_matchups || errs.length) {
-        statusEl.textContent = `Week ${week}: ${data.current_week_matchups || 0} matchup(s) loaded - the old week was kept. ${errs.join(" | ") || "CFBD returned no games for this week."}`;
+      if (!data.current_week_matchups) {
+        statusEl.textContent = `Week ${week}: 0 matchups loaded - the old week was kept. ${errs.join(" | ") || "CFBD returned no games for this week."}`;
       } else {
-        statusEl.textContent = `Refreshed for ${season} week ${week} - ${data.current_week_matchups} matchup(s).`;
+        statusEl.textContent = `Refreshed for ${season} week ${week} - ${data.current_week_matchups} matchup(s).` + (errs.length ? ` Notes: ${errs.join(" | ")}` : "");
       }
       loadCfbTab();
     } catch (e) {
