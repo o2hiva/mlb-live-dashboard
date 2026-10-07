@@ -354,6 +354,8 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 home, away = game.get("homeTeam"), game.get("awayTeam")
                 if not home or not away:
                     continue
+                if game.get("homeClassification") != "fbs" or game.get("awayClassification") != "fbs":
+                    continue   # FCS/D2/D3 games have no model history - keep the tab FBS-vs-FBS only, as its heading says
                 if home in seen_teams or away in seen_teams:
                     errors.append(f"skipped duplicate/second game for {home} vs {away} (id {game.get('id')})")
                     continue
