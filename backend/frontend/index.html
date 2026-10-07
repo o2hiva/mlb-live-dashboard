@@ -4606,8 +4606,19 @@
     const statusEl = document.getElementById("cfb-refresh-status");
     statusEl.textContent = `Refreshing CFB stats for ${season} week ${week} - this fetches real data and can take a little while...`;
     try {
-      await fetch(`${API_BASE}/api/admin/refresh-cfb-stats?season=${season}&week=${week}`);
-      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
+      const res = await fetch(`${API_BASE}/api/admin/refresh-cfb-stats?season=${season}&week=${week}`);
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* non-JSON error body */ }
+      if (!res.ok) {
+        statusEl.textContent = `Refresh failed (HTTP ${res.status}). ${data.detail || ""}`;
+        return;
+      }
+      const errs = data.errors || [];
+      if (!data.current_week_matchups || errs.length) {
+        statusEl.textContent = `Week ${week}: ${data.current_week_matchups || 0} matchup(s) loaded - the old week was kept. ${errs.join(" | ") || "CFBD returned no games for this week."}`;
+      } else {
+        statusEl.textContent = `Refreshed for ${season} week ${week} - ${data.current_week_matchups} matchup(s).`;
+      }
       loadCfbTab();
     } catch (e) {
       statusEl.textContent = "Refresh failed - check the season/week and try again.";

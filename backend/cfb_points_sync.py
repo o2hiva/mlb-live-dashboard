@@ -250,6 +250,7 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
         weeks_fetched = 0
         weeks_from_cache = 0
         this_week_games: list[dict] = []
+        errors: list[str] = []   # surfaced to the caller so a failed CFBD fetch (quota, bad key...) is never silent
 
         cached_weeks = {
             w for (w,) in db.query(CfbWeekTeamStat.week)
@@ -272,8 +273,14 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
 
             try:
                 games = get_week_games(season, week)
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
                 log.exception("Failed to fetch CFB week %s games", week)
+                body = ""
+                try:
+                    body = (e.response.text or "")[:160] if e.response is not None else ""
+                except Exception:
+                    pass
+                errors.append(f"CFBD week {week} fetch failed: {type(e).__name__} {e}{(' - ' + body) if body else ''}")
                 continue
             weeks_fetched += 1
             if is_current:
@@ -337,8 +344,9 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             try:
                 for line_game in get_week_lines(season, current_week):
                     line_games_by_id[line_game.get("id")] = line_game
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
                 log.exception("Failed to fetch CFB week %s real spread lines", current_week)
+                errors.append(f"CFBD week {current_week} spread lines fetch failed: {type(e).__name__} {e}")
 
             db.query(CfbGame).delete()
             for game in this_week_games:
@@ -370,6 +378,7 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             "weeks_fetched": weeks_fetched, "weeks_from_cache": weeks_from_cache,
             "teams": len(team_totals), "games_used": games_used,
             "current_week_matchups": len(this_week_games),
+            "errors": errors,
         }
         log.info("refresh_cfb_points_stats complete: %s", summary)
         return summary
