@@ -4947,13 +4947,13 @@
     const mlPct = (row.moneyline_trusted && row.moneyline_win_prob != null) ? Math.round(row.moneyline_win_prob * 100) : null;
     const mlHeaderHtml = mlPct != null ? `
       <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 50px 44px 30px 56px 48px 22px 46px; gap:4px; margin-bottom:2px;">
-        <span></span><span style="text-align:center;">Pred</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span style="text-align:center;">Final</span>
+        <span style="text-align:left;">${sideLabel}</span><span style="text-align:center;">Pred</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span style="text-align:center;">Final</span>
       </div>` : "";
     const finalHtml = row.final_score != null ? `<span class="score" style="text-align:center; font-weight:700; overflow:visible;">${row.final_score}</span>` : `<span></span>`;
     const predCellHtml = row.predicted_mean != null ? `<span class="score" style="text-align:center; font-weight:700; overflow:visible;">${Math.round(row.predicted_mean)}</span>` : `<span class="score" style="text-align:center;">—</span>`;
     const mlNameCellHtml = mlPct != null
-      ? `${row.team} (${sideLabel}) <span class="prob-yes">${mlPct}%</span>`
-      : `${row.team} (${sideLabel})`;
+      ? `${row.team} <span class="prob-yes">${mlPct}%</span>`
+      : `${row.team}`;
 
     if (row.predicted_mean == null) {
       return `
@@ -4971,7 +4971,7 @@
             ${row.final_score != null ? `<span class="score">${row.final_score}</span>` : ""}
           </div>
           <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
-          <div class="meta">vs ${row.opponent}</div>
+          <div class="meta">${mlPct == null ? sideLabel + " · " : ""}vs ${row.opponent}</div>
           <div class="settings-hint">Not enough data yet</div>
         </div>`;
     }
@@ -5007,7 +5007,7 @@
           ${row.final_score != null ? `<span class="score">${row.final_score}</span>` : ""}
         </div>
         <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
-        <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
+        <div class="meta">${mlPct == null ? sideLabel + " · " : ""}vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">
           <span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
         </div>
