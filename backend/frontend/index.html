@@ -4946,9 +4946,11 @@
     // never crashing on the null.
     const mlPct = (row.moneyline_trusted && row.moneyline_win_prob != null) ? Math.round(row.moneyline_win_prob * 100) : null;
     const mlHeaderHtml = mlPct != null ? `
-      <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
-        <span></span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span></span>
+      <div class="hits-batter-header" style="display:grid; grid-template-columns: 1.3fr 38px 44px 30px 56px 48px 22px 40px; margin-bottom:2px;">
+        <span></span><span style="text-align:center;">Pred</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span><span style="text-align:center;">Final</span>
       </div>` : "";
+    const finalHtml = row.final_score != null ? `<span class="score">${row.final_score}</span>` : `<span></span>`;
+    const predCellHtml = row.predicted_mean != null ? `<span style="text-align:center; font-weight:600;">${Math.round(row.predicted_mean)}</span>` : `<span style="text-align:center;">—</span>`;
     const mlNameCellHtml = mlPct != null
       ? `${row.team} (${sideLabel}) <span class="prob-yes">${mlPct}%</span>`
       : `${row.team} (${sideLabel})`;
@@ -4958,13 +4960,15 @@
         <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
           ${mlHeaderHtml}
           ${mlPct != null ? `
-          <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+          <div class="hits-batter" style="grid-template-columns: 1.3fr 38px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
             <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+            ${predCellHtml}
             ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
-            <span></span>
+            ${finalHtml}
           </div>` : `
           <div class="teams">
             <span>${mlNameCellHtml}</span>
+            ${row.final_score != null ? `<span class="score">${row.final_score}</span>` : ""}
           </div>
           <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
           <div class="meta">vs ${row.opponent}</div>
@@ -4992,14 +4996,15 @@
       <div style="${isSecondInCard ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
         ${mlHeaderHtml}
         ${mlPct != null ? `
-        <div class="hits-batter" style="grid-template-columns: 1.3fr 44px 30px 56px 48px 22px 40px; padding:4px 0;">
+        <div class="hits-batter" style="grid-template-columns: 1.3fr 38px 44px 30px 56px 48px 22px 40px; padding:4px 0;">
           <span style="font-size:1rem; font-weight:600;">${mlNameCellHtml}</span>
+          ${predCellHtml}
           ${cfbMoneylineBetRowCellsHtml(row.game_id, side, row.team, mlPct)}
-          <span class="score">${Math.round(row.predicted_mean)}</span>
+          ${finalHtml}
         </div>` : `
         <div class="teams">
-          <span>${mlNameCellHtml}</span>
-          <span class="score">${Math.round(row.predicted_mean)}</span>
+          <span>${mlNameCellHtml} <span class="settings-hint" style="font-size:.8rem;">Pred ${Math.round(row.predicted_mean)}</span></span>
+          ${row.final_score != null ? `<span class="score">${row.final_score}</span>` : ""}
         </div>
         <div class="settings-hint" style="margin-top:-4px;">Moneyline: no pick yet</div>`}
         <div class="meta">vs ${row.opponent} · Index ${teamIndexStr} vs ${oppIndexStr}</div>

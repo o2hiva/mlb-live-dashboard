@@ -1253,9 +1253,21 @@ def cfb_games(db: Session = Depends(get_db)):
             moneyline_by_game[game_id] = {"home_win_probability": None, "away_win_probability": None, "trusted": False}
             spread_by_game[game_id] = {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
+    final_scores: dict = {}
+    try:
+        from models_db import SyncState
+        import json as _json
+        _row = db.get(SyncState, "cfb_final_scores")
+        if _row and _row.value:
+            final_scores = (_json.loads(_row.value) or {}).get("scores", {})
+    except Exception:
+        final_scores = {}
+
     rows = []
     for g in games:
         inputs = cfb_points_sync.compute_cfb_team_points_prediction(g.team, g.opponent, db, league_avg=league_avg)
+        _fs = final_scores.get(str(g.game_id))
+        _final = (_fs["home"] if g.is_home else _fs["away"]) if _fs else None
         ml = moneyline_by_game.get(g.game_id, {"home_win_probability": None, "away_win_probability": None, "trusted": False})
         own_win_prob = ml["home_win_probability"] if g.is_home else ml["away_win_probability"]
         sp = spread_by_game.get(g.game_id, {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None})
@@ -1268,6 +1280,7 @@ def cfb_games(db: Session = Depends(get_db)):
             "is_home": g.is_home,
             "start_date_utc": g.start_date_utc,
             "predicted_mean": inputs["mean"] if inputs else None,
+            "final_score": _final,
             "team_index": inputs["team_index"] if inputs else None,
             "opp_index": inputs["opp_index"] if inputs else None,
             "team_games_sample": inputs["team_games_sample"] if inputs else None,

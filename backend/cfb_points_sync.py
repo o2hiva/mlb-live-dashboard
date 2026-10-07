@@ -349,6 +349,10 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 errors.append(f"CFBD week {current_week} spread lines fetch failed: {type(e).__name__} {e}")
 
             db.query(CfbGame).delete()
+            # Final scores for the card's "Final" column, kept as JSON in the
+            # SyncState key/value table (no schema change). Refreshed every
+            # time Refresh Stats runs, since this_week_games is always a fresh fetch.
+            score_map: dict = {}
             seen_teams: set = set()   # CfbGame's primary key is the team name: a team listed twice in one week would abort the whole refresh
             for game in this_week_games:
                 home, away = game.get("homeTeam"), game.get("awayTeam")
@@ -360,6 +364,8 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                     errors.append(f"skipped duplicate/second game for {home} vs {away} (id {game.get('id')})")
                     continue
                 seen_teams.update((home, away))
+                if game.get("completed") and game.get("homePoints") is not None and game.get("awayPoints") is not None:
+                    score_map[str(game.get("id"))] = {"home": game["homePoints"], "away": game["awayPoints"]}
                 # "startDate" confirmed live (CFBD real field, ISO8601 UTC,
                 # e.g. "2026-09-24T23:00:00.000Z") - unlike NFL's schedule
                 # API, this one DOES carry a real kickoff time, so CFB Team
@@ -377,6 +383,18 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 db.add(CfbGame(team=away, opponent=home, game_id=game.get("id"), is_home=False,
                                 season=season, week=current_week, start_date_utc=start_date_utc,
                                 neutral_site=neutral_site, home_spread=home_spread, spread_provider=spread_provider))
+            try:
+                from models_db import SyncState
+                import json as _json
+                row = db.get(SyncState, "cfb_final_scores")
+                payload = _json.dumps({"season": season, "week": current_week, "scores": score_map})
+                if row is None:
+                    db.add(SyncState(key="cfb_final_scores", value=payload))
+                else:
+                    row.value = payload
+            except Exception as e:
+                log.exception("Failed to store CFB final scores")
+                errors.append(f"final scores not saved: {type(e).__name__}")
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written
