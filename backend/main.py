@@ -1253,15 +1253,7 @@ def cfb_games(db: Session = Depends(get_db)):
             moneyline_by_game[game_id] = {"home_win_probability": None, "away_win_probability": None, "trusted": False}
             spread_by_game[game_id] = {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
-    final_scores: dict = {}
-    try:
-        from models_db import SyncState
-        import json as _json
-        _row = db.get(SyncState, "cfb_final_scores")
-        if _row and _row.value:
-            final_scores = (_json.loads(_row.value) or {}).get("scores", {})
-    except Exception:
-        final_scores = {}
+    final_scores = cfb_points_sync.refresh_cfb_scores_if_stale(db, games[0].season, games[0].week, games)
 
     rows = []
     for g in games:

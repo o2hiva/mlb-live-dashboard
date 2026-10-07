@@ -165,6 +165,68 @@ def pick_provider_line(game: dict, preferred_providers: list[str] = PREFERRED_PR
     return None, None
 
 
+
+def refresh_cfb_scores_if_stale(db, season: int, week: int, games, min_minutes: int = 30) -> dict:
+    """Score-only refresh used by /api/cfb/games: if any of this week's games
+    kicked off 3+ hours ago and has no saved final yet, re-fetch ONE CFBD
+    /games call (at most once per min_minutes) and store the finals in
+    SyncState['cfb_final_scores']. Returns the {game_id: {home, away}} map.
+    Never raises - on any failure the existing saved scores are returned."""
+    import json as _json
+    from models_db import SyncState
+    scores: dict = {}
+    try:
+        row = db.get(SyncState, "cfb_final_scores")
+        if row and row.value:
+            scores = (_json.loads(row.value) or {}).get("scores", {}) or {}
+        now = datetime.utcnow()
+        need = False
+        for g in games:
+            sd = g.start_date_utc
+            if not sd or str(g.game_id) in scores:
+                continue
+            try:
+                kick = datetime.strptime(sd[:19], "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                continue
+            if now - kick > timedelta(hours=3):
+                need = True
+                break
+        if not need:
+            return scores
+        chk = db.get(SyncState, "cfb_scores_checked")
+        if chk and chk.value:
+            try:
+                if now - datetime.strptime(chk.value, "%Y-%m-%dT%H:%M:%S") < timedelta(minutes=min_minutes):
+                    return scores
+            except Exception:
+                pass
+        if chk is None:
+            db.add(SyncState(key="cfb_scores_checked", value=now.strftime("%Y-%m-%dT%H:%M:%S")))
+        else:
+            chk.value = now.strftime("%Y-%m-%dT%H:%M:%S")
+        db.commit()   # stamp first so a failing fetch is not retried on every page load
+        wanted = {str(g.game_id) for g in games}
+        for game in get_week_games(season, week):
+            gid = str(game.get("id"))
+            if gid in wanted and game.get("completed") and game.get("homePoints") is not None and game.get("awayPoints") is not None:
+                scores[gid] = {"home": game["homePoints"], "away": game["awayPoints"]}
+        payload = _json.dumps({"season": season, "week": week, "scores": scores})
+        row = db.get(SyncState, "cfb_final_scores")
+        if row is None:
+            db.add(SyncState(key="cfb_final_scores", value=payload))
+        else:
+            row.value = payload
+        db.commit()
+    except Exception:
+        log.exception("CFB score-only refresh failed")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return scores
+
+
 def is_fbs_vs_fbs(game: dict) -> bool:
     return (
         bool(game.get("completed"))
