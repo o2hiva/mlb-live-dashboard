@@ -5703,9 +5703,10 @@
 
   function probNflPointsAtLeast(mean, line) {
     if (mean == null) return null;
-    const p = 1 / NFL_TEAM_POINTS_OVERDISPERSION;
-    const r = mean / (NFL_TEAM_POINTS_OVERDISPERSION - 1);
-    return nbinomSf(Math.ceil(line) - 1, r, p);
+    // Count shape per core_nfl_points.py (validated on 2023-25 later weeks, NLL +0.054, worst calibration gap
+    // 4.1 -> 2.2 pts): TEAM_NB_SHARE = 0.0, i.e. a pure discretised Normal with variance 4.4 x mean. The
+    // game total stays pure Negative Binomial (GAME_NB_SHARE = 1.0), unchanged below.
+    return cfbMixAtLeast(mean, Math.ceil(line), NFL_TEAM_POINTS_OVERDISPERSION, 0.0);
   }
 
   function probNflTotalAtLeast(mean, line) {
