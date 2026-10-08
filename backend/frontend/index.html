@@ -4441,23 +4441,43 @@
   const cfbBetState = {};
   const cfbTotalBetState = {};
 
-  function getCfbBetState(team) {
+  function getCfbBetState(team, defaultLine) {
     if (!cfbBetState[team]) {
-      cfbBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 24 };
+      cfbBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: defaultLine != null ? defaultLine : 24 };
     }
     return cfbBetState[team];
   }
 
-  function probCfbPointsAtLeast(mean, line) {
-    if (mean == null) return null;
-    const p = 1 / CFB_TEAM_POINTS_OVERDISPERSION;
-    const r = mean / (CFB_TEAM_POINTS_OVERDISPERSION - 1);
-    return nbinomSf(Math.ceil(line) - 1, r, p);
+  // COUNT SHAPE (Oct 2026 upgrade, core_ncaa_points.py after ncaa_totals_diagnose.py on 1,608 real
+  // 2023-25 games): the pure Negative Binomial was too right-skewed (real teams went over 47.5% at a
+  // line equal to the prediction, the model said 43.7%). The count is now a MIX of a Negative Binomial
+  // and a discretised Normal with the same mean and variance. Same mean formula; only shape/spread
+  // changed. These constants MUST stay identical to core_ncaa_points.py.
+  const CFB_TEAM_MIX_OD = 5.6, CFB_TEAM_NB_SHARE = 0.25;
+  const CFB_GAME_MIX_OD = 5.0, CFB_GAME_NB_SHARE = 0.5;
+
+  // P(X >= N) for an integer "at least N" line (= core's P(X > N-1)). In this dashboard Yes = at least N
+  // and No = at most N-1, so Yes + No = 100% exactly and there is no push (grading uses actual >= line).
+  function cfbMixAtLeast(mean, n, od, nbShare) {
+    if (mean == null || !(mean > 0) || od <= 1) return null;
+    if (n <= 0) return 1;
+    const nb = nbinomSf(n - 1, mean / (od - 1), 1 / od);
+    if (nb == null) return null;
+    if (nbShare >= 1) return nb;
+    const sd = Math.sqrt(od * mean);
+    const den = Math.max(1 - normCdf(-0.5, mean, sd), 1e-12);
+    const overNorm = (1 - normCdf(n - 0.5, mean, sd)) / den;
+    return nbShare * nb + (1 - nbShare) * overNorm;
   }
 
-  function getCfbTotalBetState(gameId) {
+  function probCfbPointsAtLeast(mean, line) {
+    if (mean == null) return null;
+    return cfbMixAtLeast(mean, Math.ceil(line), CFB_TEAM_MIX_OD, CFB_TEAM_NB_SHARE);
+  }
+
+  function getCfbTotalBetState(gameId, defaultLine) {
     if (!cfbTotalBetState[gameId]) {
-      cfbTotalBetState[gameId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 50 };
+      cfbTotalBetState[gameId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: defaultLine != null ? defaultLine : 50 };
     }
     return cfbTotalBetState[gameId];
   }
@@ -4467,9 +4487,7 @@
     // Same r/p Negative Binomial conversion as probCfbPointsAtLeast, just
     // with the game-total-specific overdispersion (4.6, not 5.2) - see the
     // constant's comment above for why they differ.
-    const p = 1 / CFB_GAME_TOTAL_OVERDISPERSION;
-    const r = mean / (CFB_GAME_TOTAL_OVERDISPERSION - 1);
-    return nbinomSf(Math.ceil(line) - 1, r, p);
+    return cfbMixAtLeast(mean, Math.ceil(line), CFB_GAME_MIX_OD, CFB_GAME_NB_SHARE);
   }
 
   function updateCfbTotalThreshold(gameId, value) {
@@ -4976,7 +4994,7 @@
         </div>`;
     }
 
-    const state = getCfbBetState(row.team);
+    const state = getCfbBetState(row.team, Math.max(1, Math.round(row.predicted_mean)));   // default line = the model's own prediction
     const line = state.threshold;
     const yesPct = probCfbPointsAtLeast(row.predicted_mean, line) * 100;
     const noPct = 100 - yesPct;
@@ -5046,7 +5064,9 @@
     }
 
     const totalMean = homeRow.predicted_mean + awayRow.predicted_mean;
-    const state = getCfbTotalBetState(gameId);
+    const postedTotal = homeRow.posted_total != null ? homeRow.posted_total : awayRow.posted_total;
+    // default line = posted sportsbook total as an "over" line (at least floor(total)+1); else the model's own total
+    const state = getCfbTotalBetState(gameId, postedTotal != null ? Math.floor(postedTotal) + 1 : Math.max(1, Math.round(totalMean)));
     const line = state.threshold;
     const yesPct = probCfbTotalAtLeast(totalMean, line) * 100;
     const noPct = 100 - yesPct;
@@ -5063,7 +5083,7 @@
     return `
       <div>
         <div class="teams">
-          <span>Total Points</span>
+          <span>Total Points${postedTotal != null ? ` <span class="settings-hint" style="font-size:.8rem;">(posted ${postedTotal})</span>` : ""}</span>
           <span class="score">${Math.round(totalMean)}</span>
         </div>
         <div class="hits-batter hits-batter-header" style="grid-template-columns: 44px 34px 34px 46px 52px 30px 60px 60px 40px;">

@@ -166,6 +166,22 @@ def pick_provider_line(game: dict, preferred_providers: list[str] = PREFERRED_PR
 
 
 
+def pick_posted_total(game: dict, preferred_providers: list = PREFERRED_PROVIDERS):
+    """The posted game total (overUnder) for one /lines entry, using the same provider order as
+    the spread (ncaa_platform.pick_market): first preferred provider with a non-null overUnder,
+    else the first entry that has one. None if no book has posted a total yet."""
+    lines = game.get("lines") or []
+    by = {l.get("provider"): l for l in lines if l.get("provider")}
+    order = [by[p] for p in preferred_providers if p in by] + [l for l in lines if l.get("provider") not in preferred_providers]
+    for l in order:
+        if l.get("overUnder") is not None:
+            try:
+                return float(l["overUnder"])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def refresh_cfb_scores_if_stale(db, season: int, week: int, games, min_minutes: int = 30) -> dict:
     """Score-only refresh used by /api/cfb/games: if any of this week's games
     kicked off 3+ hours ago and has no saved final yet, re-fetch ONE CFBD
@@ -415,6 +431,7 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             # SyncState key/value table (no schema change). Refreshed every
             # time Refresh Stats runs, since this_week_games is always a fresh fetch.
             score_map: dict = {}
+            totals_map: dict = {}   # posted game totals (overUnder) for the Total Points default line
             seen_teams: set = set()   # CfbGame's primary key is the team name: a team listed twice in one week would abort the whole refresh
             for game in this_week_games:
                 home, away = game.get("homeTeam"), game.get("awayTeam")
@@ -439,6 +456,9 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 neutral_site = bool(game.get("neutralSite"))
                 line_game = line_games_by_id.get(game.get("id"))
                 spread_provider, home_spread = pick_provider_line(line_game) if line_game else (None, None)
+                _pt = pick_posted_total(line_game) if line_game else None
+                if _pt is not None:
+                    totals_map[str(game.get("id"))] = _pt
                 db.add(CfbGame(team=home, opponent=away, game_id=game.get("id"), is_home=True,
                                 season=season, week=current_week, start_date_utc=start_date_utc,
                                 neutral_site=neutral_site, home_spread=home_spread, spread_provider=spread_provider))
@@ -457,6 +477,18 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             except Exception as e:
                 log.exception("Failed to store CFB final scores")
                 errors.append(f"final scores not saved: {type(e).__name__}")
+            try:
+                from models_db import SyncState
+                import json as _json
+                trow = db.get(SyncState, "cfb_posted_totals")
+                tpayload = _json.dumps({"season": season, "week": current_week, "totals": totals_map})
+                if trow is None:
+                    db.add(SyncState(key="cfb_posted_totals", value=tpayload))
+                else:
+                    trow.value = tpayload
+            except Exception as e:
+                log.exception("Failed to store CFB posted totals")
+                errors.append(f"posted totals not saved: {type(e).__name__}")
 
         db.commit()
         _league_avg_cache["value"] = None  # force recompute next read, using the fresh data just written

@@ -1254,6 +1254,17 @@ def cfb_games(db: Session = Depends(get_db)):
             spread_by_game[game_id] = {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
     final_scores = cfb_points_sync.refresh_cfb_scores_if_stale(db, games[0].season, games[0].week, games)
+    posted_totals: dict = {}
+    try:
+        from models_db import SyncState
+        import json as _json
+        _trow = db.get(SyncState, "cfb_posted_totals")
+        if _trow and _trow.value:
+            _tp = _json.loads(_trow.value) or {}
+            if _tp.get("season") == games[0].season and _tp.get("week") == games[0].week:
+                posted_totals = _tp.get("totals", {}) or {}
+    except Exception:
+        posted_totals = {}
 
     rows = []
     for g in games:
@@ -1273,6 +1284,7 @@ def cfb_games(db: Session = Depends(get_db)):
             "start_date_utc": g.start_date_utc,
             "predicted_mean": inputs["mean"] if inputs else None,
             "final_score": _final,
+            "posted_total": posted_totals.get(str(g.game_id)),
             "team_index": inputs["team_index"] if inputs else None,
             "opp_index": inputs["opp_index"] if inputs else None,
             "team_games_sample": inputs["team_games_sample"] if inputs else None,
