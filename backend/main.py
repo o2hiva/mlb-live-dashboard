@@ -104,6 +104,13 @@ async def lifespan(app: FastAPI):
     _scheduler = poller.start_scheduler()
     import nba_props_service
     nba_props_service.start_background()
+    try:
+        import nhl_goals_service
+        nhl_goals_service.start_background()
+    except Exception:
+        # the NHL goals model is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("NHL goals service failed to start")
     yield
     if _scheduler:
         _scheduler.shutdown()
@@ -1505,6 +1512,38 @@ def nba_debug_lineup(game_id: str):
     return nba_props_service.get_service().lineup_debug(game_id)
 
 
+@app.get("/api/nhl/games")
+def nhl_games(date: str | None = None):
+    """NHL Games tab: for one date (YYYY-MM-DD, default today Pacific) every game with moneyline win probabilities,
+    predicted goals per team, goal probability tables (team goals, game total, periods 1-3) and expected goalies.
+    Finished games on that date come back as results. See nhl_goals_service.py."""
+    import nhl_goals_service
+    return nhl_goals_service.get_service().games_payload(date)
+
+
+@app.get("/api/admin/refresh-nhl-goals")
+def refresh_nhl_goals():
+    """Manual refresh of the NHL goals model's data (results, schedule, new boxscores/period goals)."""
+    import nhl_goals_service
+    return nhl_goals_service.get_service().refresh_data(force=True)
+
+
+@app.get("/api/nhl/scorecard")
+def nhl_shadow_scorecard(log_now: bool = False):
+    """Shadow scorecard: pre-game NHL predictions (logged automatically) graded against final scores."""
+    import nhl_goals_service
+    svc = nhl_goals_service.get_service()
+    if log_now:
+        svc.shadow_log()
+    return svc.shadow_scorecard()
+
+
+@app.get("/api/nhl/health")
+def nhl_goals_health():
+    import nhl_goals_service
+    return nhl_goals_service.get_service().health()
+
+
 @app.get("/api/nba/health")
 def nba_health():
     import nba_props_service
@@ -1800,7 +1839,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if (r.bet_type or "").startswith("nba_") and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

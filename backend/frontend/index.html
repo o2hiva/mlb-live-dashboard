@@ -356,10 +356,29 @@
 
   <div id="tab-content-nhl" style="display:none;">
     <div class="tabs">
-      <span id="subtab-btn-nhl-goalies" class="tab-btn active" onclick="switchNhlSubTab('goalies')">Goalie Saves</span>
+      <span id="subtab-btn-nhl-games" class="tab-btn active" onclick="switchNhlSubTab('games')">Games</span>
+      <span id="subtab-btn-nhl-goalies" class="tab-btn" onclick="switchNhlSubTab('goalies')">Goalie Saves</span>
     </div>
 
-    <div id="subtab-content-nhl-goalies">
+    <div id="subtab-content-nhl-games">
+      <div class="sub">NHL Games - moneyline %, predicted goals and goal probabilities for every game on the selected date (model: team scoring x opposing goals-allowed x league average, with overtime, goalie and back-to-back adjustments). Open "Show Props" on a game for the game total, goals in each period and goalie saves. Moneyline and period numbers are not yet validated against sportsbook prices.</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label for="nhlg-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
+          <input id="nhlg-date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="loadNhlGamesTab()" />
+        </div>
+        <span class="hits-toggle" onclick="refreshNhlGames()" style="padding:6px 14px;">Refresh Stats</span>
+      </div>
+      <div id="nhlg-refresh-status" class="settings-hint"></div>
+      <div id="nhlg-status" class="settings-hint"></div>
+      <div id="nhlg-content">Loading...</div>
+      <div style="margin-top:24px;">
+        <span class="hits-toggle" onclick="toggleNhlScorecard()" style="padding:6px 14px;">Shadow Scorecard ▾</span>
+        <div id="nhlg-scorecard" style="display:none; margin-top:12px;"></div>
+      </div>
+    </div>
+
+    <div id="subtab-content-nhl-goalies" style="display:none;">
       <div class="sub">NHL Goalie Saves - real matchups for the selected date, each team's presumed starting goalie (most games on record so far this season) and predicted saves. The 2026-27 season just started, so predictions fill in automatically as enough real games are collected day by day.</div>
       <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
         <div>
@@ -2434,7 +2453,7 @@
     } else if (tab === "cfb") {
       loadCfbTab();
     } else if (tab === "nhl") {
-      loadNhlTab();
+      loadNhlGamesTab();
     } else if (tab === "nba") {
       loadNbaTab();
     }
@@ -2444,8 +2463,11 @@
   }
 
   function switchNhlSubTab(subtab) {
+    document.getElementById("subtab-content-nhl-games").style.display = subtab === "games" ? "block" : "none";
     document.getElementById("subtab-content-nhl-goalies").style.display = subtab === "goalies" ? "block" : "none";
+    document.getElementById("subtab-btn-nhl-games").classList.toggle("active", subtab === "games");
     document.getElementById("subtab-btn-nhl-goalies").classList.toggle("active", subtab === "goalies");
+    if (subtab === "games") loadNhlGamesTab(); else loadNhlTab();
   }
 
   function switchMlbSubTab(subtab) {
@@ -2528,6 +2550,10 @@
     { label: "NFL Points", filter: b => b.bet_type === "nfl_team_points" },
     { label: "NFL Total", filter: b => b.bet_type === "nfl_game_total" },
     { label: "NHL Goalie Saves", filter: b => b.bet_type === "nhl_goalie_saves" },
+    { label: "NHL Moneyline", filter: b => b.bet_type === "nhl_ml_home" || b.bet_type === "nhl_ml_away" },
+    { label: "NHL Team Goals", filter: b => b.bet_type === "nhl_tg_home" || b.bet_type === "nhl_tg_away" },
+    { label: "NHL Total Goals", filter: b => b.bet_type === "nhl_total" },
+    { label: "NHL Period Goals", filter: b => b.bet_type === "nhl_p1" || b.bet_type === "nhl_p2" || b.bet_type === "nhl_p3" },
     { label: "NBA Points", filter: b => b.bet_type === "nba_pts" },
     { label: "NBA Rebounds", filter: b => b.bet_type === "nba_reb" },
     { label: "NBA Assists", filter: b => b.bet_type === "nba_ast" },
@@ -2590,7 +2616,7 @@
     { label: "MLB", filter: b => ["hits", "hrr", "hr", "pitcher_k", "pitcher_hits_allowed", "first_inning_run"].includes(b.bet_type) || b.bet_type.startsWith("game_lines_") },
     { label: "NFL", filter: b => ["nfl_passing_yards", "nfl_rushing_yards", "nfl_team_points", "nfl_game_total"].includes(b.bet_type) || b.bet_type.startsWith("nfl_qb_dvp_") || b.bet_type.startsWith("nfl_rb_dvp_") },
     { label: "CFB", filter: b => b.bet_type.startsWith("cfb_") },
-    { label: "NHL", filter: b => b.bet_type === "nhl_goalie_saves" },
+    { label: "NHL", filter: b => b.bet_type.startsWith("nhl_") },
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
   ];
@@ -2817,7 +2843,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5577,6 +5603,7 @@
   let nhlGoalieDataCache = null;
 
   function renderNhlGoalieFromCache() {
+    if (typeof renderNhlGamesFromCache === "function") renderNhlGamesFromCache();   // the Games tab shows goalie saves inside its Show Props
     const container = document.getElementById("nhl-content");
     if (!nhlGoalieDataCache) return;
     const games = nhlGoalieDataCache.games || [];
@@ -5632,6 +5659,397 @@
       const data = await res.json();
       statusEl.textContent = `Refreshed - ${data.games_collected ?? 0} new game(s) collected, ${data.target_matchups ?? 0} matchup(s) for ${data.target_date ?? "target date"}.`;
       loadNhlTab();
+    } catch (e) {
+      statusEl.textContent = "Refresh failed - try again.";
+    }
+  }
+
+  // ---- NHL Games tab (model: nhl_platform.py via /api/nhl/games, see nhl_goals_service.py). One MLB-style box per
+  // game: each team's moneyline %, predicted goals, and a team-goals Over/Under with Market / Kelly / Wager / Profit /
+  // Track; "Show Props" opens a Game Lines tab with the game total, goals in each period (both teams combined) and the
+  // starting goalies' saves. The server sends probability TABLES (pmf[k] = P(exactly k goals)), so any line is priced
+  // instantly in the browser:  Over L = sum of pmf[k] for k > L,  Under L = sum for k < L,  Push = pmf[L] (whole-number
+  // lines only; the stake is refunded). Kelly uses the push-adjusted win probability pw / (pw + pl). ----
+  const NHLG_BET_TYPE = { ml_home: "nhl_ml_home", ml_away: "nhl_ml_away", tg_home: "nhl_tg_home", tg_away: "nhl_tg_away",
+                          total: "nhl_total", p1: "nhl_p1", p2: "nhl_p2", p3: "nhl_p3" };
+  let nhlgData = null;
+  const nhlgState = {};
+  const expandedNhlgGames = new Set();
+
+  function getNhlgState(gid, mk, fairLine) {
+    const k = gid + "|" + mk;
+    if (!nhlgState[k]) {
+      nhlgState[k] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null,
+                       threshold: fairLine != null ? fairLine : 0 };
+    }
+    return nhlgState[k];
+  }
+
+  function nhlgGame(gid) {
+    return nhlgData ? (nhlgData.games || []).find(g => String(g.game_id) === String(gid)) : null;
+  }
+
+  function nhlgPmf(g, mk) {
+    if (mk === "tg_home") return g.pmf_home;
+    if (mk === "tg_away") return g.pmf_away;
+    if (mk === "total") return g.pmf_total;
+    if (g.periods && /^p[123]$/.test(mk)) {
+      const p = g.periods[parseInt(mk[1], 10) - 1];
+      return p ? p.pmf_total : null;
+    }
+    return null;
+  }
+
+  function nhlgFairLine(g, mk) {
+    if (mk === "tg_home") return g.fair_line.home;
+    if (mk === "tg_away") return g.fair_line.away;
+    if (mk === "total") return g.fair_line.total;
+    const p = g.periods ? g.periods[parseInt(mk[1], 10) - 1] : null;
+    return p ? p.fair_line : 1.5;
+  }
+
+  function nhlgMean(g, mk) {
+    if (mk === "tg_home") return g.mu_home;
+    if (mk === "tg_away") return g.mu_away;
+    if (mk === "total") return g.mu_total;
+    const p = g.periods ? g.periods[parseInt(mk[1], 10) - 1] : null;
+    return p ? p.mu_total : null;
+  }
+
+  function nhlgOverUnderPush(pmf, line) {
+    let sum = 0;
+    for (const x of pmf) sum += x;
+    if (!(sum > 0)) return null;
+    let over = 0, under = 0, push = 0;
+    for (let k = 0; k < pmf.length; k++) {
+      if (k > line) over += pmf[k];
+      else if (k < line) under += pmf[k];
+      else push += pmf[k];
+    }
+    return { over: over / sum, under: under / sum, push: push / sum };
+  }
+
+  function nhlgCalc(gid, mk) {
+    const g = nhlgGame(gid);
+    if (!g) return null;
+    const pmf = nhlgPmf(g, mk);
+    if (!pmf) return null;
+    const st = getNhlgState(gid, mk, nhlgFairLine(g, mk));
+    const r = nhlgOverUnderPush(pmf, st.threshold);
+    if (!r) return null;
+    const pw = st.yn === "yes" ? r.over : r.under;
+    const pl = st.yn === "yes" ? r.under : r.over;
+    const modelProb = (pw + pl) > 0 ? pw / (pw + pl) : null;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
+    const profit = profitIfWon(wager, st.market);
+    return { g, st, line: st.threshold, over: r.over, under: r.under, push: r.push, modelProb, wager, profit };
+  }
+
+  function nhlgMlCalc(gid, side) {
+    const g = nhlgGame(gid);
+    if (!g) return null;
+    const mk = "ml_" + side;
+    const st = getNhlgState(gid, mk, null);
+    const modelProb = side === "home" ? g.ml_home : g.ml_away;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
+    const profit = profitIfWon(wager, st.market);
+    return { g, st, modelProb, wager, profit };
+  }
+
+  function updateNhlgLine(gid, mk, value) {
+    const g = nhlgGame(gid);
+    const st = getNhlgState(gid, mk, g ? nhlgFairLine(g, mk) : null);
+    const v = parseFloat(value);
+    if (!isNaN(v)) st.threshold = v;
+    renderNhlGamesFromCache();
+  }
+
+  function updateNhlgField(gid, mk, field, value) {
+    const g = nhlgGame(gid);
+    const st = getNhlgState(gid, mk, g && !mk.startsWith("ml_") ? nhlgFairLine(g, mk) : null);
+    if (field === "market") st.market = value === "" ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderNhlGamesFromCache();
+  }
+
+  function toggleNhlgProps(gid) {
+    if (expandedNhlgGames.has(String(gid))) expandedNhlgGames.delete(String(gid));
+    else expandedNhlgGames.add(String(gid));
+    renderNhlGamesFromCache();
+  }
+
+  const NHLG_LABELS = { total: "Total Goals", p1: "1st Period Goals", p2: "2nd Period Goals", p3: "3rd Period Goals" };
+
+  async function toggleNhlgTrack(gid, mk, checked) {
+    const isMl = mk.startsWith("ml_");
+    const c = isMl ? nhlgMlCalc(gid, mk.slice(3)) : nhlgCalc(gid, mk);
+    if (!c) return;
+    const { g, st, modelProb, wager, profit } = c;
+    if (checked) {
+      let name;
+      if (isMl) name = `${mk === "ml_home" ? g.home : g.away} Moneyline`;
+      else if (mk === "tg_home") name = `${g.home} Team Goals`;
+      else if (mk === "tg_away") name = `${g.away} Team Goals`;
+      else name = NHLG_LABELS[mk];
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: NHLG_BET_TYPE[mk], external_player_id: String(gid),
+            batter_name: name, team_side: `${g.away} @ ${g.home}`,
+            line: isMl ? null : c.line, yn: isMl ? "yes" : st.yn,
+            model_probability: modelProb, market_probability: st.market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; }
+        else { st.tracked = false; st.trackedId = null; }
+      } catch (e) {
+        st.tracked = false; st.trackedId = null;
+      }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderNhlGamesFromCache();
+  }
+
+  const NHLG_OU_COLS = "minmax(110px, 1.2fr) 46px 40px 40px 60px 52px 30px 58px 54px 40px";
+  const NHLG_ML_COLS = "minmax(110px, 1.3fr) 52px 46px 30px 58px 54px 22px";
+
+  function nhlgOuHeaderHtml(firstLabel) {
+    return `<div class="hits-batter-header" style="display:grid; grid-template-columns: ${NHLG_OU_COLS}; gap:4px; margin-top:8px;">
+      <span style="text-align:left;">${firstLabel}</span><span>O/U</span><span>Over</span><span>Under</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function nhlgOuRowHtml(gid, mk, label) {
+    const c = nhlgCalc(gid, mk);
+    if (!c) return "";
+    const { g, st, line, over, under, push, wager, profit } = c;
+    const marketVal = st.market != null ? st.market : "";
+    const mu = nhlgMean(g, mk);
+    const wagerCell = st.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateNhlgField('${gid}','${mk}','manualWager',this.value)" />`;
+    const pushTip = push > 0.0005 ? ` title="Push (exact tie, stake refunded): ${(push * 100).toFixed(1)}%"` : "";
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${NHLG_OU_COLS};">
+        <span style="font-size:0.8rem;">${label} <span class="hits-index">${mu != null ? mu.toFixed(2) : ""}</span></span>
+        <input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNhlgLine('${gid}','${mk}',this.value)" />
+        <span class="prob-yes"${pushTip}>${Math.round(over * 100)}%</span>
+        <span class="prob-no"${pushTip}>${Math.round(under * 100)}%</span>
+        <select onchange="updateNhlgField('${gid}','${mk}','yn',this.value)">
+          <option value="yes" ${st.yn === "yes" ? "selected" : ""}>Over</option>
+          <option value="no" ${st.yn === "no" ? "selected" : ""}>Under</option>
+        </select>
+        <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNhlgField('${gid}','${mk}','market',this.value)" />
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateNhlgField('${gid}','${mk}','useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleNhlgTrack('${gid}','${mk}',this.checked)" />
+      </div>
+      ${push > 0.0005 ? `<div class="settings-hint" style="margin:-2px 0 2px 0; font-size:0.65rem;">Push at ${line}: ${(push * 100).toFixed(1)}% (stake refunded)</div>` : ""}`;
+  }
+
+  function nhlgGoalieText(list) {
+    if (!list || !list.length) return "goalie TBD";
+    if (list.length === 1) return `${list[0].name || "goalie TBD"}${list[0].confirmed ? " ✓" : ""}`;
+    return list.map(x => `${x.name || "?"} ${Math.round(x.p * 100)}%`).join(" / ");
+  }
+
+  function nhlgTeamBlockHtml(g, side) {
+    const gid = g.game_id;
+    const team = side === "home" ? g.home : g.away;
+    const c = nhlgMlCalc(gid, side);
+    if (!c) return "";
+    const { st, modelProb, wager, profit } = c;
+    const mk = "ml_" + side;
+    const pct = Math.round(modelProb * 100);
+    const mu = side === "home" ? g.mu_home : g.mu_away;
+    const marketVal = st.market != null ? st.market : "";
+    const wagerCell = st.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateNhlgField('${gid}','${mk}','manualWager',this.value)" />`;
+    const sideLabel = side === "home" ? "Home" : "Away";
+    const goalies = g.goalies ? g.goalies[side] : null;
+    const rest = g.rest ? (side === "home" ? g.rest.home_b2b : g.rest.away_b2b) : false;
+    return `
+      <div style="${side === "home" ? "margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);" : ""}">
+        <div class="hits-batter-header" style="display:grid; grid-template-columns: ${NHLG_ML_COLS}; gap:4px; margin-bottom:2px;">
+          <span style="text-align:left;">${sideLabel}</span><span>Goals</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        <div class="hits-batter" style="grid-template-columns: ${NHLG_ML_COLS}; padding:4px 0;">
+          <span style="font-size:1rem; font-weight:600;">${team} <span class="prob-yes" title="Moneyline win probability (overtime and shootout included)">${pct}%</span></span>
+          <span class="score" style="text-align:center; font-weight:700; overflow:visible;">${mu.toFixed(1)}</span>
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNhlgField('${gid}','${mk}','market',this.value)" />
+          <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateNhlgField('${gid}','${mk}','useKelly',this.checked)" />
+          ${wagerCell}
+          <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+          <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleNhlgTrack('${gid}','${mk}',this.checked)" />
+        </div>
+        <div class="meta">${nhlgGoalieText(goalies)}${rest ? " · back-to-back" : ""}</div>
+        ${nhlgOuHeaderHtml("Team goals")}
+        ${nhlgOuRowHtml(gid, "tg_" + side, team + " goals")}
+      </div>`;
+  }
+
+  function nhlgFinalCardHtml(g) {
+    const pg = g.period_goals;
+    const per = pg && pg.home && pg.away
+      ? `<div class="meta">${[0, 1, 2].map(i => `P${i + 1}: ${pg.away[i] ?? "–"}-${pg.home[i] ?? "–"}`).join(" · ")} <span style="opacity:.6;">(away-home)</span></div>` : "";
+    const how = g.ended_in && g.ended_in !== "REG" ? ` (${g.ended_in}${g.ended_in === "SO" && g.so_winner ? ", " + (g.so_winner === "home" ? g.home : g.away) + " won" : ""})` : "";
+    return `
+      <div class="card">
+        <div class="meta">Final${how}</div>
+        <div class="teams"><span>${g.away}</span><span class="score">${g.ag}</span></div>
+        <div class="teams"><span>${g.home}</span><span class="score">${g.hg}</span></div>
+        ${per}
+      </div>`;
+  }
+
+  function nhlgGoalieSectionHtml(g) {
+    const rows = (nhlGoalieDataCache && nhlGoalieDataCache.games ? nhlGoalieDataCache.games : []).filter(r => String(r.game_id) === String(g.game_id));
+    const away = rows.find(r => !r.is_home), home = rows.find(r => r.is_home);
+    if (!away && !home) {
+      return `<div class="settings-hint" style="margin-top:12px;">Goalie saves: no data collected for this date yet - click Refresh Stats.</div>`;
+    }
+    return `<div class="hits-side-label" style="margin-top:14px;">Goalie Saves</div>${nhlGoalieBlockHtml(away, false)}${nhlGoalieBlockHtml(home, true)}`;
+  }
+
+  function nhlgCardHtml(g) {
+    if (g.final) return nhlgFinalCardHtml(g);
+    const gid = g.game_id;
+    const status = g.started ? "Started / in progress" : (g.start_utc ? formatKickoffPacific(g.start_utc) : "Time TBD");
+    const warn = g.trusted ? "" : ` · <span style="color:#e0a050;" title="A team has fewer than 3 games of data this season - predictions lean on last season / league average">early-season data</span>`;
+    const expanded = expandedNhlgGames.has(String(gid));
+    let expandedHtml = "";
+    if (expanded) {
+      const periodRows = g.periods
+        ? ["p1", "p2", "p3"].map(mk => nhlgOuRowHtml(gid, mk, NHLG_LABELS[mk])).join("")
+        : `<div class="settings-hint">Period model unavailable.</div>`;
+      expandedHtml = `
+        <div class="lineup-tabs"><span class="lineup-tab active">Game Lines</span></div>
+        <div style="margin-top:10px;">
+          ${nhlgOuHeaderHtml("Goals (both teams)")}
+          ${nhlgOuRowHtml(gid, "total", NHLG_LABELS.total)}
+          ${periodRows}
+          ${nhlgGoalieSectionHtml(g)}
+        </div>`;
+    }
+    return `
+      <div class="card">
+        <div class="meta">${status} · ${g.away} @ ${g.home}${warn}</div>
+        ${nhlgTeamBlockHtml(g, "away")}
+        ${nhlgTeamBlockHtml(g, "home")}
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
+          <span class="hits-toggle" onclick="toggleNhlgProps('${gid}')">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
+          ${expandedHtml}
+        </div>
+      </div>`;
+  }
+
+  function renderNhlGamesFromCache() {
+    const container = document.getElementById("nhlg-content");
+    if (!container || !nhlgData) return;
+    const statusEl = document.getElementById("nhlg-status");
+    const warns = (nhlgData.warnings || []).filter(w => !/^No NHL games found/.test(w));
+    if (statusEl) statusEl.textContent = warns.join(" · ");
+    if (nhlgData.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(nhlgData.warnings || ["NHL data unavailable right now."]).join(" ")}</div>`;
+      return;
+    }
+    const games = nhlgData.games || [];
+    if (!games.length) {
+      container.innerHTML = `<div class="settings-hint">No NHL games on this date.</div>`;
+      return;
+    }
+    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));">${games.map(nhlgCardHtml).join("")}</div>`;
+  }
+
+  async function loadNhlGamesTab(silent) {
+    const dateInput = document.getElementById("nhlg-date-picker");
+    if (!dateInput.value) dateInput.value = todayIso();
+    const container = document.getElementById("nhlg-content");
+    if (!silent) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const [res, res2] = await Promise.all([
+        fetch(`${API_BASE}/api/nhl/games?date=${dateInput.value}`),
+        fetch(`${API_BASE}/api/nhl/goalie-saves?target_date=${dateInput.value}`).catch(() => null),
+      ]);
+      nhlgData = await res.json();
+      if (res2 && res2.ok) {
+        try { nhlGoalieDataCache = await res2.json(); } catch (e) { /* goalie saves are optional here */ }
+      }
+      renderNhlGamesFromCache();
+    } catch (e) {
+      if (!silent) container.innerHTML = `<div class="settings-hint">Couldn't load NHL games.</div>`;
+    }
+  }
+
+
+  // ---- NHL shadow scorecard: pre-game predictions (logged automatically) graded against final scores
+  async function toggleNhlScorecard() {
+    const el = document.getElementById("nhlg-scorecard");
+    if (el.style.display !== "none") { el.style.display = "none"; return; }
+    el.style.display = "block";
+    el.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/nhl/scorecard?log_now=true`);
+      const d = await res.json();
+      el.innerHTML = nhlScorecardHtml(d);
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the scorecard.</div>`;
+    }
+  }
+
+  function nhlScorecardHtml(d) {
+    if (!d || d.status !== "ok") return `<div class="settings-hint">Scorecard unavailable: ${(d && d.warnings && d.warnings[0]) || "error"}</div>`;
+    const pc = (x) => (x == null ? "-" : (x * 100).toFixed(1) + "%");
+    const f2 = (x) => (x == null ? "-" : Number(x).toFixed(2));
+    const f3 = (x) => (x == null ? "-" : Number(x).toFixed(3));
+    const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;";
+    const td = "text-align:right; padding:3px 8px;";
+    let h = `<div class="settings-hint">${d.graded} graded game(s), ${d.pending} waiting to finish. Predictions are saved automatically before each game starts (shadow only - no bets). Judge the model after 100+ graded games; small samples swing a lot.</div>`;
+    if (!d.graded) return h + (d.note ? `<div class="settings-hint">${d.note}</div>` : "");
+    const ml = d.moneyline, g = d.goals;
+    h += `<div style="margin:10px 0 4px; font-weight:600;">Moneyline</div>
+      <div class="settings-hint">Brier ${f3(ml.brier)} (coin-flip 0.250, lower is better) - Log loss ${f3(ml.log_loss)} (coin-flip 0.693) - Favorite won ${pc(ml.favorite_win_rate)}</div>
+      <table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Favorite %</th><th style="${th}">Games</th><th style="${th}">Predicted</th><th style="${th}">Actual</th></tr>
+      ${ml.calibration.map(b => `<tr><td style="${td}">${b.bucket}</td><td style="${td}">${b.n}</td><td style="${td}">${pc(b.predicted)}</td><td style="${td}">${pc(b.actual)}</td></tr>`).join("")}</table>`;
+    h += `<div style="margin:12px 0 4px; font-weight:600;">Goals</div>
+      <div class="settings-hint">Avg total predicted ${f2(g.avg_predicted_total)} vs actual ${f2(g.avg_actual_total)} - Log loss: team goals ${f3(g.team_log_loss)}, game total ${f3(g.total_log_loss)}</div>
+      <table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Total over</th><th style="${th}">Games</th><th style="${th}">Predicted</th><th style="${th}">Actual</th></tr>
+      ${g.total_over.map(b => `<tr><td style="${td}">${b.line}</td><td style="${td}">${b.n}</td><td style="${td}">${pc(b.predicted)}</td><td style="${td}">${pc(b.actual)}</td></tr>`).join("")}</table>`;
+    if (d.periods && d.periods.length) {
+      h += `<div style="margin:12px 0 4px; font-weight:600;">Periods (both teams combined)</div>
+      <table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Period</th><th style="${th}">Games</th><th style="${th}">Goals pred</th><th style="${th}">Goals actual</th><th style="${th}">Any goal pred</th><th style="${th}">actual</th><th style="${th}">Over 1.5 pred</th><th style="${th}">actual</th></tr>
+      ${d.periods.map(p => `<tr><td style="${td}">P${p.period}</td><td style="${td}">${p.n}</td><td style="${td}">${f2(p.avg_predicted)}</td><td style="${td}">${f2(p.avg_actual)}</td><td style="${td}">${pc(p.p_goal_predicted)}</td><td style="${td}">${pc(p.p_goal_actual)}</td><td style="${td}">${pc(p.over15_predicted)}</td><td style="${td}">${pc(p.over15_actual)}</td></tr>`).join("")}</table>`;
+    }
+    return h;
+  }
+
+  async function refreshNhlGames() {
+    const statusEl = document.getElementById("nhlg-refresh-status");
+    const dateInput = document.getElementById("nhlg-date-picker");
+    if (!dateInput.value) dateInput.value = todayIso();
+    statusEl.textContent = "Refreshing NHL results and schedule - the first run after a long gap can take a minute...";
+    try {
+      const r = await (await fetch(`${API_BASE}/api/admin/refresh-nhl-goals`)).json();
+      let msg = r.status === "ok" ? `Goals model refreshed (${r.boxscores_new ?? 0} new boxscore(s)).` : `Goals model: ${r.status}${r.error ? " - " + r.error : (r.reason ? " - " + r.reason : "")}.`;
+      statusEl.textContent = msg + " Updating goalie saves...";
+      try {
+        const season = document.getElementById("nhl-season-input").value || "20262027";
+        await fetch(`${API_BASE}/api/admin/refresh-nhl-goalie-saves-stats?season=${season}&target_date=${dateInput.value}`);
+        msg += " Goalie saves updated.";
+      } catch (e) {
+        msg += " Goalie saves refresh failed.";
+      }
+      statusEl.textContent = msg;
+      loadNhlGamesTab();
     } catch (e) {
       statusEl.textContent = "Refresh failed - try again.";
     }

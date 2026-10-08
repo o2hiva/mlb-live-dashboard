@@ -209,7 +209,9 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nfl_rb_dvp_receiving_yards", "nfl_rb_dvp_receiving_tds",
                           "nfl_rb_dvp_total_yards", "nfl_rb_dvp_total_tds", "nfl_rb_dvp_anytime_td",
                           "nhl_goalie_saves", "npb_yrfi",
-                          "nba_pts", "nba_reb", "nba_ast", "nba_pra"}
+                          "nba_pts", "nba_reb", "nba_ast", "nba_pra",
+                          "nhl_ml_home", "nhl_ml_away", "nhl_tg_home", "nhl_tg_away",
+                          "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3"}
 
 NBA_BET_STATS = {"nba_pts": "pts", "nba_reb": "reb", "nba_ast": "ast", "nba_pra": "pra"}
 
@@ -228,6 +230,48 @@ def _grade_nba_prop(bet: TrackedBet):
     if status == "dnp":
         return 0.0, "push"
     actual = float(stats[NBA_BET_STATS[bet.bet_type]])
+    if actual == bet.line:
+        return actual, "push"
+    over = actual > bet.line
+    return actual, ("win" if (over if bet.yn == "yes" else not over) else "loss")
+
+
+NHL_GOAL_BET_TYPES = {"nhl_ml_home", "nhl_ml_away", "nhl_tg_home", "nhl_tg_away", "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3"}
+
+
+def _grade_nhl_goal_bet(bet: TrackedBet):
+    """NHL goals bets from the Games tab. The bet stores the NHL game id in external_player_id. Returns None while the
+    game isn't final (or its saved result isn't in yet), else (actual, result) with result "win" / "loss" / "push".
+      nhl_ml_home / nhl_ml_away   moneyline: the team that won the game (overtime and shootout included) wins; actual = 1.0/0.0
+      nhl_tg_home / nhl_tg_away   that team's goals, regulation + overtime (the shootout goal is NOT counted)
+      nhl_total                   both teams' goals, regulation + overtime
+      nhl_p1 / p2 / p3            both teams' goals in that period (regulation only)
+    Over (yn == "yes") wins on actual > line, Under on actual < line, an exact tie on a whole-number line is a push."""
+    import nhl_goals_service
+    if not bet.external_player_id:
+        return None
+    res = nhl_goals_service.get_service().final_result(bet.external_player_id)
+    if res is None:
+        return None
+    t = bet.bet_type
+    if t in ("nhl_ml_home", "nhl_ml_away"):
+        side = "home" if t.endswith("home") else "away"
+        if res["winner"] is None:
+            return None
+        won = res["winner"] == side
+        return (1.0 if won else 0.0), ("win" if won else "loss")
+    if bet.line is None:
+        return None
+    if t in ("nhl_tg_home", "nhl_tg_away"):
+        actual = float(res["hg"] if t.endswith("home") else res["ag"])
+    elif t == "nhl_total":
+        actual = float(res["hg"] + res["ag"])
+    else:
+        pg = res.get("period_goals")
+        idx = int(t[-1]) - 1
+        if not pg or len(pg.get("home", [])) <= idx or len(pg.get("away", [])) <= idx:
+            return None
+        actual = float(pg["home"][idx] + pg["away"][idx])
     if actual == bet.line:
         return actual, "push"
     over = actual > bet.line
@@ -763,11 +807,11 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES:
                 try:
-                    graded_nba = _grade_nba_prop(bet)
+                    graded_nba = _grade_nba_prop(bet) if bet.bet_type in NBA_BET_STATS else _grade_nhl_goal_bet(bet)
                 except Exception:
-                    log.exception("NBA grading failed for bet %s", bet.id)
+                    log.exception("NBA/NHL grading failed for bet %s", bet.id)
                     graded_nba = None
                 if graded_nba is None:
                     still_pending += 1
