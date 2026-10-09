@@ -5773,6 +5773,12 @@
     renderNhlGamesFromCache();
   }
 
+  const activeNhlgPropTab = {};
+  function switchNhlgPropTab(gid, tab) {
+    activeNhlgPropTab[String(gid)] = tab;
+    renderNhlGamesFromCache();
+  }
+
   function toggleNhlgProps(gid) {
     if (expandedNhlgGames.has(String(gid))) expandedNhlgGames.delete(String(gid));
     else expandedNhlgGames.add(String(gid));
@@ -5931,14 +5937,20 @@
       const periodRows = g.periods
         ? ["p1", "p2", "p3"].map(mk => nhlgOuRowHtml(gid, mk, NHLG_LABELS[mk])).join("")
         : `<div class="settings-hint">Period model unavailable.</div>`;
-      expandedHtml = `
-        <div class="lineup-tabs"><span class="lineup-tab active">Game Lines</span></div>
-        <div style="margin-top:10px;">
+      const tab = activeNhlgPropTab[String(gid)] || "lines";
+      const body = tab === "goalies"
+        ? `<div style="margin-top:10px;">${nhlgGoalieSectionHtml(g)}</div>`
+        : `<div style="margin-top:10px;">
           ${nhlgOuHeaderHtml("Goals (both teams)")}
           ${nhlgOuRowHtml(gid, "total", NHLG_LABELS.total)}
           ${periodRows}
-          ${nhlgGoalieSectionHtml(g)}
         </div>`;
+      expandedHtml = `
+        <div class="lineup-tabs">
+          <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchNhlgPropTab('${gid}','lines')">Game Lines</span>
+          <span class="lineup-tab ${tab === "goalies" ? "active" : ""}" onclick="switchNhlgPropTab('${gid}','goalies')">Goalie Saves</span>
+        </div>
+        ${body}`;
     }
     return `
       <div class="card">
