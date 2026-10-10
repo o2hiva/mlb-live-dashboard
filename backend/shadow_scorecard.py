@@ -59,30 +59,46 @@ def register(adapter: Adapter):
 
 
 # ---------------------------------------------------------------- storage
-def _key(sport):
-    return f"shadow_{sport}"
+# One JSON blob per (sport, shard) in SyncState. A record's optional "shard" (e.g. "2026-10" for a daily sport)
+# keeps each blob small; sports without a shard use the single blob 'shadow_<sport>'.
+def _skey(sport, shard=""):
+    return f"shadow_{sport}" if not shard else f"shadow_{sport}:{shard}"
 
 
-def _load(db, sport) -> dict:
+def _get(db, key, default):
     from models_db import SyncState
-    row = db.get(SyncState, _key(sport))
+    row = db.get(SyncState, key)
     if row and row.value:
         try:
-            return json.loads(row.value) or {}
+            return json.loads(row.value)
         except Exception:
-            log.exception("shadow log for %s unreadable", sport)
-    return {}
+            log.exception("shadow log %s unreadable", key)
+    return default
 
 
-def _save(db, sport, data: dict):
+def _put(db, key, obj):
     from models_db import SyncState
-    payload = json.dumps(data, separators=(",", ":"))
-    row = db.get(SyncState, _key(sport))
+    payload = json.dumps(obj, separators=(",", ":"))
+    row = db.get(SyncState, key)
     if row is None:
-        db.add(SyncState(key=_key(sport), value=payload))
+        db.add(SyncState(key=key, value=payload))
     else:
         row.value = payload
-    db.commit()
+
+
+def _shard_names(db, sport) -> list:
+    return sorted(_get(db, f"shadow_{sport}:_shards", []))
+
+
+def _load(db, sport, shard="") -> dict:
+    return _get(db, _skey(sport, shard), {}) or {}
+
+
+def _load_all(db, sport) -> dict:
+    data = dict(_load(db, sport, ""))
+    for sh in _shard_names(db, sport):
+        data.update(_load(db, sport, sh))
+    return data
 
 
 def _parse_utc(s):
@@ -97,50 +113,88 @@ def _parse_utc(s):
 # ---------------------------------------------------------------- logging + settling
 def log_now(db, sport) -> dict:
     """Save pre-game predictions. A game already started (or already settled) is never touched, so the log can
-    only ever hold what the model said BEFORE kickoff (the latest pre-kickoff version wins)."""
+    only ever hold what the model said BEFORE the start (the latest pre-start version wins).
+    A record with "merge": True only replaces the markets it carries and keeps the other items already logged."""
     ad = REGISTRY[sport]
     with _lock:
-        data = _load(db, sport)
         now = datetime.utcnow()
-        added = updated = skipped = 0
+        incoming = {}
+        skipped = 0
         for rec in ad.collect(db) or []:
             start = _parse_utc(rec.get("start"))
             if start is None or start <= now or not rec.get("items"):
                 skipped += 1
                 continue
-            old = data.get(rec["id"])
-            if old and old.get("result") is not None:
-                continue
-            if old:
-                updated += 1
-            else:
-                added += 1
-            rec = dict(rec)
-            rec["logged_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
-            rec["result"] = None
-            data[rec["id"]] = rec
-        _save(db, sport, data)
-        return {"added": added, "updated": updated, "skipped": skipped, "total": len(data)}
+            incoming.setdefault(rec.get("shard", ""), []).append(rec)
+        added = updated = 0
+        names = set(_shard_names(db, sport))
+        for shard, recs in incoming.items():
+            data = _load(db, sport, shard)
+            for rec in recs:
+                old = data.get(rec["id"])
+                if old and (old.get("result") is not None or old.get("graded") is not None):
+                    continue
+                rec = dict(rec)
+                merge = rec.pop("merge", False)
+                if old and merge:
+                    keep = [it for it in old.get("items", []) if it["m"] not in {i["m"] for i in rec["items"]}]
+                    rec["items"] = keep + rec["items"]
+                    rec["ctx"] = {**old.get("ctx", {}), **rec.get("ctx", {})}
+                if old:
+                    updated += 1
+                else:
+                    added += 1
+                rec["logged_at"] = now.strftime("%Y-%m-%dT%H:%M:%S")
+                rec["result"] = None
+                data[rec["id"]] = rec
+            _put(db, _skey(sport, shard), data)
+            if shard:
+                names.add(shard)
+        if names:
+            _put(db, f"shadow_{sport}:_shards", sorted(names))
+        db.commit()
+        return {"added": added, "updated": updated, "skipped": skipped}
 
 
 def settle_now(db, sport) -> dict:
+    """Grade finished games. Settled records are compacted to just their graded outcomes (market, p, hit, segment)."""
     ad = REGISTRY[sport]
     with _lock:
-        data = _load(db, sport)
         now = datetime.utcnow()
-        pending = [r for r in data.values() if r.get("result") is None
-                   and (_parse_utc(r.get("start")) or now) < now]
-        if not pending:
-            return {"settled": 0, "pending": 0}
-        results = ad.settle(db, pending) or {}
-        n = 0
-        for rid, res in results.items():
-            if rid in data and res is not None:
-                data[rid]["result"] = res
+        shards = [""] + _shard_names(db, sport)[-3:]   # only recent shards can still hold unsettled games
+        settled = pending_total = 0
+        for shard in shards:
+            data = _load(db, sport, shard)
+            pending = [r for r in data.values() if r.get("graded") is None and r.get("result") is None
+                       and (_parse_utc(r.get("start")) or now) < now]
+            if not pending:
+                continue
+            results = ad.settle(db, pending) or {}
+            n = 0
+            for rid, res in results.items():
+                rec = data.get(rid)
+                if rec is None or res is None:
+                    continue
+                g = []
+                if not res.get("void"):
+                    for it in rec.get("items", []):
+                        try:
+                            y = ad.grade(it, res, rec)
+                        except Exception:
+                            y = None
+                        if y is not None:
+                            g.append([it["m"], it["p"], int(y), it.get("seg")])
+                rec["graded"] = g
+                rec["result"] = {"void": True} if res.get("void") else {"settled": 1}
+                rec.pop("items", None)
+                rec.pop("ctx", None)
                 n += 1
-        if n:
-            _save(db, sport, data)
-        return {"settled": n, "pending": len(pending) - n}
+            if n:
+                _put(db, _skey(sport, shard), data)
+            settled += n
+            pending_total += len(pending) - n
+        db.commit()
+        return {"settled": settled, "pending": pending_total}
 
 
 # ---------------------------------------------------------------- metrics
@@ -245,25 +299,20 @@ def _verdict(m, is_line) -> str:
 def scorecard(db, sport) -> dict:
     ad = REGISTRY[sport]
     with _lock:
-        data = _load(db, sport)
+        data = _load_all(db, sport)
     graded_games = 0
     by_m: dict[str, list] = {}
     by_seg: dict[tuple, list] = {}
     for rec in data.values():
-        res = rec.get("result")
-        if res is None:
+        g = rec.get("graded")
+        if g is None:
             continue
-        graded_games += 1
-        for it in rec.get("items", []):
-            try:
-                y = ad.grade(it, res, rec)
-            except Exception:
-                y = None
-            if y is None:
-                continue
-            by_m.setdefault(it["m"], []).append((float(it["p"]), int(y)))
-            if it.get("seg"):
-                by_seg.setdefault((it["m"], it["seg"]), []).append((float(it["p"]), int(y)))
+        if g:
+            graded_games += 1
+        for m, p, y, seg in g:
+            by_m.setdefault(m, []).append((float(p), int(y)))
+            if seg:
+                by_seg.setdefault((m, seg), []).append((float(p), int(y)))
     markets = []
     order = list(ad.markets) + [m for m in by_m if m not in ad.markets]
     for m in order:
@@ -281,8 +330,9 @@ def scorecard(db, sport) -> dict:
         entry["segments"] = segs
         markets.append(entry)
     logged = len(data)
+    pending = sum(1 for r in data.values() if r.get("graded") is None)
     return {"status": "ok", "sport": sport, "label": ad.label, "logged": logged, "graded": graded_games,
-            "pending": logged - graded_games, "markets": markets, "notes": ad.notes,
+            "pending": pending, "markets": markets, "notes": ad.notes,
             "min_n_verdict": MIN_N_VERDICT, "breakeven_110": BREAKEVEN_110}
 
 
@@ -462,3 +512,174 @@ def make_cfb_adapter(get_rows: Callable) -> Adapter:
         markets={"spread": "Spread (home covers)", "ml": "Moneyline (home wins)",
                  "total": "Game total (at least posted)", "team_pts": "Team points (at least N)"},
         line_markets={"spread", "total"}, notes=CFB_NOTES)
+
+
+# ====================================================================== MLB adapter
+def _poisson_ge(mean: float, n: int) -> float:
+    if n <= 0:
+        return 1.0
+    if not mean or mean <= 0:
+        return 0.0
+    cdf = sum(math.exp(k * math.log(mean) - mean - math.lgamma(k + 1)) for k in range(n))
+    return min(1.0, max(0.0, 1.0 - cdf))
+
+
+def _nb_ge(r: float, p: float, n: int) -> float:
+    if n <= 0:
+        return 1.0
+    if not r or not p or r <= 0 or p <= 0 or p >= 1:
+        return None
+    lp, lq = math.log(p), math.log(1 - p)
+    cdf = sum(math.exp(math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1) + r * lp + k * lq) for k in range(n))
+    return min(1.0, max(0.0, 1.0 - cdf))
+
+
+def _binom_ge1(n_ab, p) -> float:
+    return 1.0 - (1.0 - p) ** max(1, int(round(n_ab)))
+
+
+def _order_seg(bo):
+    try:
+        bo = int(bo)
+    except Exception:
+        return None
+    # MLB lineups store batting order as 1-9 (or 100-900 in some feeds)
+    if bo >= 100:
+        bo //= 100
+    return "order 1-3" if bo <= 3 else "order 4-6" if bo <= 6 else "order 7-9"
+
+
+def mlb_collect_from_bundles(bundles: list) -> list:
+    """bundles: [{game: <games/today row>, hits, hrr, hr, k, pha}] (each prop response may be None)."""
+    out = []
+    for b in bundles:
+        g = b["game"]
+        start = g.get("game_datetime_utc")
+        if not start:
+            continue
+        items = []
+        py = g.get("first_inning_run_yes_probability")
+        if py is not None:
+            items.append({"m": "yrfi", "p": round(py, 5)})
+        pm = g.get("home_moneyline_win_prob")
+        if pm is not None:
+            items.append({"m": "ml", "p": round(pm, 5)})
+        full = bool(b.get("full", True))
+        if full:
+            for key, mk, fn in (("hits", "hits1", lambda x: _binom_ge1(x["n_ab"], x["p"]) if x.get("n_ab") and x.get("p") is not None else None),
+                                ("hr", "hr1", lambda x: _binom_ge1(x["n_ab"], x["p"]) if x.get("n_ab") and x.get("p") is not None else None),
+                                ("hrr", "hrr2", lambda x: _nb_ge(x.get("r"), x.get("p"), 2) if x.get("r") is not None and x.get("p") is not None else None)):
+                resp = b.get(key) or {}
+                for side in ("home", "away"):
+                    for x in resp.get(f"{side}_batters", []) or []:
+                        pr = fn(x)
+                        if pr is not None and x.get("batter_id"):
+                            items.append({"m": mk, "p": round(pr, 5), "pid": x["batter_id"], "side": side,
+                                          "seg": _order_seg(x.get("batting_order"))})
+            for key, mk in (("k", "pitcher_k"), ("pha", "pitcher_ha")):
+                resp = b.get(key) or {}
+                for side in ("home", "away"):
+                    pit = resp.get(f"{side}_pitcher") or {}
+                    mean = pit.get("mean")
+                    if mean and pit.get("pitcher_id"):
+                        base = max(1, int(round(mean)))
+                        for d in (-1, 0, 1):
+                            n = base + d
+                            if n >= 1:
+                                items.append({"m": mk, "p": round(_poisson_ge(mean, n), 5), "line": n,
+                                              "pid": pit["pitcher_id"], "side": side})
+        if not items:
+            continue
+        both = bool(g.get("home_lineup_confirmed") and g.get("away_lineup_confirmed"))
+        out.append({"id": str(g["game_pk"]), "start": str(start)[:19], "shard": str(g.get("game_date", ""))[:7] or "unknown",
+                    "label": f"{g.get('away_team')} @ {g.get('home_team')}", "merge": not full,
+                    "ctx": ({"home": g.get("home_team"), "away": g.get("away_team"), "locked": both} if full else {}), "items": items})
+    return out
+
+
+def mlb_grade(item, result, rec):
+    m = item["m"]
+    if result.get("void"):
+        return None
+    if m == "yrfi":
+        v = result.get("yrfi")
+        return None if v is None else int(bool(v))
+    if m == "ml":
+        h, a = result.get("home"), result.get("away")
+        return None if h is None or a is None or h == a else int(h > a)
+    key = f"{item.get('side')}:{item.get('pid')}"
+    if m in ("hits1", "hr1", "hrr2"):
+        row = (result.get("b") or {}).get(key)      # [hits, hr, hrr, played]
+        if not row or not row[3]:
+            return None
+        return int({"hits1": row[0] >= 1, "hr1": row[1] >= 1, "hrr2": row[2] >= 2}[m])
+    if m in ("pitcher_k", "pitcher_ha"):
+        row = (result.get("p") or {}).get(key)      # [strikeouts, hits allowed, played]
+        if not row or not row[2]:
+            return None
+        return int((row[0] if m == "pitcher_k" else row[1]) >= item["line"])
+    return None
+
+
+def make_mlb_adapter(get_bundles: Callable) -> Adapter:
+    """get_bundles(db, skip_heavy_ids:set[str]) -> bundles for games starting soon (see mlb_collect_from_bundles).
+    A game whose lineups were both confirmed when last logged is 'locked': only its cheap game-level markets
+    (YRFI, moneyline) are refreshed afterwards."""
+
+    def collect(db):
+        locked = set()
+        for sh in _shard_names(db, "mlb")[-2:]:
+            for rid, r in _load(db, "mlb", sh).items():
+                if r.get("graded") is None and (r.get("ctx") or {}).get("locked"):
+                    locked.add(rid)
+        return mlb_collect_from_bundles(get_bundles(db, locked))
+
+    def settle(db, recs):
+        import mlb_client
+        from models_db import Game, InningLine
+        out = {}
+        for r in recs:
+            try:
+                game = db.get(Game, int(r["id"]))
+                start = _parse_utc(r.get("start")) or datetime.utcnow()
+                final = bool(game and ((game.abstract_status or "") == "Final" or str(game.status or "").startswith("Final")))
+                if not final:
+                    if (datetime.utcnow() - start).total_seconds() > 3 * 86400:
+                        out[r["id"]] = {"void": True}      # postponed / never finished
+                    continue
+                lines = db.query(InningLine).filter_by(game_pk=game.game_pk, inning=1).all()
+                res = {"home": game.home_score, "away": game.away_score,
+                       "yrfi": (sum(l.runs for l in lines) > 0) if lines else None, "b": {}, "p": {}}
+                need = [it for it in r.get("items", []) if it.get("pid")]
+                if need:
+                    box = mlb_client.get_boxscore(game.game_pk)
+                    for it in need:
+                        side, pid = it["side"], it["pid"]
+                        pd = (box.get("teams", {}).get(side, {}).get("players", {}) or {}).get(f"ID{pid}", {})
+                        st = pd.get("stats") or {}
+                        bt, pt = st.get("batting") or {}, st.get("pitching") or {}
+                        k = f"{side}:{pid}"
+                        if it["m"] in ("hits1", "hr1", "hrr2") and k not in res["b"]:
+                            pa = bt.get("plateAppearances")
+                            if pa is None:
+                                pa = sum(bt.get(x, 0) or 0 for x in ("atBats", "baseOnBalls", "hitByPitch", "sacFlies", "sacBunts"))
+                            res["b"][k] = [bt.get("hits", 0), bt.get("homeRuns", 0),
+                                           bt.get("hits", 0) + bt.get("runs", 0) + bt.get("rbi", 0), 1 if pa else 0]
+                        if it["m"] in ("pitcher_k", "pitcher_ha") and k not in res["p"]:
+                            try:
+                                ip = float(pt.get("inningsPitched", 0) or 0)
+                            except Exception:
+                                ip = 0.0
+                            res["p"][k] = [pt.get("strikeOuts", 0), pt.get("hits", 0), 1 if (ip > 0 or pt.get("battersFaced", 0)) else 0]
+                out[r["id"]] = res
+            except Exception:
+                log.exception("MLB settle failed for %s", r.get("id"))
+        return out
+
+    return Adapter(
+        sport="mlb", label="MLB", collect=collect, settle=settle, grade=mlb_grade,
+        markets={"yrfi": "First-inning run (YRFI)", "ml": "Moneyline (home wins)", "hits1": "Batter: 1+ hit",
+                 "hr1": "Batter: 1+ home run", "hrr2": "Batter: 2+ hits+runs+RBI",
+                 "pitcher_k": "Pitcher strikeouts (at least N)", "pitcher_ha": "Pitcher hits allowed (at least N)"},
+        line_markets=set(),
+        notes={"team_pts": "No sportsbook prices are stored with these picks, so this measures whether the probabilities are honest and informative, not betting profit. Pitcher lines sit at the model mean -1, 0, +1. Players who did not play are voided."})

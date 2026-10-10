@@ -195,11 +195,18 @@
     <div class="tabs">
       <span id="subtab-btn-mlb-live" class="tab-btn active" onclick="switchMlbSubTab('live')">Live Games</span>
       <span id="subtab-btn-mlb-bybets" class="tab-btn" onclick="switchMlbSubTab('bybets')">By Bets</span>
+      <span id="subtab-btn-mlb-scorecard" class="tab-btn" onclick="switchMlbSubTab('scorecard')">Scorecard</span>
     </div>
 
     <div id="subtab-content-mlb-bybets" style="display:none;">
       <div class="sub">Every bet across every confirmed game, ranked highest to lowest Yes probability.</div>
       <div id="bybets-content">Loading...</div>
+    </div>
+
+    <div id="subtab-content-mlb-scorecard" style="display:none;">
+      <div class="sub">MLB Shadow Scorecard - the model's pre-game numbers (YRFI, moneyline, batter hits / home runs / hits+runs+RBI, pitcher strikeouts and hits allowed) are saved automatically before first pitch and graded against the real box score. No bets are placed.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('mlb','shadow-scorecard-mlb',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-mlb"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
 
     <div id="subtab-content-mlb-live">
@@ -393,6 +400,7 @@
     <div class="tabs">
       <span id="subtab-btn-nhl-games" class="tab-btn active" onclick="switchNhlSubTab('games')">Games</span>
       <span id="subtab-btn-nhl-goalies" class="tab-btn" onclick="switchNhlSubTab('goalies')">Goalie Saves</span>
+      <span id="subtab-btn-nhl-scorecard" class="tab-btn" onclick="switchNhlSubTab('scorecard')">Scorecard</span>
     </div>
 
     <div id="subtab-content-nhl-games">
@@ -407,10 +415,12 @@
       <div id="nhlg-refresh-status" class="settings-hint"></div>
       <div id="nhlg-status" class="settings-hint"></div>
       <div id="nhlg-content">Loading...</div>
-      <div style="margin-top:24px;">
-        <span class="hits-toggle" onclick="toggleNhlScorecard()" style="padding:6px 14px;">Shadow Scorecard ▾</span>
-        <div id="nhlg-scorecard" style="display:none; margin-top:12px;"></div>
-      </div>
+    </div>
+
+    <div id="subtab-content-nhl-scorecard" style="display:none;">
+      <div class="sub">NHL Shadow Scorecard - pre-game moneyline, goals and period predictions are saved automatically before each game starts and graded against the final score. No bets are placed. Judge the model after 100+ graded games.</div>
+      <button class="tab-btn" onclick="loadNhlScorecardTab()" style="margin-bottom:10px;">Refresh</button>
+      <div id="nhl-scorecard-tab"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
 
     <div id="subtab-content-nhl-goalies" style="display:none;">
@@ -2506,7 +2516,9 @@
     document.getElementById("subtab-content-nhl-goalies").style.display = subtab === "goalies" ? "block" : "none";
     document.getElementById("subtab-btn-nhl-games").classList.toggle("active", subtab === "games");
     document.getElementById("subtab-btn-nhl-goalies").classList.toggle("active", subtab === "goalies");
-    if (subtab === "games") loadNhlGamesTab(); else loadNhlTab();
+    document.getElementById("subtab-content-nhl-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
+    document.getElementById("subtab-btn-nhl-scorecard").classList.toggle("active", subtab === "scorecard");
+    if (subtab === "games") loadNhlGamesTab(); else if (subtab === "goalies") loadNhlTab(); else loadNhlScorecardTab();
   }
 
   function switchMlbSubTab(subtab) {
@@ -2514,6 +2526,9 @@
     document.getElementById("subtab-content-mlb-bybets").style.display = subtab === "bybets" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-live").classList.toggle("active", subtab === "live");
     document.getElementById("subtab-btn-mlb-bybets").classList.toggle("active", subtab === "bybets");
+    document.getElementById("subtab-content-mlb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
+    document.getElementById("subtab-btn-mlb-scorecard").classList.toggle("active", subtab === "scorecard");
+    if (subtab === "scorecard") loadShadowScorecard("mlb", "shadow-scorecard-mlb", false);
     if (subtab === "bybets") {
       loadByBetsTab();
     }
@@ -6089,15 +6104,12 @@
 
 
   // ---- NHL shadow scorecard: pre-game predictions (logged automatically) graded against final scores
-  async function toggleNhlScorecard() {
-    const el = document.getElementById("nhlg-scorecard");
-    if (el.style.display !== "none") { el.style.display = "none"; return; }
-    el.style.display = "block";
+  async function loadNhlScorecardTab() {
+    const el = document.getElementById("nhl-scorecard-tab");
     el.innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
       const res = await fetch(`${API_BASE}/api/nhl/scorecard?log_now=true`);
-      const d = await res.json();
-      el.innerHTML = nhlScorecardHtml(d);
+      el.innerHTML = nhlScorecardHtml(await res.json());
     } catch (e) {
       el.innerHTML = `<div class="settings-hint">Couldn't load the scorecard.</div>`;
     }

@@ -121,6 +121,7 @@ async def lifespan(app: FastAPI):
     try:
         import shadow_scorecard
         shadow_scorecard.register(shadow_scorecard.make_cfb_adapter(lambda _db: cfb_games(_db)))
+        shadow_scorecard.register(shadow_scorecard.make_mlb_adapter(_mlb_shadow_bundles))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -632,6 +633,56 @@ def game_pitcher_hits_allowed(game_pk: int, db: Session = Depends(get_db)):
         "home_pitcher": pitcher_row(game.home_probable_pitcher_id, game.home_probable_pitcher, "away"),
         "away_pitcher": pitcher_row(game.away_probable_pitcher_id, game.away_probable_pitcher, "home"),
     }
+
+
+def _mlb_shadow_bundles(db, locked_ids):
+    """Pre-game MLB predictions for the shadow scorecard: every game starting in the next 8 hours, built with the
+    exact same functions the By Bets tab uses. Games already 'locked' (both lineups confirmed when last logged) only
+    get their cheap game-level markets (YRFI, moneyline) refreshed."""
+    from datetime import datetime, timedelta
+    import hits_stats_sync
+    import hrr_stats_sync
+    import pitcher_k_sync
+    today = mlb_client.mlb_today()
+    rows = []
+    for d in (today, today + timedelta(days=1)):
+        rows += games_today(game_date=d.isoformat(), db=db)
+    now = datetime.utcnow()
+    soon = []
+    for g in rows:
+        try:
+            st = datetime.strptime(str(g["game_datetime_utc"])[:19], "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            continue
+        if now < st <= now + timedelta(hours=8):
+            soon.append(g)
+    shared = None
+    out = []
+    for g in soon:
+        if str(g["game_pk"]) in locked_ids:
+            out.append({"game": g, "full": False})
+            continue
+        game = db.get(Game, g["game_pk"])
+        if game is None:
+            continue
+        if shared is None:
+            la_b9 = hits_stats_sync.get_league_average_hit_rate()
+            shared = (la_b9, hrr_stats_sync.get_league_hrr_rates(), pitcher_k_sync.get_league_k_rate())
+        la_b9, hrr_rates, la_b13 = shared
+        b = {"game": g, "full": True}
+        for key, fn in (("hits", lambda: _build_hits_response(db, game)),
+                        ("hrr", lambda: _build_hrr_response(db, game, la_b9, hrr_rates)),
+                        ("hr", lambda: _build_hr_response(db, game, hrr_rates["hr_rate"])),
+                        ("k", lambda: _build_pitcher_k_response(db, game, la_b13)),
+                        ("pha", lambda: game_pitcher_hits_allowed(game.game_pk, db))):
+            try:
+                b[key] = fn()
+            except Exception:
+                import logging
+                logging.getLogger("main").exception("shadow bundle %s failed for %s", key, g["game_pk"])
+                b[key] = None
+        out.append(b)
+    return out
 
 
 @app.get("/api/games/{game_pk}/game-lines")
