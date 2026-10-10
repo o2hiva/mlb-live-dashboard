@@ -118,6 +118,14 @@ async def lifespan(app: FastAPI):
         # fantasy football is optional: never stop the whole app from booting over it
         import logging
         logging.getLogger("main").exception("Fantasy football service failed to start")
+    try:
+        import shadow_scorecard
+        shadow_scorecard.register(shadow_scorecard.make_cfb_adapter(lambda _db: cfb_games(_db)))
+        shadow_scorecard.start_background()
+    except Exception:
+        # the shadow scorecards are optional: never stop the whole app from booting over them
+        import logging
+        logging.getLogger("main").exception("Shadow scorecard failed to start")
     yield
     if _scheduler:
         _scheduler.shutdown()
@@ -1621,6 +1629,31 @@ def dfs_salaries(body: DfsSalariesBody):
 def ffb_refresh():
     import nfl_fantasy_service
     return nfl_fantasy_service.get_service().refresh_data(force=True)
+
+
+@app.get("/api/scorecard")
+def shadow_scorecard_sports():
+    """Sports that have a shadow scorecard registered."""
+    import shadow_scorecard
+    return {"sports": shadow_scorecard.sports()}
+
+
+@app.get("/api/scorecard/{sport}")
+def shadow_scorecard_sport(sport: str, log_now: bool = False, db: Session = Depends(get_db)):
+    """Generic shadow scorecard: pre-game predictions (logged automatically) graded against real results."""
+    import shadow_scorecard
+    if sport not in shadow_scorecard.REGISTRY:
+        raise HTTPException(status_code=404, detail=f"no scorecard for '{sport}'")
+    try:
+        if log_now:
+            shadow_scorecard.log_now(db, sport)
+        shadow_scorecard.settle_now(db, sport)
+        return shadow_scorecard.scorecard(db, sport)
+    except Exception as e:
+        import logging
+        logging.getLogger("main").exception("shadow scorecard failed")
+        db.rollback()
+        return {"status": "error", "warnings": [f"{type(e).__name__}: {str(e)[:300]}"]}
 
 
 @app.get("/api/nhl/scorecard")

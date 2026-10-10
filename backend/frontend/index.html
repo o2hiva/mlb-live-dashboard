@@ -361,6 +361,13 @@
   <div id="tab-content-cfb" style="display:none;">
     <div class="tabs">
       <span id="subtab-btn-cfb-points" class="tab-btn active" onclick="switchCfbSubTab('points')">Team Points</span>
+      <span id="subtab-btn-cfb-scorecard" class="tab-btn" onclick="switchCfbSubTab('scorecard')">Scorecard</span>
+    </div>
+
+    <div id="subtab-content-cfb-scorecard" style="display:none;">
+      <div class="sub">CFB Shadow Scorecard - every prediction is saved automatically before kickoff and graded against the real final. No bets are placed; this just shows whether the model can be trusted.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('cfb','shadow-scorecard-cfb',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-cfb"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
 
     <div id="subtab-content-cfb-points">
@@ -2546,8 +2553,54 @@
   function switchCfbSubTab(subtab) {
     document.getElementById("subtab-content-cfb-points").style.display = subtab === "points" ? "block" : "none";
     document.getElementById("subtab-btn-cfb-points").classList.toggle("active", subtab === "points");
-    // Only one CFB sub-tab exists today - stays ready for Combined
-    // Total / Passing Yards, matching NFL's own sub-tab structure.
+    document.getElementById("subtab-content-cfb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
+    document.getElementById("subtab-btn-cfb-scorecard").classList.toggle("active", subtab === "scorecard");
+    if (subtab === "scorecard") loadShadowScorecard("cfb", "shadow-scorecard-cfb", false);
+  }
+
+  // ---- Generic shadow scorecard (any sport registered on the backend: /api/scorecard/{sport}) ----
+  async function loadShadowScorecard(sport, elId, logNow) {
+    const el = document.getElementById(elId);
+    el.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/scorecard/${sport}?log_now=${logNow ? "true" : "false"}`);
+      const d = await res.json();
+      el.innerHTML = shadowScorecardHtml(d);
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the scorecard.</div>`;
+    }
+  }
+
+  function shadowScorecardHtml(d) {
+    if (!d || d.status !== "ok") return `<div class="settings-hint">Scorecard unavailable: ${(d && d.warnings && d.warnings[0]) || "error"}</div>`;
+    const pc = (x) => (x == null ? "-" : (x * 100).toFixed(1) + "%");
+    const f2 = (x) => (x == null ? "-" : Number(x).toFixed(2));
+    const f3 = (x) => (x == null ? "-" : Number(x).toFixed(3));
+    const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;";
+    const td = "text-align:right; padding:3px 8px;";
+    let h = `<div class="settings-hint">${d.graded} game(s) graded, ${d.pending} waiting (not started or not final). Judge each market after ${d.min_n_verdict}+ graded picks; early numbers swing a lot.</div>`;
+    if (d.notes && d.notes.benchmark) h += `<div class="settings-hint" style="border-left:3px solid var(--muted); padding-left:8px; margin:8px 0;">${d.notes.benchmark}</div>`;
+    if (!d.markets.length) return h + `<div class="settings-hint">Nothing graded yet - predictions are logged automatically before each game starts and graded once it is final.</div>`;
+    const calTable = (cal) => `<table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Model said</th><th style="${th}">Picks</th><th style="${th}">Avg claimed</th><th style="${th}">Actually happened</th></tr>
+      ${cal.map(b => `<tr><td style="${td}">${b.bucket}</td><td style="${td}">${b.n}</td><td style="${td}">${pc(b.predicted)}</td><td style="${td}">${pc(b.actual)}</td></tr>`).join("")}</table>`;
+    d.markets.forEach(m => {
+      h += `<div style="margin:14px 0 4px; font-weight:600;">${m.label}${m.real_line ? "" : ""} <span style="font-weight:400; color:var(--muted);">(${m.n} graded)</span></div>`;
+      h += `<div class="settings-hint"><b>${m.verdict}</b></div>`;
+      h += `<div class="settings-hint">Claimed ${pc(m.avg_claimed)} vs actual ${pc(m.actual)} - Brier ${f3(m.brier)} (base rate ${f3(m.brier_base)}) - Log loss ${f3(m.log_loss)} - Calibration slope ${f2(m.slope)} (1.0 honest, 0 = no information)</div>`;
+      if (m.real_line && m.pick_n) {
+        h += `<div class="settings-hint">Backing the model's side: ${pc(m.pick_hit)} over ${m.pick_n} (ROI at -110: ${m.roi_110 != null ? (m.roi_110 * 100).toFixed(1) + "%" : "-"})`;
+        if (m.edge_n) h += ` - only picks 3+ points from 50%: ${pc(m.edge_hit)} over ${m.edge_n} (ROI ${(m.edge_roi_110 * 100).toFixed(1)}%)`;
+        h += `</div>`;
+      } else if (m.pick_n) {
+        h += `<div class="settings-hint">Side the model favored won ${pc(m.pick_hit)} of ${m.pick_n}</div>`;
+      }
+      h += calTable(m.calibration);
+      (m.segments || []).forEach(sg => {
+        h += `<div class="settings-hint" style="margin-top:6px;">${sg.seg}: ${sg.n} graded - claimed ${pc(sg.avg_claimed)} vs actual ${pc(sg.actual)}${sg.pick_hit != null ? ` - picks hit ${pc(sg.pick_hit)}` : ""}</div>`;
+      });
+    });
+    if (d.notes && d.notes.team_pts) h += `<div class="settings-hint" style="margin-top:10px;">${d.notes.team_pts}</div>`;
+    return h;
   }
 
   const HIT_RATE_CATEGORIES = [
