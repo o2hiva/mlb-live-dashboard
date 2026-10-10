@@ -335,6 +335,7 @@
     <div class="tabs">
       <span id="subtab-btn-ffb-501858" class="tab-btn active" onclick="switchFfbLeague('501858')">Family Fantasy Football League</span>
       <span id="subtab-btn-ffb-572561" class="tab-btn" onclick="switchFfbLeague('572561')">Otuhiva Family League</span>
+      <span id="subtab-btn-ffb-dfs" class="tab-btn" onclick="switchFfbLeague('dfs')">DFS</span>
     </div>
     <div class="sub" id="ffb-league-info">Fantasy football - projected points for your Yahoo league's own scoring and roster slots, your best lineup, and waiver pickups.</div>
     <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
@@ -348,7 +349,7 @@
       <span class="hits-toggle" onclick="refreshFfb()" style="padding:6px 14px;">Refresh Stats</span>
     </div>
     <div id="ffb-status" class="settings-hint"></div>
-    <div class="lineup-tabs" style="margin-top:8px;">
+    <div id="ffb-sections" class="lineup-tabs" style="margin-top:8px;">
       <span id="ffb-sec-lineup" class="lineup-tab active" onclick="switchFfbSection('lineup')">My Lineup</span>
       <span id="ffb-sec-waivers" class="lineup-tab" onclick="switchFfbSection('waivers')">Waivers</span>
       <span id="ffb-sec-projections" class="lineup-tab" onclick="switchFfbSection('projections')">Projections</span>
@@ -6105,6 +6106,7 @@
   let ffbLeague = "501858";
   let ffbSection = "lineup";
   let ffbPos = "";
+  let ffbLoadSeq = 0;
   let ffbRosterDraft = null;     // {players: [...], taken: [...]} while editing
   let ffbSearchTimer = null;
 
@@ -6117,6 +6119,9 @@
     ffbRosterDraft = null;
     document.getElementById("subtab-btn-ffb-501858").classList.toggle("active", id === "501858");
     document.getElementById("subtab-btn-ffb-572561").classList.toggle("active", id === "572561");
+    document.getElementById("subtab-btn-ffb-dfs").classList.toggle("active", id === "dfs");
+    const secs = document.getElementById("ffb-sections");
+    if (secs) secs.style.display = id === "dfs" ? "none" : "flex";
     loadFfb();
   }
 
@@ -6315,13 +6320,168 @@
     } catch (e) { msg.textContent = "Couldn't save."; }
   }
 
+
+  // ---- DFS (DraftKings Classic): upload DKSalaries.csv, pool of priced players, exact best lineups under the cap
+  let dfsPos = "";
+  let dfsSort = "proj";
+  let dfsPoolCache = null;
+  let dfsUploadNote = "";
+
+  async function dfsUploadFile(input) {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const msg = document.getElementById("dfs-upload-msg");
+    msg.textContent = "Uploading...";
+    try {
+      const text = await f.text();
+      const w = document.getElementById("ffb-week").value;
+      const res = await fetch(`${API_BASE}/api/dfs/salaries`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv: text, week: w ? parseInt(w, 10) : null }),
+      });
+      const d = await res.json();
+      if (d.status === "ok") {
+        const un = (d.unmatched_salary_4500_plus || []).length;
+        msg.textContent = `Saved week ${d.week}: ${d.rows} rows, ${d.matched != null ? d.matched + " matched to projections" : ""}${un ? ", " + un + " priced $4,500+ unmatched (" + d.unmatched_salary_4500_plus.slice(0, 4).join("; ") + ")" : ""}.`;
+        dfsPoolCache = null;
+        dfsUploadNote = msg.textContent;
+        loadFfb();
+      } else {
+        msg.textContent = (d.warnings && d.warnings[0]) || (d.detail ? JSON.stringify(d.detail).slice(0, 200) : "Upload failed.");
+      }
+    } catch (e) { msg.textContent = "Upload failed."; }
+    input.value = "";
+  }
+
+  function dfsOpt(id) { const el = document.getElementById(id); return el ? el.value.trim() : ""; }
+
+  async function dfsGenerate() {
+    const out = document.getElementById("dfs-lineups");
+    out.innerHTML = `<div class="settings-hint">Optimizing...</div>`;
+    const q = new URLSearchParams();
+    const w = document.getElementById("ffb-week").value;
+    if (w) q.set("week", w);
+    q.set("lineups", dfsOpt("dfs-n") || "5");
+    if (dfsOpt("dfs-cap")) q.set("cap", dfsOpt("dfs-cap"));
+    if (document.getElementById("dfs-stack").checked) q.set("stack", "true");
+    if (dfsOpt("dfs-overlap")) q.set("max_overlap", dfsOpt("dfs-overlap"));
+    if (dfsOpt("dfs-perteam")) q.set("max_per_team", dfsOpt("dfs-perteam"));
+    const lock = dfsOpt("dfs-lock").split("\n").map(x => x.trim()).filter(Boolean).join("|");
+    const ban = dfsOpt("dfs-ban").split("\n").map(x => x.trim()).filter(Boolean).join("|");
+    if (lock) q.set("lock", lock);
+    if (ban) q.set("ban", ban);
+    if (document.getElementById("dfs-played").checked) q.set("include_played", "true");
+    try {
+      const d = await ffbGet(`/api/dfs/lineups?${q.toString()}`);
+      out.innerHTML = dfsLineupsHtml(d);
+    } catch (e) { out.innerHTML = `<div class="settings-hint">Couldn't build lineups.</div>`; }
+  }
+
+  function dfsLineupsHtml(d) {
+    if (d.status === "loading") return `<div class="settings-hint">${(d.warnings || [])[0] || ""}</div>`;
+    if (d.status !== "ok") return `<div class="settings-hint">${ffbEsc((d.warnings || ["error"])[0])}</div>`;
+    let h = ffbWarnHtml(d);
+    if (!d.lineups || !d.lineups.length) return h || `<div class="settings-hint">No legal lineup.</div>`;
+    h += `<div class="settings-hint">Week ${d.week} · cap $${(d.cap || 0).toLocaleString()} · ${d.pool_size} priced players in the pool. Exact best lineups for these projections; chosen-for-high-projection lineups usually score 15-20 points below the projected total - use the numbers to compare lineups, not as a forecast.</div>`;
+    const TH = ["Slot", "Player", "Pos", "Opp", "Salary", "Proj", "Range", "Pts/$1k"];
+    d.lineups.forEach(lu => {
+      h += `<div class="card" style="margin-top:12px;">
+        <div class="meta">Lineup ${lu.rank} · projected <b>${ffbNum(lu.projected)}</b> · salary $${(lu.salary || 0).toLocaleString()} · ${ffbNum(lu.points_per_1k, 2)} pts per $1k</div>
+        ${ffbTable(TH, lu.players.map(p => `<tr>
+          <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(p.slot)}</td>
+          <td style="${FFB_TDL}">${ffbEsc(p.name)}${ffbStatusTag(p.status)}</td>
+          <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(p.pos)} · ${ffbEsc(p.team)}</td>
+          <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(p.opp || "")}</td>
+          <td style="${FFB_TD}">$${(p.salary || 0).toLocaleString()}</td>
+          <td style="${FFB_TD} font-size:1.05rem; font-weight:600;">${ffbNum(p.proj)}</td>
+          <td style="${FFB_TD} color:var(--muted);">${ffbNum(p.floor, 0)}-${ffbNum(p.ceil, 0)}</td>
+          <td style="${FFB_TD} color:var(--muted);">${ffbNum(p.value, 2)}</td></tr>`).join(""))}
+      </div>`;
+    });
+    return h;
+  }
+
+  function setDfsPos(p) { dfsPos = p; renderDfsPool(); }
+  function setDfsSort(k) { dfsSort = k; renderDfsPool(); }
+
+  function renderDfsPool() {
+    const box = document.getElementById("dfs-pool");
+    if (!box) return;
+    const d = dfsPoolCache;
+    if (!d) { box.innerHTML = ""; return; }
+    if (d.status === "loading") { box.innerHTML = `<div class="settings-hint">${(d.warnings || [])[0] || ""}</div>`; return; }
+    if (d.status !== "ok") { box.innerHTML = `<div class="settings-hint">${ffbEsc((d.warnings || ["error"])[0])}</div>`; return; }
+    const posBtn = p => `<span class="hits-toggle" style="padding:4px 10px; ${dfsPos === p ? "outline:1px solid var(--accent, #6aa9ff);" : ""}" onclick="setDfsPos('${p}')">${p || "All"}</span>`;
+    const sortBtn = (k, lbl) => `<span class="hits-toggle" style="padding:4px 10px; ${dfsSort === k ? "outline:1px solid var(--accent, #6aa9ff);" : ""}" onclick="setDfsSort('${k}')">${lbl}</span>`;
+    let rows = d.players.filter(p => !dfsPos || p.pos === dfsPos);
+    rows = rows.slice().sort((a, b) => dfsSort === "value" ? (b.value || 0) - (a.value || 0) : dfsSort === "salary" ? (b.salary || 0) - (a.salary || 0) : (b.proj || 0) - (a.proj || 0));
+    rows = rows.slice(0, 80);
+    let h = `<div style="display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; align-items:center;">${["", "QB", "RB", "WR", "TE", "DEF"].map(posBtn).join("")}
+      <span style="width:12px;"></span><span class="settings-hint">Sort:</span>${sortBtn("proj", "Projection")}${sortBtn("value", "Value")}${sortBtn("salary", "Salary")}</div>`;
+    h += `<div class="settings-hint">Week ${d.week} · ${d.count} priced players matched${d.unmatched ? `, ${d.unmatched} unmatched` : ""} (showing ${rows.length}). Value = projected points per $1,000.</div>` + ffbWarnHtml(d);
+    h += ffbTable(["Player", "Pos", "Opp", "Salary", "Proj", "Range", "Pts/$1k"], rows.map(p => `<tr>
+      <td style="${FFB_TDL}">${ffbEsc(p.name)}${ffbStatusTag(p.status)}</td>
+      <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(p.pos)} · ${ffbEsc(p.team)}</td>
+      <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(p.opp || "")}</td>
+      <td style="${FFB_TD}">$${(p.salary || 0).toLocaleString()}</td>
+      <td style="${FFB_TD} font-size:1.05rem; font-weight:600;">${ffbNum(p.proj)}</td>
+      <td style="${FFB_TD} color:var(--muted);">${ffbNum(p.floor, 0)}-${ffbNum(p.ceil, 0)}</td>
+      <td style="${FFB_TD} color:var(--muted);">${ffbNum(p.value, 2)}</td></tr>`).join(""));
+    box.innerHTML = h;
+  }
+
+  const DFS_INPUT = "background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;";
+
+  async function loadDfs(box, seq) {
+    const w = ffbWeekQuery();
+    const pool = await ffbGet(`/api/dfs/pool?${w ? w.slice(1) : ""}`);
+    if (seq !== ffbLoadSeq) return;
+    dfsPoolCache = pool;
+    const noSalaries = pool.status === "error" && /no DraftKings salary file/i.test((pool.warnings || [""])[0]);
+    box.innerHTML = `
+      <div class="settings-hint" style="margin-top:8px;">DraftKings Classic: $50,000 cap, QB / 2 RB / 3 WR / TE / FLEX / DST. Projections use DraftKings scoring (PPR + 300-yard / 100-yard bonuses). On the DraftKings contest page use <b>Export to CSV</b>, then upload the file here for the week selected above.</div>
+      <div style="display:flex; gap:12px; align-items:center; margin:10px 0; flex-wrap:wrap;">
+        <label class="hits-toggle" style="padding:6px 14px; cursor:pointer;">Upload DKSalaries.csv<input type="file" accept=".csv,text/csv" style="display:none;" onchange="dfsUploadFile(this)" /></label>
+        <span id="dfs-upload-msg" class="settings-hint">${noSalaries ? "No salary file for this week yet." : ffbEsc(dfsUploadNote)}</span>
+      </div>
+      ${noSalaries ? "" : `
+      <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin:12px 0;">
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Lineups</label><input id="dfs-n" type="number" min="1" max="20" value="5" style="width:64px; ${DFS_INPUT}" /></div>
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Salary cap</label><input id="dfs-cap" type="number" placeholder="50000" style="width:90px; ${DFS_INPUT}" /></div>
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Max overlap</label><input id="dfs-overlap" type="number" min="0" max="8" placeholder="any" title="Players two lineups may share" style="width:70px; ${DFS_INPUT}" /></div>
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Max per team</label><input id="dfs-perteam" type="number" min="1" max="8" placeholder="any" style="width:70px; ${DFS_INPUT}" /></div>
+        <label style="font-size:0.85rem;"><input id="dfs-stack" type="checkbox" /> QB stack</label>
+        <label style="font-size:0.85rem;"><input id="dfs-played" type="checkbox" /> include played</label>
+      </div>
+      <div style="display:flex; gap:16px; flex-wrap:wrap;">
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Lock (one name per line)</label><textarea id="dfs-lock" rows="3" style="width:220px; ${DFS_INPUT}"></textarea></div>
+        <div><label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Ban (one name per line)</label><textarea id="dfs-ban" rows="3" style="width:220px; ${DFS_INPUT}"></textarea></div>
+      </div>
+      <div style="margin:12px 0;"><span class="hits-toggle" onclick="dfsGenerate()" style="padding:6px 16px;">Build lineups</span></div>
+      <div id="dfs-lineups"></div>
+      <div class="hits-side-label" style="margin-top:18px;">Player pool</div>
+      <div id="dfs-pool"></div>`}`;
+    if (!noSalaries) renderDfsPool();
+    else if (pool.status === "loading") box.innerHTML = `<div class="settings-hint">${(pool.warnings || [])[0]}</div>`;
+  }
+
   async function loadFfb() {
     const box = document.getElementById("ffb-content");
     if (!box) return;
+    const seq = ++ffbLoadSeq;
     const wq = ffbWeekQuery();
     box.innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
+      if (ffbLeague === "dfs") {
+        const infoEl0 = document.getElementById("ffb-league-info");
+        if (infoEl0) infoEl0.textContent = "DFS - DraftKings Classic lineup optimizer.";
+        const st0 = document.getElementById("ffb-status");
+        if (st0) st0.textContent = "";
+        await loadDfs(box, seq);
+        return;
+      }
       const info = await ffbGet("/api/ffb/leagues");
+      if (seq !== ffbLoadSeq) return;
       const lg = (info.leagues || []).find(l => l.id === ffbLeague);
       const infoEl = document.getElementById("ffb-league-info");
       if (lg && infoEl) {
@@ -6331,14 +6491,20 @@
       const st = document.getElementById("ffb-status");
       if (st) st.textContent = info.ready === false ? "Fantasy data is still downloading after the deploy (1-2 minutes) - this page fills in automatically when you reload." : "";
       if (ffbSection === "lineup") {
-        box.innerHTML = renderFfbLineup(await ffbGet(`/api/ffb/lineup?league=${ffbLeague}${wq}`));
+        const dl = await ffbGet(`/api/ffb/lineup?league=${ffbLeague}${wq}`);
+        if (seq !== ffbLoadSeq) return;
+        box.innerHTML = renderFfbLineup(dl);
       } else if (ffbSection === "waivers") {
-        box.innerHTML = renderFfbWaivers(await ffbGet(`/api/ffb/waivers?league=${ffbLeague}&top=15${wq}`));
+        const dw = await ffbGet(`/api/ffb/waivers?league=${ffbLeague}&top=15${wq}`);
+        if (seq !== ffbLoadSeq) return;
+        box.innerHTML = renderFfbWaivers(dw);
       } else if (ffbSection === "projections") {
         const [d, r] = await Promise.all([ffbGet(`/api/ffb/projections?league=${ffbLeague}${ffbPos ? "&pos=" + ffbPos : ""}${wq}`), ffbGet(`/api/ffb/roster?league=${ffbLeague}`)]);
+        if (seq !== ffbLoadSeq) return;
         box.innerHTML = renderFfbProjections(d, r.players);
       } else {
         const r = await ffbGet(`/api/ffb/roster?league=${ffbLeague}`);
+        if (seq !== ffbLoadSeq) return;
         box.innerHTML = ffbRosterEditorHtml(r);
       }
     } catch (e) {

@@ -6,6 +6,7 @@ your lineup, waiver ranking, per-league scoring and roster slots, and a web serv
 Embedded, unchanged and individually tested:
   nfl_fantasy_projections   the model (shrunk player points x opponent points-allowed-to-position x average, plus the small Vegas and
                             usage factors), Yahoo scoring from a league file, walk-forward backtest, lineup and waiver logic
+  nfl_dfs_optimizer         daily-fantasy (DraftKings Classic) exact lineup optimizer: the N best lineups under an adjustable salary cap
   nfl_io                    atomic JSON writes, tolerant reads, cross-process file lock
 plus the platform layer below: one class, FantasyPlatform.
 
@@ -36,11 +37,23 @@ after games, mostly Tuesday).  Yahoo rosters / free agents are not readable with
       GET  /api/fantasy/projections?league=572561&week=5&pos=QB
       GET  /api/fantasy/lineup?league=572561&week=5          GET /api/fantasy/waivers?league=572561&top=15
       GET  /api/fantasy/players?q=allen&league=572561        GET /health
+      GET  /api/dfs/pool?week=5                     every priced player with projection, floor/ceiling and points per $1k
+      GET  /api/dfs/lineups?week=5&cap=50000&lineups=5&stack=1&max_overlap=6&max_per_team=4&lock=Josh Allen&ban=Name&include_played=0
+      GET  /api/dfs/backtest                         the last saved DFS backtest report (proxy prices; real-salary weeks reported separately)
+      POST /api/dfs/salaries     {"csv": "<text of DraftKings' DKSalaries.csv>", "week": 5, "season": 2026}     (needs --allow-write)
       POST /api/fantasy/roster   {"league": "572561", "players": ["Josh Allen", ...], "taken": ["..."]}   (needs --allow-write)
-      POST /api/fantasy/refresh  {"what": "data" | "params"}                                             (needs --allow-write)
+      POST /api/fantasy/refresh  {"what": "data" | "params" | "dfs_backtest"}                            (needs --allow-write)
   Environment variables: PORT (Railway sets it; binds 0.0.0.0), FANTASY_DATA_DIR (put on a Railway volume, e.g. /data),
     FANTASY_API_TOKEN (if set, POSTs need  Authorization: Bearer <token>), FANTASY_REFRESH_MINUTES, FANTASY_ALLOW_WRITE=1,
     FANTASY_CORS=1, FANTASY_BOOTSTRAP=1.
+
+------------------------------------------------------------------ DAILY FANTASY (DraftKings)
+  League "dk" (built in) projects DraftKings points (PPR + 300/100-yard bonuses).  Salaries: on the DraftKings contest page use
+  "Export to CSV" and POST the file's text to /api/dfs/salaries (the dashboard can have an upload box); each upload is stored on the
+  volume as dfs_salaries/DKSalaries_<season>_wk<week>.csv, which also builds up a REAL-salary backtest.  /api/dfs/lineups then returns the exact
+  best lineups under the cap (adjustable: &cap=).  Live DraftKings API salary pulls are not wired (the API has not been probed).
+  Backtest status: proxy-price test only -- the model lineup beat price-implied and naive lineups but the edge over real prices is unknown.
+  Projected lineup totals run ~15-20 points above what lineups actually score (winner's curse): compare lineups with them, do not expect them.
 
 ------------------------------------------------------------------ RAILWAY, step by step
   1. Put this file (alone) in a repo, add a Volume mounted at /data.
@@ -78,7 +91,7 @@ import threading
 import time
 
 # ===================================================================== embedded modules
-_ORDER = ['nfl_io', 'nfl_fantasy_projections']
+_ORDER = ['nfl_io', 'nfl_fantasy_projections', 'nfl_dfs_optimizer']
 _SRC = {}
 # ======================================================================
 # embedded module: nfl_io.py (96 lines)
@@ -181,7 +194,7 @@ class FileLock:
         self.release()
 '''
 # ======================================================================
-# embedded module: nfl_fantasy_projections.py (859 lines)
+# embedded module: nfl_fantasy_projections.py (862 lines)
 # ======================================================================
 _SRC["nfl_fantasy_projections"] = r'''"""
 nfl_fantasy_projections.py  --  weekly fantasy projections for QB / RB / WR / TE under Yahoo PPR scoring.  Stdlib only.
@@ -265,7 +278,10 @@ def fantasy_points(r, sc=SCORING):
             + g("receptions") * sc["rec"] + g("receiving_yards") * sc["rec_yd"] + g("receiving_tds") * sc["rec_td"]
             + fl * sc["fumble_lost"]
             + (g("passing_2pt_conversions") + g("rushing_2pt_conversions") + g("receiving_2pt_conversions")) * sc["two_pt"]
-            + g("special_teams_tds") * sc["st_td"] + g("fumble_recovery_tds") * sc["fum_rec_td"])
+            + g("special_teams_tds") * sc["st_td"] + g("fumble_recovery_tds") * sc["fum_rec_td"]
+            + (sc.get("pass_300_bonus", 0.0) if g("passing_yards") >= 300 else 0.0)
+            + (sc.get("rush_100_bonus", 0.0) if g("rushing_yards") >= 100 else 0.0)
+            + (sc.get("rec_100_bonus", 0.0) if g("receiving_yards") >= 100 else 0.0))
 
 
 def kicker_points(r, sc=SCORING):
@@ -1043,7 +1059,677 @@ def main(argv=None):
 if __name__ == "__main__":
     main()
 '''
-_DEFAULT_LEAGUES = [{'name': 'Family Fantasy Football League', 'id': 501858, 'platform': 'Yahoo', 'teams': 18, 'format': 'H2H, 6 playoff teams (weeks 15-17)', 'scoring': {'pass_yd': 0.04, 'pass_td': 4, 'intc': -1, 'rush_yd': 0.1, 'rush_td': 6, 'rec': 1, 'rec_yd': 0.1, 'rec_td': 6, 'fumble_lost': -2, 'two_pt': 2, 'st_td': 6, 'fum_rec_td': 6, 'k_fg_u40': 3, 'k_fg_40': 4, 'k_fg_50': 5, 'k_pat': 1, 'k_fg_miss': 0, 'd_sack': 1, 'd_int': 2, 'd_fum': 2, 'd_td': 6, 'd_safety': 2, 'd_block': 2, 'd_pa': [[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]], 'k_pat_miss': 0}, 'slots': {'QB': 1, 'RB': 2, 'WR': 2, 'TE': 1, 'FLEX': 2, 'K': 1, 'DEF': 1}, 'bench': 6, 'ir': 2, 'notes': 'Extra Point Returned (2 pts) not modelled; no yardage tiers for defense.'}, {'name': 'Otuhiva Family League', 'id': 572561, 'platform': 'Yahoo', 'teams': 12, 'format': 'H2H, 6 playoff teams (weeks 15-17)', 'scoring': {'pass_yd': 0.04, 'pass_td': 6, 'intc': -2, 'rush_yd': 0.1, 'rush_td': 6, 'rec': 1, 'rec_yd': 0.1, 'rec_td': 6, 'fumble_lost': -2, 'two_pt': 2, 'st_td': 6, 'fum_rec_td': 6, 'k_fg_u40': 3, 'k_fg_40': 4, 'k_fg_50': 5, 'k_pat': 1, 'k_fg_miss': 0, 'd_sack': 1, 'd_int': 2, 'd_fum': 2, 'd_td': 6, 'd_safety': 2, 'd_block': 2, 'd_pa': [[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]], 'k_pat_miss': -1}, 'slots': {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 2, 'K': 1, 'DEF': 1}, 'bench': 6, 'ir': 1, 'notes': 'Points allowed 21-27 not shown in pasted settings; assumed 0. Extra Point Returned (2) not modelled.'}]
+# ======================================================================
+# embedded module: nfl_dfs_optimizer.py (666 lines)
+# ======================================================================
+_SRC["nfl_dfs_optimizer"] = r'''"""
+nfl_dfs_optimizer.py  --  the most points for the money: a daily-fantasy (DraftKings Classic) lineup builder on top of
+nfl_fantasy_projections.py.  Stdlib only.  Keep it in the same folder as nfl_fantasy_projections.py.
+
+WHAT IT DOES
+  projection (the same shrunk-index model, scored with DraftKings' rules incl. the 300-yard pass and 100-yard rush / receiving bonuses)
+  + DraftKings salaries  ->  the exact best lineup under the salary cap (and the N best distinct lineups), found by an exact search
+  (not a heuristic): every legal lineup is considered, so no better one exists under the projections you give it.
+
+DRAFTKINGS CLASSIC RULES BUILT IN (edit SITES to change): 9 players = QB, 2 RB, 3 WR, 1 TE, 1 FLEX (RB / WR / TE), 1 DST; cap $50,000
+  (adjustable with --cap); players from at least 2 different games.  Optional: --max-per-team, --stack (QB + a WR/TE of his team),
+  --lock "Name", --ban "Name", --max-overlap N between the lineups you ask for, --include-played.
+
+SALARIES come from DraftKings' own CSV: on the contest page use  "Export to CSV" (DKSalaries.csv: Position, Name + ID, Name, ID,
+  Roster Position, Salary, Game Info, TeamAbbrev, AvgPointsPerGame).  The live-API route is not wired until it has been probed from your PC
+  (`probe` prints what DraftKings returns; nothing is guessed).  Each CSV you use is copied to dfs_salaries/ so a REAL-salary backtest
+  builds up week by week.
+
+COMMANDS
+    python nfl_dfs_optimizer.py tune                                       # one-off: tune the model under DraftKings scoring (about a minute)
+    python nfl_dfs_optimizer.py optimize --salaries DKSalaries.csv [--cap 50000] [--lineups 5] [--week N] [--max-overlap 6] [--stack] ...
+    python nfl_dfs_optimizer.py backtest [--first 2018] [--cap 50000] [--salary-dir dfs_salaries]
+    python nfl_dfs_optimizer.py probe                                      # what does DraftKings' public API return? (run on your PC)
+
+BACKTEST (read this): free historical DraftKings salaries do not exist in the data this project uses, so the default backtest prices each
+  week's players with a PROXY price curve (rank of the player's own-average points -> a DraftKings-like salary, with noise) and asks:
+  given such prices, does the model-based lineup score more actual DraftKings points than lineups built from (a) what the price itself
+  implies, (b) last-3-game averages, (c) simply spending the cap, (d) random legal lineups?  That is a test of the projections +
+  optimizer, NOT proof of beating real DraftKings prices (which already price in matchup and Vegas news).  The proxy comes in two
+  strengths ("rate": price knows only the player's average; "partial": price already knows half of the matchup / Vegas / usage
+  adjustment).  Once real salary files exist in dfs_salaries/ the backtest uses them for those weeks and reports them separately.
+"""
+
+import argparse
+import csv
+import datetime as dt
+import heapq
+import itertools
+import json
+import math
+import os
+import random
+import re
+import shutil
+import sys
+import urllib.request
+
+import nfl_fantasy_projections as fpm
+
+# ============================================================================================ rules
+SITES = {
+    "dk": {"name": "DraftKings Classic", "cap": 50000, "unit": 100,
+           "base": {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "DEF": 1}, "flex": ("RB", "WR", "TE"), "min_games": 2},
+}
+DK_SCORING = dict(fpm.SCORING, pass_yd=0.04, pass_td=4.0, intc=-1.0, rush_yd=0.1, rush_td=6.0, rec=1.0, rec_yd=0.1, rec_td=6.0,
+                  fumble_lost=-1.0, two_pt=2.0, st_td=6.0, fum_rec_td=6.0,
+                  pass_300_bonus=3.0, rush_100_bonus=3.0, rec_100_bonus=3.0,
+                  d_sack=1.0, d_int=2.0, d_fum=2.0, d_td=6.0, d_safety=2.0, d_block=2.0,
+                  d_pa=[[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]])
+PARAMS_NAME = "nfl_fantasy_params_dk.json"
+SALARY_DIR = "dfs_salaries"
+DFS_POS = ("QB", "RB", "WR", "TE", "DEF")
+TEAM_FIX = {"JAC": "JAX", "LAR": "LA", "WSH": "WAS", "LVR": "LV", "ARZ": "ARI", "BLT": "BAL", "CLV": "CLE", "HST": "HOU", "SD": "LAC", "STL": "LA", "OAK": "LV"}
+
+
+def norm_name(x):
+    x = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b\.?", "", str(x).lower().replace(".", " "))
+    return "".join(ch for ch in x if ch.isalnum())
+
+
+def norm_team(t):
+    t = str(t).strip().upper()
+    return TEAM_FIX.get(t, t)
+
+
+# ============================================================================================ exact optimizer
+def _frontier_for_group(items, k, budget):
+    """Pareto frontier [(units, value, ids)] over the ways to choose exactly k of `items` ((id, units, value)) within budget (units).
+    Players dominated by at least k cheaper-and-better ones are dropped first (they can never be in an optimal lineup)."""
+    if k == 0:
+        return [(0, 0.0, ())]
+    items = [it for it in items if it[1] <= budget]
+    if len(items) < k:
+        return []
+    order = sorted(range(len(items)), key=lambda i: (items[i][1], -items[i][2], i))
+    kept = []
+    for i in order:                                   # items already ordered by units asc: dominators of i are earlier with value >= it
+        better = sum(1 for j in kept if items[j][2] >= items[i][2])
+        if better < k:
+            kept.append(i)
+    cand = [items[i] for i in kept]
+    f = [[(0, 0.0, ())]] + [[] for _ in range(k)]                  # f[j]: Pareto frontier of choosing exactly j of the items seen so far
+    for it in cand:
+        for j in range(k, 0, -1):
+            if not f[j - 1]:
+                continue
+            add = [(u + it[1], v + it[2], ids + (it[0],)) for u, v, ids in f[j - 1] if u + it[1] <= budget]
+            if add:
+                f[j] = _pareto(f[j] + add)
+    return f[k]
+
+
+def _pareto(pts):
+    pts.sort(key=lambda t: (t[0], -t[1]))
+    out, best = [], -1e18
+    for u, v, ids in pts:
+        if v > best + 1e-12:
+            out.append((u, v, ids))
+            best = v
+    return out
+
+
+def _combine(f1, f2, budget):
+    pts = []
+    for u1, v1, i1 in f1:
+        for u2, v2, i2 in f2:
+            if u1 + u2 > budget:
+                break
+            pts.append((u1 + u2, v1 + v2, i1 + i2))
+    return _pareto(pts)
+
+
+def solve_one(pool, cap_units, site, value_key, forced=frozenset(), excluded=frozenset()):
+    """Best lineup (value, [players]) with `forced` ids included and `excluded` ids removed, or None.  Players need ["id","pos","u"]."""
+    byid = {p["id"]: p for p in pool}
+    fp_ = [byid[i] for i in forced]
+    best = None
+    fsal = sum(p["u"] for p in fp_)
+    if fsal > cap_units:
+        return None
+    for fx in site["flex"]:
+        req = dict(site["base"])
+        req[fx] = req.get(fx, 0) + 1
+        fc = {}
+        for p in fp_:
+            fc[p["pos"]] = fc.get(p["pos"], 0) + 1
+        if any(fc.get(pos, 0) > n for pos, n in req.items()) or any(pos not in req for pos in fc):
+            continue
+        budget = cap_units - fsal
+        total = [(0, sum(p[value_key] for p in fp_), ())]
+        feasible = True
+        for pos, n in req.items():
+            need = n - fc.get(pos, 0)
+            items = [(p["id"], p["u"], p[value_key]) for p in pool if p["pos"] == pos and p["id"] not in forced and p["id"] not in excluded]
+            fr = _frontier_for_group(items, need, budget)
+            if not fr:
+                feasible = False
+                break
+            total = _combine(total, fr, budget)
+            if not total:
+                feasible = False
+                break
+        if feasible and total:
+            u, v, ids = total[-1]
+            if best is None or v > best[0] + 1e-12:
+                best = (v, [byid[i] for i in list(forced) + list(ids)])
+    return best
+
+
+def lineup_ok(lineup, site, max_per_team=None, stack=False, min_games=None):
+    games = {p.get("game") for p in lineup}
+    if len(games) < (min_games if min_games is not None else site["min_games"]):
+        return False
+    if max_per_team:
+        cnt = {}
+        for p in lineup:
+            if p["pos"] != "DEF":
+                cnt[p["team"]] = cnt.get(p["team"], 0) + 1
+        if cnt and max(cnt.values()) > max_per_team:
+            return False
+    if stack:
+        qb = [p for p in lineup if p["pos"] == "QB"]
+        if not qb or not any(p["team"] == qb[0]["team"] and p["pos"] in ("WR", "TE") for p in lineup):
+            return False
+    return True
+
+
+def optimize(pool, cap=None, n=1, site=None, value_key="proj", locked=(), banned=(), max_per_team=None, stack=False, max_overlap=None, max_pops=4000):
+    """The n best distinct legal lineups (exact: Murty partitioning around an exact best-lineup solver).  Pool players need
+    id, name, pos, team, game, salary, <value_key>.  Returns [{"players": [...], "value": x, "salary": s, "slots": {...}}]."""
+    site = site or SITES["dk"]
+    cap = site["cap"] if cap is None else cap
+    unit = site["unit"]
+    cap_units = int(cap // unit)
+    pl = [dict(p, u=int(math.ceil(p["salary"] / unit - 1e-9))) for p in pool if p["pos"] in site["base"] or p["pos"] in site["flex"]]
+    ids = {p["id"] for p in pl}
+    forced0 = frozenset(i for i in locked if i in ids)
+    excl0 = frozenset(i for i in banned if i in ids) - forced0
+
+    def solve(forced, excluded):
+        return solve_one(pl, cap_units, site, value_key, forced, excluded)
+
+    root = solve(forced0, excl0)
+    if root is None:
+        return []
+    out, heap, cnt, pops = [], [], itertools.count(), 0
+    heapq.heappush(heap, (-root[0], next(cnt), forced0, excl0, root[1]))
+    while heap and len(out) < n and pops < max_pops:
+        negv, _, forced, excl, lineup = heapq.heappop(heap)
+        pops += 1
+        accept = lineup_ok(lineup, site, max_per_team, stack)
+        if accept and max_overlap is not None:
+            sid = {p["id"] for p in lineup}
+            accept = all(len(sid & {p["id"] for p in o["players"]}) <= max_overlap for o in out)
+        if accept:
+            out.append(_pack(lineup, site, value_key))
+        f = set(forced)
+        for p in [p for p in lineup if p["id"] not in forced]:
+            sub = solve(frozenset(f), excl | {p["id"]})
+            if sub:
+                heapq.heappush(heap, (-sub[0], next(cnt), frozenset(f), excl | {p["id"]}, sub[1]))
+            f.add(p["id"])
+    return out
+
+
+def _pack(lineup, site, value_key):
+    """Assign slots (QB, RB, RB, WR, WR, WR, TE, FLEX, DST): the extra RB/WR/TE with the lowest projection goes to FLEX."""
+    by = {}
+    for p in lineup:
+        by.setdefault(p["pos"], []).append(p)
+    for v in by.values():
+        v.sort(key=lambda p: -p[value_key])
+    slots = []
+    flex = None
+    for pos, n in site["base"].items():
+        have = by.get(pos, [])
+        slots += [(pos, p) for p in have[:n]]
+        if pos in site["flex"] and len(have) > n:
+            flex = have[n]
+    if flex is None:                                   # should not happen; keep the weakest flex-eligible as FLEX
+        raise ValueError("lineup has no flex player")
+    slots.append(("FLEX", flex))
+    order = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "FLEX": 4, "DEF": 5}
+    slots.sort(key=lambda t: order[t[0]])
+    return {"players": [p for _, p in slots], "slots": [s for s, _ in slots], "value": sum(p[value_key] for p in lineup),
+            "salary": sum(p["salary"] for p in lineup)}
+
+
+# ============================================================================================ DraftKings salary CSV
+def read_dk_csv(path):
+    """-> list of dicts {name, pos, team, salary, id, game, avg} from DraftKings' DKSalaries.csv (tolerant about column order / case)."""
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return parse_dk(f, os.path.basename(path))
+
+
+def parse_dk(f, label="DKSalaries.csv"):
+    rd = csv.DictReader(f)
+    cols = {c.strip().lower(): c for c in (rd.fieldnames or [])}
+    need = ("position", "name", "salary", "teamabbrev")
+    miss = [c for c in need if c not in cols]
+    if miss:
+        raise ValueError(f"{label} is missing column(s): {', '.join(miss)} (found: {', '.join(rd.fieldnames or [])})")
+    out = []
+    for r in rd:
+        try:
+            sal = int(float(str(r[cols["salary"]]).replace("$", "").replace(",", "")))
+        except ValueError:
+            continue
+        pos = r[cols["position"]].strip().upper()
+        pos = "DEF" if pos in ("DST", "D", "DEF") else pos
+        gi = (r.get(cols.get("game info", ""), "") or "").strip()
+        m = re.match(r"([A-Za-z]+)@([A-Za-z]+)", gi)
+        out.append({"name": r[cols["name"]].strip(), "pos": pos, "team": norm_team(r[cols["teamabbrev"]]), "salary": sal,
+                    "id": (r.get(cols.get("id", ""), "") or "").strip(), "game_info": gi,
+                    "game": "@".join(sorted((norm_team(m.group(1)), norm_team(m.group(2))))) if m else None,
+                    "avg": r.get(cols.get("avgpointspergame", ""), "")})
+    return out
+
+
+def build_pool(sheet, dk_rows, include_played=False, allow_questionable=True):
+    """Join DraftKings rows to projection-sheet rows by name + team (DST by team).  -> (pool, unmatched DK rows)."""
+    by_nt, by_n = {}, {}
+    for r in sheet:
+        if r["pos"] not in DFS_POS:
+            continue
+        key = norm_team(r["team"]) if r["pos"] == "DEF" else norm_name(r["player"])
+        by_nt[(key, r["pos"], norm_team(r["team"]))] = r
+        by_n.setdefault((key, r["pos"]), []).append(r)
+    pool, unmatched = [], []
+    for d in dk_rows:
+        if d["pos"] not in DFS_POS:
+            continue
+        key = d["team"] if d["pos"] == "DEF" else norm_name(d["name"])
+        r = by_nt.get((key, d["pos"], d["team"]))
+        if r is None:
+            cands = by_n.get((key, d["pos"]), [])
+            r = cands[0] if len(cands) == 1 else None
+        if r is None and d["pos"] in ("RB", "WR", "TE"):                    # DK position label differs from nflverse (e.g. FB / TE-RB)
+            for pos2 in ("RB", "WR", "TE"):
+                r = by_nt.get((key, pos2, d["team"]))
+                if r:
+                    break
+        if r is None:
+            unmatched.append(d)
+            continue
+        if (r["status"] or "").lower() in fpm_out():
+            continue
+        if r["played_actual"] is not None and not include_played:
+            continue
+        opp = r["opp"].split()[-1]
+        pool.append({"id": d["id"] or f"{r['pid']}", "name": d["name"], "pos": d["pos"], "team": d["team"], "opp": r["opp"], "salary": d["salary"],
+                     "game": d["game"] or "@".join(sorted((norm_team(r["team"]), norm_team(opp)))), "proj": r["proj"], "floor": r["floor"], "ceil": r["ceil"],
+                     "rate": r["rate"], "status": r["status"], "game_info": d.get("game_info"), "avg_dk": d.get("avg")})
+    return pool, unmatched
+
+
+def fpm_out():
+    return ("out", "ir", "pup", "suspended")
+
+
+# ============================================================================================ tune / optimize commands
+def tune(directory, first=2018, last=None, out=print):
+    last = last or fpm.current_season()
+    out("Tuning the model under DraftKings scoring (walk-forward; about a minute)...")
+    p, recs = fpm.backtest(directory, first, last, out=lambda *a: None, scoring=DK_SCORING, params_name=PARAMS_NAME)
+    out(f"Saved {PARAMS_NAME}: skill {p.get('skill')}")
+    return p
+
+
+def salary_path(directory, season, week):
+    return os.path.join(directory, SALARY_DIR, f"DKSalaries_{season}_wk{week}.csv")
+
+
+def archive_csv(directory, path, season, week):
+    d = os.path.join(directory, SALARY_DIR)
+    os.makedirs(d, exist_ok=True)
+    dest = os.path.join(d, f"DKSalaries_{season}_wk{week}.csv")
+    if os.path.abspath(path) != os.path.abspath(dest):
+        shutil.copyfile(path, dest)
+    return dest
+
+
+def run_optimize(a, out=print):
+    season = a.season or fpm.current_season()
+    week = a.week or fpm.next_week(a.dir, season)
+    site = dict(SITES["dk"])
+    if a.cap:
+        site["cap"] = a.cap
+    dk = read_dk_csv(a.salaries)
+    sheet, validated, _ = fpm.project(a.dir, season, week, DK_SCORING, out=lambda *x: None, params_name=PARAMS_NAME)
+    if not validated:
+        out(f"WARNING: no {PARAMS_NAME}: using default parameters. Run `tune` first.")
+    pool, unmatched = build_pool(sheet, dk, include_played=a.include_played)
+    big = [u for u in unmatched if u["salary"] >= 4500 and u["pos"] in DFS_POS]
+    out(f"Season {season} week {week}: {len(dk)} DraftKings rows, {len(pool)} priced projections"
+        + (f", {len(unmatched)} not matched (no recent NFL stats / not on the sheet)" if unmatched else ""))
+    if big:
+        out("  unmatched with salary >= $4,500 (check spelling or whether they are rookies / returning): "
+            + ", ".join(f"{u['name']} ({u['team']}, ${u['salary']})" for u in big[:12]))
+    nid = {norm_name(p["name"]): p["id"] for p in pool}
+    lock = [nid[norm_name(x)] for x in (a.lock or []) if norm_name(x) in nid]
+    ban = [nid[norm_name(x)] for x in (a.ban or []) if norm_name(x) in nid]
+    for x in (a.lock or []) + (a.ban or []):
+        if norm_name(x) not in nid:
+            out(f"  [warn] '{x}' not found in the priced pool")
+    lus = optimize(pool, site["cap"], a.lineups, site, "proj", lock, ban, a.max_per_team, a.stack, a.max_overlap)
+    if not lus:
+        out("No legal lineup found (cap too low, locks impossible, or the pool is too small).")
+        return []
+    for i, lu in enumerate(lus, 1):
+        out(f"\nLINEUP {i}:  projected {lu['value']:.1f} pts   salary ${lu['salary']:,} of ${site['cap']:,}   ({lu['value'] / (lu['salary'] / 1000):.2f} pts per $1k)")
+        for slot, p in zip(lu["slots"], lu["players"]):
+            tag = f"  [{p['status']}]" if p["status"] else ""
+            out(f"  {('DST' if slot == 'DEF' else slot):<5}{p['name']:<24}{p['team']:<5}{p['opp']:<8}${p['salary']:>6,}  {p['proj']:>5.1f}  ({p['proj'] / (p['salary'] / 1000):.2f}/$1k)  {p['floor']:.0f}-{p['ceil']:.0f}{tag}")
+    path = os.path.join(a.dir, f"dfs_lineups_{season}_wk{week}.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["lineup", "slot", "player", "id", "team", "salary", "proj"])
+        for i, lu in enumerate(lus, 1):
+            for slot, p in zip(lu["slots"], lu["players"]):
+                w.writerow([i, slot, p["name"], p["id"], p["team"], p["salary"], round(p["proj"], 2)])
+    out(f"\nWrote {path}")
+    try:
+        out(f"Archived the salary file to {archive_csv(a.dir, a.salaries, season, week)} (for a real-salary backtest later)")
+    except OSError:
+        pass
+    return lus
+
+
+# ============================================================================================ backtest
+PRICE_ANCHORS = {   # (rank within position that week, salary): approximate DraftKings Classic price curve (assumption, not data)
+    "QB": [(1, 8000), (6, 7000), (12, 6200), (20, 5300), (32, 4600)],
+    "RB": [(1, 9000), (6, 7500), (12, 6500), (24, 5200), (40, 4200), (60, 3300), (80, 3000)],
+    "WR": [(1, 9200), (6, 8000), (12, 7000), (24, 5800), (40, 4800), (60, 3800), (90, 3000)],
+    "TE": [(1, 7500), (3, 6000), (6, 5000), (12, 3800), (20, 3000), (30, 2500)],
+    "DEF": [(1, 4000), (8, 3400), (16, 3000), (32, 2000)],
+}
+
+
+def price_by_rank(pos, rank):
+    pts = PRICE_ANCHORS[pos]
+    if rank <= pts[0][0]:
+        return pts[0][1]
+    for (r1, s1), (r2, s2) in zip(pts, pts[1:]):
+        if rank <= r2:
+            return int(round((s1 + (s2 - s1) * (rank - r1) / (r2 - r1)) / 100.0)) * 100
+    return pts[-1][1]
+
+
+def proxy_salaries(cands, signal_key, seed, season, week, noise=0.12):
+    """cands: dicts with pid, pos and signal_key.  Price = anchor curve at the rank of signal x lognormal noise (deterministic per player-week)."""
+    out = {}
+    for pos in DFS_POS:
+        grp = [c for c in cands if c["pos"] == pos]
+        sig = {}
+        for c in grp:
+            rnd = random.Random(f"{seed}|{season}|{week}|{c['pid']}")
+            sig[c["pid"]] = max(c[signal_key], 0.01) * math.exp(rnd.gauss(0.0, noise))
+        for rank, c in enumerate(sorted(grp, key=lambda c: -sig[c["pid"]]), 1):
+            out[c["pid"]] = price_by_rank(pos, rank)
+    return out
+
+
+def random_lineups(pool, cap, site, rnd, n=200, attempts=40000, min_use=0.96):
+    by = {pos: [p for p in pool if p["pos"] == pos] for pos in DFS_POS}
+    res = []
+    for _ in range(attempts):
+        if len(res) >= n:
+            break
+        fx = rnd.choice(site["flex"])
+        req = dict(site["base"])
+        req[fx] = req.get(fx, 0) + 1
+        picks, ok = [], True
+        for pos, k in req.items():
+            if len(by[pos]) < k:
+                ok = False
+                break
+            picks += rnd.sample(by[pos], k)
+        if not ok:
+            continue
+        s = sum(p["salary"] for p in picks)
+        if min_use * cap <= s <= cap and lineup_ok(picks, site):
+            res.append(picks)
+    return res
+
+
+def week_pools(rows, games, injuries, params, first_eval=2019, first_eval_week=3):
+    """Yield (season, week, cands, actual_by_pid) with candidates built ONLY from earlier weeks (same logic as the live sheet)."""
+    walkers = {g: fpm.Walker(params[g]) for g in fpm.GROUPS}
+    wof = {pos: walkers[g] for g, ps in fpm.GROUPS.items() for pos in ps}
+    by_week = {}
+    for g in games:
+        if g["game_type"] == "REG":
+            by_week.setdefault((int(g["season"]), int(g["week"])), []).append(g)
+    for (season, week), wk in fpm.weeks_of(rows):
+        for w in walkers.values():
+            w.new_season(season)
+        if season >= first_eval and week >= first_eval_week and (season, week) in by_week:
+            team_game = {}
+            for g in by_week[(season, week)]:
+                hp, ap = fpm.implied_points(g)
+                team_game[g["home_team"]] = dict(opp=g["away_team"], home=True, impl=hp, oimpl=ap)
+                team_game[g["away_team"]] = dict(opp=g["home_team"], home=False, impl=ap, oimpl=hp)
+            actual = {r["pid"]: r for r in wk}
+            inj = injuries.get(season, {}).get(week, {})
+            cands = []
+            for grp, w in walkers.items():
+                for pid, v in w.pl.items():
+                    pos = v[4]
+                    if pos not in DFS_POS:
+                        continue
+                    last = v[6]
+                    recent = last and ((last[0] == season and last[1] < week and week - last[1] <= 5) or (last[0] == season - 1 and week <= 2))
+                    tg = team_game.get(v[5])
+                    if not recent or tg is None or (inj.get(pid, "").lower() in fpm_out()):
+                        continue
+                    pr = wof[pos].predict(pid, pos, tg["opp"], tg["home"], tg["impl"], tg["oimpl"], tg["opp"])
+                    if pr is None or pr["mu"] < 0.8:
+                        continue
+                    a = actual.get(pid)
+                    cands.append({"pid": pid, "id": pid, "name": pid, "pos": pos, "team": v[5], "game": "@".join(sorted((v[5], tg["opp"]))),
+                                  "mu": pr["mu"], "rate": pr["rate"], "last3": pr["last3"] or pr["rate"],
+                                  "partial": pr["rate"] * (pr["mu"] / pr["rate"]) ** 0.5 if pr["rate"] > 0 else pr["rate"],
+                                  "actual": a["pts"] if a else 0.0})
+            yield season, week, cands
+        for grp, w in walkers.items():
+            w.update([r for r in wk if r["pos"] in fpm.GROUPS[grp]])
+
+
+def load_injuries(directory, seasons, fetch=fpm.download):
+    out = {}
+    for y in seasons:
+        try:
+            p = fetch(fpm.URL_INJ.format(y=y), os.path.join(fpm.data_dir(directory), f"injuries_{y}.csv"), max_age_h=None if y < fpm.current_season() else 6)
+        except Exception:
+            continue
+        d = {}
+        for r in fpm.read_csv(p):
+            if r.get("gsis_id") and r.get("week"):
+                try:
+                    d.setdefault(int(r["week"]), {})[r["gsis_id"]] = (r.get("report_status") or "").strip()
+                except ValueError:
+                    pass
+        out[y] = d
+    return out
+
+
+def _stats(xs):
+    n = len(xs)
+    if n < 2:
+        return float("nan"), float("nan")
+    m = sum(xs) / n
+    sd = math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+    return m, sd / math.sqrt(n)
+
+
+def backtest(directory, first=2018, last=None, cap=None, salary_dir=None, noise=0.12, n_random=200, seed=1, do_tune=True, out=print,
+             rows=None, games=None, injuries=None, params=None, price_modes=("rate", "partial")):
+    last = last or fpm.current_season()
+    site = dict(SITES["dk"])
+    if cap:
+        site["cap"] = cap
+    if rows is None:
+        rows = fpm.load_weekly(directory, range(first, last + 1), scoring=DK_SCORING)
+    games = games if games is not None else fpm.load_games(directory)
+    injuries = injuries if injuries is not None else load_injuries(directory, range(first, last + 1))
+    if params is None:
+        if do_tune:
+            out("tuning the projections under DraftKings scoring ...")
+            params, _ = fpm.backtest(directory, first, last, out=lambda *a: None, scoring=DK_SCORING, params_name=PARAMS_NAME, rows=rows)
+        else:
+            params = {g: fpm.load_params(directory, PARAMS_NAME)[0][g] for g in fpm.GROUPS}
+    out(f"DraftKings Classic, cap ${site['cap']:,}.  Slates: weeks 3+ of {first + 1}-{last}.  Params tuned on 2019-2024; 2025+ is validation.\n")
+    results = {m: [] for m in list(price_modes) + ["real"]}
+    names = {r["pid"]: r["name"] for r in rows}
+    rnd = random.Random(seed)
+    for season, week, cands in week_pools(rows, games, injuries, params):
+        for c in cands:
+            c["name"] = names.get(c["pid"], c["pid"])
+        real = None
+        if salary_dir:
+            pth = os.path.join(salary_dir, f"DKSalaries_{season}_wk{week}.csv")
+            if os.path.exists(pth):
+                real = read_dk_csv(pth)
+        modes = ["real"] if real else list(price_modes)
+        for mode in modes:
+            if mode == "real":
+                key_nt = {(norm_name(c["name"]) if c["pos"] != "DEF" else c["team"], c["pos"], c["team"]): c for c in cands}
+                pool = []
+                for d in real:
+                    c = key_nt.get((norm_name(d["name"]) if d["pos"] != "DEF" else d["team"], d["pos"], d["team"]))
+                    if c:
+                        pool.append(dict(c, salary=d["salary"]))
+                sig = "rate"
+            else:
+                sal = proxy_salaries(cands, "rate" if mode == "rate" else "partial", seed, season, week, noise)
+                pool = [dict(c, salary=sal[c["pid"]]) for c in cands]
+                sig = "rate" if mode == "rate" else "partial"
+            rec = {"season": season, "week": week, "n": len(pool)}
+            for strat, key in (("model", "mu"), ("price", sig), ("last3", "last3")):
+                res = optimize(pool, site["cap"], 1, site, key)
+                if not res:
+                    break
+                lu = res[0]
+                rec[strat] = sum(p["actual"] for p in lu["players"])
+                rec[strat + "_proj"] = lu["value"] if key == "mu" else sum(p["mu"] for p in lu["players"])
+                rec[strat + "_sal"] = lu["salary"]
+            else:
+                spend = optimize([dict(p, spend=p["salary"] + 0.001 * p["rate"]) for p in pool], site["cap"], 1, site, "spend")
+                rec["spend"] = sum(p["actual"] for p in spend[0]["players"]) if spend else float("nan")
+                rl = random_lineups(pool, site["cap"], site, rnd, n_random)
+                if rl:
+                    tots = sorted(sum(p["actual"] for p in lu) for lu in rl)
+                    rec["rand_mean"] = sum(tots) / len(tots)
+                    rec["rand_pct"] = sum(1 for t in tots if t < rec["model"]) / len(tots) + 0.5 * sum(1 for t in tots if t == rec["model"]) / len(tots)
+                    rec["rand_p80"] = tots[int(0.8 * (len(tots) - 1))]
+                results[mode].append(rec)
+    report = {}
+    for mode, rs in results.items():
+        if not rs:
+            continue
+        for label, sel in (("TUNE years (2019-2024; projection params fitted here)", lambda r: r["season"] < 2025),
+                           ("VALIDATE years (2025-26; never used for tuning)", lambda r: r["season"] >= 2025)):
+            sub = [r for r in rs if sel(r)]
+            if not sub:
+                continue
+            out("=" * 100 + f"\n{'REAL DraftKings salaries' if mode == 'real' else 'PRICE PROXY ' + repr(mode)}  --  {label}: {len(sub)} slates\n" + "=" * 100)
+            out(f"{'strategy':<26}{'avg actual pts':>15}{'vs model':>12}{'+/- s.e.':>10}{'weeks model wins':>18}{'avg salary':>12}")
+            m, mse = _stats([r["model"] for r in sub])
+            out(f"{'MODEL projections':<26}{m:>15.1f}{'':>12}{'':>10}{'':>18}{sum(r['model_sal'] for r in sub) / len(sub):>12,.0f}")
+            for strat, nm in (("price", "price-implied (own avg)" if mode in ("rate", "real") else "price-implied (partial)"), ("last3", "last-3-game average"), ("spend", "spend the cap")):
+                vals = [r[strat] for r in sub if strat in r and r[strat] == r[strat]]
+                diffs = [r["model"] - r[strat] for r in sub if strat in r and r[strat] == r[strat]]
+                d, dse = _stats(diffs)
+                sal_txt = f"{sum(r[strat + '_sal'] for r in sub if strat + '_sal' in r) / max(1, sum(1 for r in sub if strat + '_sal' in r)):>12,.0f}" if strat != "spend" else f"{'~cap':>12}"
+                out(f"{nm:<26}{sum(vals) / len(vals):>15.1f}{d:>+12.1f}{dse:>10.1f}{sum(1 for x in diffs if x > 0) / len(diffs):>18.0%}{sal_txt}")
+            rm = [r for r in sub if "rand_mean" in r]
+            out(f"{'random legal lineups':<26}{sum(r['rand_mean'] for r in rm) / len(rm):>15.1f}{_stats([r['model'] - r['rand_mean'] for r in rm])[0]:>+12.1f}{_stats([r['model'] - r['rand_mean'] for r in rm])[1]:>10.1f}")
+            out(f"model lineup beats {sum(r['rand_pct'] for r in rm) / len(rm):.0%} of random legal lineups on average; "
+                f"exceeds the random 80th percentile in {sum(1 for r in rm if r['model'] > r['rand_p80']) / len(rm):.0%} of weeks")
+            pr = [r for r in sub if "model_proj" in r]
+            out(f"projected {sum(r['model_proj'] for r in pr) / len(pr):.1f} vs actual {m:.1f} (a lineup chosen for high projections regresses: the gap is the winner's curse)\n")
+            report[(mode, label[:4])] = {"n": len(sub), "model": m}
+    return results, params
+
+
+# ============================================================================================ DraftKings API probe (nothing guessed)
+PROBES = [("lobby contests (NFL)", "https://www.draftkings.com/lobby/getcontests?sport=NFL"),
+          ("draft groups (NFL)", "https://api.draftkings.com/draftgroups/v1/draftgroups?sport=NFL"),]
+
+
+def probe(out=print):
+    """Prints the structure DraftKings returns so the live fetch can be wired against REAL field names.  Run on your PC."""
+    for name, url in PROBES:
+        out(f"\n== {name}: {url}")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+        except Exception as e:
+            out(f"   failed: {type(e).__name__}: {e}")
+            continue
+        out(f"   top-level keys: {list(data)[:20] if isinstance(data, dict) else type(data).__name__}")
+
+        def walk(o, depth=0, key="root"):
+            if depth > 3:
+                return
+            if isinstance(o, dict):
+                out("   " + "  " * depth + f"{key}: dict keys {list(o)[:25]}")
+                for k in list(o)[:6]:
+                    walk(o[k], depth + 1, k)
+            elif isinstance(o, list) and o:
+                out("   " + "  " * depth + f"{key}: list[{len(o)}] of {type(o[0]).__name__}")
+                walk(o[0], depth + 1, key + "[0]")
+        walk(data)
+        with open(f"dk_probe_{re.sub('[^a-z]+', '_', name.lower())}.json", "w") as f:
+            json.dump(data, f)
+    out("\nSaved the raw responses as dk_probe_*.json.  Send me the output above; draftables (per draft group) are probed next.")
+
+
+# ============================================================================================ CLI
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="NFL DFS lineup optimizer (DraftKings Classic)")
+    ap.add_argument("command", choices=["tune", "optimize", "backtest", "probe"])
+    ap.add_argument("--dir", default=".")
+    ap.add_argument("--season", type=int)
+    ap.add_argument("--week", type=int)
+    ap.add_argument("--salaries", help="DKSalaries.csv from the DraftKings contest page")
+    ap.add_argument("--cap", type=int, help="salary cap (default 50000)")
+    ap.add_argument("--lineups", type=int, default=1)
+    ap.add_argument("--max-overlap", type=int, default=None)
+    ap.add_argument("--max-per-team", type=int, default=None)
+    ap.add_argument("--stack", action="store_true")
+    ap.add_argument("--lock", action="append")
+    ap.add_argument("--ban", action="append")
+    ap.add_argument("--include-played", action="store_true")
+    ap.add_argument("--first", type=int, default=2018)
+    ap.add_argument("--last", type=int)
+    ap.add_argument("--salary-dir", default=None)
+    ap.add_argument("--noise", type=float, default=0.12)
+    ap.add_argument("--no-tune", action="store_true")
+    a = ap.parse_args(argv)
+    if a.command == "tune":
+        tune(a.dir, a.first, a.last)
+    elif a.command == "optimize":
+        if not a.salaries:
+            raise SystemExit("optimize needs --salaries DKSalaries.csv")
+        run_optimize(a)
+    elif a.command == "backtest":
+        backtest(a.dir, a.first, a.last, a.cap, a.salary_dir, a.noise, do_tune=not a.no_tune)
+    else:
+        probe()
+
+
+if __name__ == "__main__":
+    main()
+'''
+_DEFAULT_LEAGUES = [{'name': 'Family Fantasy Football League', 'id': 501858, 'platform': 'Yahoo', 'teams': 18, 'format': 'H2H, 6 playoff teams (weeks 15-17)', 'scoring': {'pass_yd': 0.04, 'pass_td': 4, 'intc': -1, 'rush_yd': 0.1, 'rush_td': 6, 'rec': 1, 'rec_yd': 0.1, 'rec_td': 6, 'fumble_lost': -2, 'two_pt': 2, 'st_td': 6, 'fum_rec_td': 6, 'k_fg_u40': 3, 'k_fg_40': 4, 'k_fg_50': 5, 'k_pat': 1, 'k_fg_miss': 0, 'd_sack': 1, 'd_int': 2, 'd_fum': 2, 'd_td': 6, 'd_safety': 2, 'd_block': 2, 'd_pa': [[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]], 'k_pat_miss': 0}, 'slots': {'QB': 1, 'RB': 2, 'WR': 2, 'TE': 1, 'FLEX': 2, 'K': 1, 'DEF': 1}, 'bench': 6, 'ir': 2, 'notes': 'Extra Point Returned (2 pts) not modelled; no yardage tiers for defense.'}, {'name': 'Otuhiva Family League', 'id': 572561, 'platform': 'Yahoo', 'teams': 12, 'format': 'H2H, 6 playoff teams (weeks 15-17)', 'scoring': {'pass_yd': 0.04, 'pass_td': 6, 'intc': -2, 'rush_yd': 0.1, 'rush_td': 6, 'rec': 1, 'rec_yd': 0.1, 'rec_td': 6, 'fumble_lost': -2, 'two_pt': 2, 'st_td': 6, 'fum_rec_td': 6, 'k_fg_u40': 3, 'k_fg_40': 4, 'k_fg_50': 5, 'k_pat': 1, 'k_fg_miss': 0, 'd_sack': 1, 'd_int': 2, 'd_fum': 2, 'd_td': 6, 'd_safety': 2, 'd_block': 2, 'd_pa': [[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]], 'k_pat_miss': -1}, 'slots': {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 2, 'K': 1, 'DEF': 1}, 'bench': 6, 'ir': 1, 'notes': 'Points allowed 21-27 not shown in pasted settings; assumed 0. Extra Point Returned (2) not modelled.'}, {'name': 'DraftKings DFS (Classic, PPR + bonuses)', 'id': 'dk', 'platform': 'DraftKings', 'teams': None, 'format': 'DFS: $50,000 cap, QB/2RB/3WR/TE/FLEX/DST', 'scoring': {'pass_yd': 0.04, 'pass_td': 4.0, 'intc': -1.0, 'rush_yd': 0.1, 'rush_td': 6.0, 'rec': 1.0, 'rec_yd': 0.1, 'rec_td': 6.0, 'fumble_lost': -1.0, 'two_pt': 2.0, 'st_td': 6.0, 'fum_rec_td': 6.0, 'k_fg_u40': 3.0, 'k_fg_40': 4.0, 'k_fg_50': 5.0, 'k_pat': 1.0, 'k_pat_miss': 0.0, 'k_fg_miss': 0.0, 'd_sack': 1.0, 'd_int': 2.0, 'd_fum': 2.0, 'd_td': 6.0, 'd_safety': 2.0, 'd_block': 2.0, 'd_pa': [[0, 10], [6, 7], [13, 4], [20, 1], [27, 0], [34, -1], [999, -4]], 'pass_300_bonus': 3.0, 'rush_100_bonus': 3.0, 'rec_100_bonus': 3.0}, 'slots': {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 1, 'DEF': 1}, 'notes': 'Scoring used to project DraftKings points; salaries come from an uploaded DKSalaries.csv'}]
 
 
 class _Loader(importlib.abc.Loader):
@@ -1073,6 +1759,7 @@ def _install():
 
 _install()
 import nfl_fantasy_projections as fpm                                          # noqa: E402
+import nfl_dfs_optimizer as dfs                                                # noqa: E402
 from nfl_io import FileLock, LockBusy, atomic_json_dump, load_json_retry       # noqa: E402
 
 ROSTER_FILE = "nfl_rosters.json"
@@ -1081,6 +1768,8 @@ REFRESH_LOCK = "nfl_fantasy_refresh.lock"
 BOOT_FILE = "nfl_fantasy_bootstrap_state.json"
 OUT_STATUS = ("out", "ir", "pup", "suspended")
 MAX_NAMES = 80
+DFS_BACKTEST_FILE = "dfs_backtest.json"
+MAX_CSV_BYTES = 3_000_000
 
 
 def clean(obj):
@@ -1129,6 +1818,7 @@ class FantasyPlatform:
         self._refresh_info = {"last": None}
         self._stop = threading.Event()
         self._leagues_ready = False
+        self._dfs_bt = {"status": "idle"}
 
     # ----------------------------------------------------------------- helpers
     def _now(self):
@@ -1308,6 +1998,148 @@ class FantasyPlatform:
         except Exception as e:
             return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"], "adds": []}
 
+    # ----------------------------------------------------------------- daily fantasy (DraftKings)
+    def set_salaries(self, csv_text, week=None, season=None):
+        """Store a DraftKings DKSalaries.csv (text) for a week.  Validated, written atomically, matched against the projections."""
+        try:
+            if not isinstance(csv_text, str) or not csv_text.strip():
+                return {"status": "error", "warnings": ["csv must be the text of DKSalaries.csv"]}
+            if len(csv_text.encode("utf-8", "ignore")) > MAX_CSV_BYTES:
+                return {"status": "error", "warnings": ["csv too large"]}
+            import io
+            rows = dfs.parse_dk(io.StringIO(csv_text), "uploaded csv")
+            by_pos = {}
+            for r in rows:
+                by_pos[r["pos"]] = by_pos.get(r["pos"], 0) + 1
+            if len(rows) < 60 or not all(by_pos.get(p, 0) >= 8 for p in ("QB", "RB", "WR", "TE")):
+                return {"status": "error", "warnings": [f"does not look like a full NFL Classic salary file ({len(rows)} rows, by position {by_pos})"]}
+            season = int(season) if season else self.season()
+            if week in (None, ""):
+                week = fpm.next_week(self.dir, season, self._offline, today=self._now().date().isoformat())
+            week = int(week)
+            path = dfs.salary_path(self.dir, season, week)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(csv_text)
+            os.replace(tmp, path)
+            info = {"status": "ok", "season": season, "week": week, "rows": len(rows), "by_position": by_pos, "warnings": []}
+            try:
+                with self._lock:
+                    lg, slots, wk, ssn, sheet, validated, warns = self._sheet("dk", week)
+                pool, unmatched = dfs.build_pool(sheet, rows, include_played=True)
+                big = [u for u in unmatched if u["salary"] >= 4500 and u["pos"] in dfs.DFS_POS]
+                info.update({"matched": len(pool), "unmatched": len(unmatched),
+                             "unmatched_salary_4500_plus": [f"{u['name']} ({u['team']}, ${u['salary']})" for u in big[:15]]})
+                info["warnings"] += warns
+            except Exception as e:
+                info["warnings"].append(f"saved, but could not match against projections yet: {type(e).__name__}: {e}")
+            return info
+        except ValueError as e:
+            return {"status": "error", "warnings": [str(e)]}
+        except Exception as e:
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"]}
+
+    def _dfs_pool(self, week, include_played=False):
+        with self._lock:
+            lg, slots, week, season, sheet, validated, warnings = self._sheet("dk", week)
+            ckey = self._cache.get(("dk", season, week), (None,))[0]
+        path = dfs.salary_path(self.dir, season, week)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"no DraftKings salary file for {season} week {week}: POST the DKSalaries.csv text to /api/dfs/salaries")
+        rows = dfs.read_dk_csv(path)
+        pool, unmatched = dfs.build_pool(sheet, rows, include_played=include_played)
+        return season, week, pool, unmatched, warnings, (ckey, _stat_key(path))
+
+    def get_dfs_pool(self, week=None, include_played=False):
+        try:
+            season, week, pool, unmatched, warnings, _ = self._dfs_pool(week, include_played)
+            for p in pool:
+                p["value"] = p["proj"] / (p["salary"] / 1000.0) if p["salary"] else None
+            pool.sort(key=lambda p: -p["proj"])
+            big = [f"{u['name']} ({u['team']}, ${u['salary']})" for u in unmatched if u["salary"] >= 4500 and u["pos"] in dfs.DFS_POS]
+            keep = ("id", "name", "pos", "team", "opp", "game", "salary", "proj", "floor", "ceil", "value", "status")
+            return clean({"status": "ok", "season": season, "week": week, "count": len(pool), "unmatched": len(unmatched), "unmatched_salary_4500_plus": big[:20],
+                          "warnings": warnings, "players": [{k: p.get(k) for k in keep} for p in pool]})
+        except Exception as e:
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"], "players": []}
+
+    def get_dfs_lineups(self, week=None, cap=None, lineups=1, stack=False, max_overlap=None, max_per_team=None, lock=None, ban=None, include_played=False):
+        try:
+            site = dict(dfs.SITES["dk"])
+            if cap not in (None, ""):
+                cap = int(cap)
+                if not 20000 <= cap <= 100000:
+                    return {"status": "error", "warnings": ["cap must be between 20000 and 100000"], "lineups": []}
+                site["cap"] = cap
+            n = max(1, min(int(lineups or 1), 20))
+            mo = None if max_overlap in (None, "") else int(max_overlap)
+            mpt = None if max_per_team in (None, "") else int(max_per_team)
+            lock, ban = list(lock or []), list(ban or [])
+            season, week, pool, unmatched, warnings, key = self._dfs_pool(week, include_played)
+            ck = ("lu", key, site["cap"], n, bool(stack), mo, mpt, tuple(lock), tuple(ban), bool(include_played))
+            hit = self._inputs.get(ck)
+            if hit is None:
+                nid = {dfs.norm_name(p["name"]): p["id"] for p in pool}
+                lk = [nid[dfs.norm_name(x)] for x in lock if dfs.norm_name(x) in nid]
+                bn = [nid[dfs.norm_name(x)] for x in ban if dfs.norm_name(x) in nid]
+                for x in lock + ban:
+                    if dfs.norm_name(x) not in nid:
+                        warnings.append(f"'{x}' is not in the priced pool (misspelled, Out, or already played)")
+                lus = dfs.optimize(pool, site["cap"], n, site, "proj", lk, bn, mpt, bool(stack), mo)
+                out = []
+                for i, lu in enumerate(lus, 1):
+                    out.append({"rank": i, "projected": lu["value"], "salary": lu["salary"], "points_per_1k": lu["value"] / (lu["salary"] / 1000.0),
+                                "players": [dict({k: p.get(k) for k in ("id", "name", "pos", "team", "opp", "salary", "proj", "floor", "ceil", "status")},
+                                                 slot=("DST" if sl == "DEF" else sl), value=p["proj"] / (p["salary"] / 1000.0))
+                                            for sl, p in zip(lu["slots"], lu["players"])]})
+                big = [f"{u['name']} ({u['team']}, ${u['salary']})" for u in unmatched if u["salary"] >= 4500 and u["pos"] in dfs.DFS_POS]
+                hit = {"lineups": out, "unmatched": big[:15], "pool": len(pool)}
+                if len([k for k in self._inputs if isinstance(k, tuple)]) > 60:
+                    for k in [k for k in self._inputs if isinstance(k, tuple)][:20]:
+                        self._inputs.pop(k, None)
+                self._inputs[ck] = hit
+            warns = list(warnings)
+            if not hit["lineups"]:
+                warns.append("no legal lineup (cap too low, locks impossible, or the pool is too small)")
+            return clean({"status": "ok", "season": season, "week": week, "cap": site["cap"], "pool_size": hit["pool"], "lineups": hit["lineups"],
+                          "unmatched_salary_4500_plus": hit["unmatched"], "warnings": warns,
+                          "note": "exact optimum for these projections; lineups chosen for high projections typically score 15-20 points below their projected total"})
+        except Exception as e:
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"], "lineups": []}
+
+    def run_dfs_backtest(self):
+        """Background job (minutes): tune under DraftKings scoring and replay 2019+ slates; saves the report to dfs_backtest.json."""
+        if self._dfs_bt.get("status") == "running":
+            return {"status": "busy"}
+        self._dfs_bt = {"status": "running", "started_at": self._now().isoformat(timespec="seconds") + "Z"}
+
+        def job():
+            lines = []
+            try:
+                self.ensure_leagues()
+                sal = self._p(dfs.SALARY_DIR)
+                dfs.backtest(self.dir, 2018, self.season(), salary_dir=sal if os.path.isdir(sal) else None, out=lines.append)
+                res = {"status": "done", "finished_at": self._now().isoformat(timespec="seconds") + "Z", "text": "\n".join(lines)}
+            except Exception as e:
+                res = {"status": "error", "error": f"{type(e).__name__}: {e}", "text": "\n".join(lines)}
+            res["started_at"] = self._dfs_bt.get("started_at")
+            atomic_json_dump(self._p(DFS_BACKTEST_FILE), res)
+            with self._lock:
+                self._cache.clear()
+            self._dfs_bt = {"status": res["status"], "started_at": res["started_at"]}
+        threading.Thread(target=job, name="dfs-backtest", daemon=True).start()
+        return {"status": "started", "note": "takes several minutes; read /api/dfs/backtest"}
+
+    def get_dfs_backtest(self):
+        try:
+            d = load_json_retry(self._p(DFS_BACKTEST_FILE), None) if os.path.exists(self._p(DFS_BACKTEST_FILE)) else None
+            return clean({"status": "ok", "running": self._dfs_bt.get("status") == "running", "report": d,
+                          "warnings": [] if d else ["no backtest saved yet: POST /api/fantasy/refresh {\"what\": \"dfs_backtest\"}"],
+                          "note": "default backtest uses PROXY prices (no free historical DraftKings salaries); weeks with uploaded real salaries are reported separately"})
+        except Exception as e:
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"]}
+
     def get_leagues(self):
         try:
             out = []
@@ -1334,6 +2166,8 @@ class FantasyPlatform:
                       "file_age_s": {"schedule": age(os.path.join(d, "games.csv")), "player_stats": age(os.path.join(d, f"week_{season}.csv")),
                                      "team_stats": age(os.path.join(d, f"team_{season}.csv")), "injuries": age(os.path.join(d, f"injuries_{season}.csv"))},
                       "leagues": [{"id": l["id"], "tuned_parameters": l["tuned_parameters"]} for l in self.get_leagues().get("leagues", [])],
+                      "dfs_salary_files": sorted(f for f in (os.listdir(self._p(dfs.SALARY_DIR)) if os.path.isdir(self._p(dfs.SALARY_DIR)) else [])),
+                      "dfs_backtest": self._dfs_bt,
                       "last_refresh": self._refresh_info["last"] or state.get("last_refresh")})
 
     # ----------------------------------------------------------------- inputs
@@ -1494,7 +2328,14 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
                 top = int(q.get("top", 15))
             except ValueError:
                 top = 15
+            ql = parse_qs(u.query)
+            names = lambda k: [x.strip() for v in ql.get(k, []) for x in v.split(",") if x.strip()]
+            flag = lambda k: str(q.get(k, "")).lower() in ("1", "true", "yes", "on")
             routes = {"/api/fantasy/leagues": platform.get_leagues,
+                      "/api/dfs/pool": lambda: platform.get_dfs_pool(q.get("week"), flag("include_played")),
+                      "/api/dfs/lineups": lambda: platform.get_dfs_lineups(q.get("week"), q.get("cap"), q.get("lineups", 1), flag("stack"), q.get("max_overlap"),
+                                                                           q.get("max_per_team"), names("lock"), names("ban"), flag("include_played")),
+                      "/api/dfs/backtest": platform.get_dfs_backtest,
                       "/api/fantasy/projections": lambda: platform.get_projections(q.get("league"), q.get("week"), q.get("pos")),
                       "/api/fantasy/lineup": lambda: platform.get_lineup(q.get("league"), q.get("week")),
                       "/api/fantasy/waivers": lambda: platform.get_waivers(q.get("league"), q.get("week"), top),
@@ -1511,7 +2352,7 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
 
         def do_POST(self):
             u = urlparse(self.path)
-            if u.path not in ("/api/fantasy/roster", "/api/fantasy/refresh"):
+            if u.path not in ("/api/fantasy/roster", "/api/fantasy/refresh", "/api/dfs/salaries"):
                 return self._send({"status": "error", "warnings": ["not found"]}, 404)
             if not allow_write:
                 return self._send({"status": "error", "warnings": ["writes are disabled (start with --allow-write)"]}, 403)
@@ -1519,7 +2360,7 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
                 return self._send({"status": "error", "warnings": ["missing or wrong bearer token"]}, 401)
             try:
                 n = int(self.headers.get("Content-Length") or 0)
-                if n > 200000:
+                if n > (MAX_CSV_BYTES + 100000 if u.path == "/api/dfs/salaries" else 200000):
                     return self._send({"status": "error", "warnings": ["body too large"]}, 413)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if not isinstance(body, dict):
@@ -1528,13 +2369,18 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
                 return self._send({"status": "error", "warnings": ["body is not a JSON object"]}, 400)
             if u.path == "/api/fantasy/refresh":
                 what = body.get("what", "data")
-                if what not in ("data", "params"):
-                    return self._send({"status": "error", "warnings": ["what must be 'data' or 'params'"]}, 400)
+                if what not in ("data", "params", "dfs_backtest"):
+                    return self._send({"status": "error", "warnings": ["what must be 'data', 'params' or 'dfs_backtest'"]}, 400)
+                if what == "dfs_backtest":
+                    return self._send(platform.run_dfs_backtest())
                 if what == "params":
                     threading.Thread(target=platform.bootstrap, kwargs={"league": body.get("league")}, daemon=True).start()
                     return self._send({"status": "started", "note": "tuning runs in the background; watch /health"})
                 return self._send(platform.refresh_data(force=True))
-            res = platform.set_roster(body.get("league"), body.get("players"), body.get("taken"))
+            if u.path == "/api/dfs/salaries":
+                res = platform.set_salaries(body.get("csv"), body.get("week"), body.get("season"))
+            else:
+                res = platform.set_roster(body.get("league"), body.get("players"), body.get("taken"))
             self._send(res, 200 if res["status"] == "ok" else 400)
 
         def log_message(self, *a):
@@ -1542,7 +2388,7 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
 
     srv = ThreadingHTTPServer((host, port), Handler)
     print(f"Serving on http://{host}:{port}  (/api/fantasy/leagues, /projections, /lineup, /waivers, /players, /health"
-          f"{', POST /api/fantasy/roster, POST /api/fantasy/refresh' if allow_write else ''}). Ctrl+C to stop.", flush=True)
+          f"{', POST /api/fantasy/roster, POST /api/dfs/salaries, POST /api/fantasy/refresh' if allow_write else ''}; DFS: /api/dfs/pool, /lineups, /backtest). Ctrl+C to stop.", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -1582,6 +2428,17 @@ def main(argv=None):
         s.add_argument("--roster", default=None, help="text file, one name per line: saved for the league before running")
         s.add_argument("--taken", default=None, help="text file of players owned elsewhere (waivers)")
         s.add_argument("--no-refresh", action="store_true")
+    ds = sub.add_parser("dfs", help="DraftKings lineups from a DKSalaries.csv")
+    ds.add_argument("--salaries", default=None, help="DKSalaries.csv (saved for the week first)")
+    ds.add_argument("--week", type=int, default=None)
+    ds.add_argument("--cap", type=int, default=None)
+    ds.add_argument("--lineups", type=int, default=3)
+    ds.add_argument("--stack", action="store_true")
+    ds.add_argument("--max-overlap", type=int, default=None)
+    ds.add_argument("--max-per-team", type=int, default=None)
+    ds.add_argument("--lock", action="append")
+    ds.add_argument("--ban", action="append")
+    ds.add_argument("--no-refresh", action="store_true")
     sub.add_parser("refresh")
     sub.add_parser("leagues")
     bs = sub.add_parser("bootstrap")
@@ -1627,6 +2484,18 @@ def main(argv=None):
     p.ensure_leagues()
     if args.cmd == "refresh":
         print(json.dumps(p.refresh_data(force=True), indent=2))
+    elif args.cmd == "dfs":
+        if not args.no_refresh:
+            print(json.dumps(p.refresh_data(), indent=2))
+        if args.salaries:
+            print(json.dumps(p.set_salaries(open(args.salaries, encoding="utf-8-sig").read(), args.week), indent=1))
+        res = p.get_dfs_lineups(args.week, args.cap, args.lineups, args.stack, args.max_overlap, args.max_per_team, args.lock, args.ban)
+        for w in res.get("warnings") or []:
+            print(f"[warn] {w}")
+        for lu in res.get("lineups", []):
+            print(f"\nLINEUP {lu['rank']}: projected {lu['projected']:.1f}  salary ${lu['salary']:,}  ({lu['points_per_1k']:.2f} pts per $1k)")
+            for pl in lu["players"]:
+                print(f"  {pl['slot']:<5}{pl['name']:<24}{pl['team']:<5}{pl['opp']:<8}${pl['salary']:>6,}  {pl['proj']:>5.1f}")
     elif args.cmd == "leagues":
         print(json.dumps(p.get_leagues(), indent=2))
     elif args.cmd == "bootstrap":

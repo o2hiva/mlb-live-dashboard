@@ -8,6 +8,8 @@ Dashboard-facing wrapper around nfl_fantasy_platform.py (the user's NFL fantasy 
   * The nflverse data (about 70 MB, 2018-now) is NOT committed: on start the service downloads it in the background (about a
     minute, no tuning needed because the tuned parameter files are already there), then refreshes the current season every
     30 minutes.  Until the download finishes the endpoints answer status "loading".
+  * DFS (DraftKings Classic): the optimizer is embedded in the platform. DraftKings salaries come from an uploaded DKSalaries.csv
+    (kept in the database, newest 4 weeks, and restored to disk after a redeploy).
   * Rosters are kept in the database (SyncState['ffb_rosters']) so they survive redeploys, and are passed to the platform
     per request.  Nothing is written to the platform's own roster file.
 """
@@ -20,6 +22,14 @@ import threading
 import nfl_fantasy_platform as nfp
 
 log = logging.getLogger("nfl_fantasy_service")
+
+# Bound the worst-case DFS search time on the web server (the optimizer's default of 4000 partition steps can take over a
+# minute on adversarial price lists; 1500 keeps normal requests well under 10 seconds and still returns the best lineups found).
+try:
+    import functools
+    nfp.dfs.optimize = functools.partial(nfp.dfs.optimize, max_pops=1500)
+except Exception:       # pragma: no cover
+    pass
 
 DEFAULT_DIR = os.environ.get("FFB_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffb_data")
 ROSTER_KEY = "ffb_rosters"
@@ -110,6 +120,81 @@ class FFB(nfp.FantasyPlatform):
             return {"status": "error", "warnings": ["could not save the roster"]}
         return {"status": "ok", "league": str(league), "players": len(data[str(league)]["players"]), "taken": len(data[str(league)]["taken"])}
 
+    # ---- DFS salary files (database copy; the platform reads them from disk)
+    SAL_KEY = "dfs_salaries"
+    _sal_restored = False
+
+    def _load_sal_db(self):
+        try:
+            from database import SessionLocal
+            from models_db import SyncState
+            db = SessionLocal()
+            try:
+                row = db.get(SyncState, self.SAL_KEY)
+                return json.loads(row.value) if row and row.value else {}
+            finally:
+                db.close()
+        except Exception:
+            return {}
+
+    def _save_sal_db(self, data):
+        try:
+            from database import SessionLocal
+            from models_db import SyncState
+            payload = json.dumps(data, separators=(",", ":"))
+            db = SessionLocal()
+            try:
+                row = db.get(SyncState, self.SAL_KEY)
+                if row is None:
+                    db.add(SyncState(key=self.SAL_KEY, value=payload))
+                else:
+                    row.value = payload
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            log.exception("salary DB save failed")
+
+    def restore_salaries(self):
+        """Write the database copies of uploaded salary files back to disk (after a redeploy wiped it)."""
+        if self._sal_restored:
+            return
+        self._sal_restored = True
+        try:
+            for key, text in self._load_sal_db().items():
+                season, week = key.split("_")
+                path = nfp.dfs.salary_path(self.dir, int(season), int(week))
+                if not os.path.exists(path):
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w", encoding="utf-8", newline="") as f:
+                        f.write(text)
+        except Exception:
+            log.exception("salary restore failed")
+
+    def put_salaries(self, csv_text, week=None, season=None):
+        self.restore_salaries()
+        res = self.set_salaries(csv_text, week, season)
+        if res.get("status") == "ok":
+            data = self._load_sal_db()
+            data[f"{res['season']}_{res['week']}"] = csv_text
+            for k in sorted(data, key=lambda k: tuple(int(x) for x in k.split("_")))[:-4]:
+                data.pop(k, None)
+            self._save_sal_db(data)
+        return res
+
+    def dfs_pool_payload(self, week=None, include_played=False):
+        if not self.ready():
+            return self._loading()
+        self.restore_salaries()
+        return self.get_dfs_pool(week, include_played)
+
+    def dfs_lineups_payload(self, week=None, cap=None, lineups=5, stack=False, max_overlap=None, max_per_team=None,
+                            lock=None, ban=None, include_played=False):
+        if not self.ready():
+            return self._loading()
+        self.restore_salaries()
+        return self.get_dfs_lineups(week, cap, lineups, stack, max_overlap, max_per_team, lock, ban, include_played)
+
     # ---- reads (all guard on data being downloaded)
     def _loading(self):
         return {"status": "loading", "warnings": ["Fantasy data is downloading (first start after a deploy takes 1-2 minutes). Try again shortly."],
@@ -169,6 +254,7 @@ def get_service():
             os.makedirs(DEFAULT_DIR, exist_ok=True)
             _service = FFB(DEFAULT_DIR, min_refresh_interval_s=600)
             _service.ensure_leagues()
+            _service.restore_salaries()
         return _service
 
 

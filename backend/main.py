@@ -1585,6 +1585,38 @@ def ffb_set_roster(body: FfbRosterBody):
     return nfl_fantasy_service.get_service().put_roster(body.league, body.players, body.taken)
 
 
+class DfsSalariesBody(BaseModel):
+    csv: str
+    week: int | None = None
+    season: int | None = None
+
+
+def _split_names(v):
+    return [x.strip() for x in (v or "").split("|") if x.strip()]
+
+
+@app.get("/api/dfs/pool")
+def dfs_pool(week: int | None = None, include_played: bool = False):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().dfs_pool_payload(week, include_played)
+
+
+@app.get("/api/dfs/lineups")
+def dfs_lineups(week: int | None = None, cap: int | None = None, lineups: int = 5, stack: bool = False,
+                max_overlap: int | None = None, max_per_team: int | None = None, lock: str | None = None,
+                ban: str | None = None, include_played: bool = False):
+    """lock / ban: player names separated by | ."""
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().dfs_lineups_payload(
+        week, cap, lineups, stack, max_overlap, max_per_team, _split_names(lock), _split_names(ban), include_played)
+
+
+@app.post("/api/dfs/salaries")
+def dfs_salaries(body: DfsSalariesBody):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().put_salaries(body.csv, body.week, body.season)
+
+
 @app.get("/api/admin/refresh-ffb")
 def ffb_refresh():
     import nfl_fantasy_service
