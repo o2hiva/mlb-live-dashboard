@@ -111,6 +111,13 @@ async def lifespan(app: FastAPI):
         # the NHL goals model is optional: never stop the whole app from booting over it
         import logging
         logging.getLogger("main").exception("NHL goals service failed to start")
+    try:
+        import nfl_fantasy_service
+        nfl_fantasy_service.start_background()
+    except Exception:
+        # fantasy football is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("Fantasy football service failed to start")
     yield
     if _scheduler:
         _scheduler.shutdown()
@@ -1526,6 +1533,62 @@ def refresh_nhl_goals():
     """Manual refresh of the NHL goals model's data (results, schedule, new boxscores/period goals)."""
     import nhl_goals_service
     return nhl_goals_service.get_service().refresh_data(force=True)
+
+
+# ---------------------------------------------------------------- Fantasy football (FFB tab)
+class FfbRosterBody(BaseModel):
+    league: str
+    players: list[str]
+    taken: list[str] | None = None
+
+
+@app.get("/api/ffb/leagues")
+def ffb_leagues():
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().leagues_payload()
+
+
+@app.get("/api/ffb/projections")
+def ffb_projections(league: str, week: int | None = None, pos: str | None = None):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().projections_payload(league, week, pos)
+
+
+@app.get("/api/ffb/lineup")
+def ffb_lineup(league: str, week: int | None = None):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().lineup_payload(league, week)
+
+
+@app.get("/api/ffb/waivers")
+def ffb_waivers(league: str, week: int | None = None, top: int = 15):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().waivers_payload(league, week, top)
+
+
+@app.get("/api/ffb/players")
+def ffb_players(q: str, league: str | None = None, week: int | None = None):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().players_payload(q, league, week)
+
+
+@app.get("/api/ffb/roster")
+def ffb_get_roster(league: str):
+    import nfl_fantasy_service
+    players, taken = nfl_fantasy_service.get_service().roster(league)
+    return {"status": "ok", "league": league, "players": players, "taken": taken}
+
+
+@app.post("/api/ffb/roster")
+def ffb_set_roster(body: FfbRosterBody):
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().put_roster(body.league, body.players, body.taken)
+
+
+@app.get("/api/admin/refresh-ffb")
+def ffb_refresh():
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().refresh_data(force=True)
 
 
 @app.get("/api/nhl/scorecard")

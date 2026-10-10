@@ -184,6 +184,7 @@
     <span id="tab-btn-mlb" class="tab-btn active" onclick="switchTab('mlb')">MLB</span>
     <span id="tab-btn-npb" class="tab-btn" onclick="switchTab('npb')">NPB</span>
     <span id="tab-btn-nfl" class="tab-btn" onclick="switchTab('nfl')">NFL</span>
+    <span id="tab-btn-ffb" class="tab-btn" onclick="switchTab('ffb')">FFB</span>
     <span id="tab-btn-cfb" class="tab-btn" onclick="switchTab('cfb')">CFB</span>
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
@@ -328,6 +329,32 @@
         <div class="settings-hint">TE props by defense-vs-position - coming soon.</div>
       </div>
     </div>
+  </div>
+
+  <div id="tab-content-ffb" style="display:none;">
+    <div class="tabs">
+      <span id="subtab-btn-ffb-501858" class="tab-btn active" onclick="switchFfbLeague('501858')">Family Fantasy Football League</span>
+      <span id="subtab-btn-ffb-572561" class="tab-btn" onclick="switchFfbLeague('572561')">Otuhiva Family League</span>
+    </div>
+    <div class="sub" id="ffb-league-info">Fantasy football - projected points for your Yahoo league's own scoring and roster slots, your best lineup, and waiver pickups.</div>
+    <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <div>
+        <label for="ffb-week" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
+        <select id="ffb-week" onchange="loadFfb()" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;">
+          <option value="">Next games</option>
+          <option value="1">Week 1</option><option value="2">Week 2</option><option value="3">Week 3</option><option value="4">Week 4</option><option value="5">Week 5</option><option value="6">Week 6</option><option value="7">Week 7</option><option value="8">Week 8</option><option value="9">Week 9</option><option value="10">Week 10</option><option value="11">Week 11</option><option value="12">Week 12</option><option value="13">Week 13</option><option value="14">Week 14</option><option value="15">Week 15</option><option value="16">Week 16</option><option value="17">Week 17</option><option value="18">Week 18</option>
+        </select>
+      </div>
+      <span class="hits-toggle" onclick="refreshFfb()" style="padding:6px 14px;">Refresh Stats</span>
+    </div>
+    <div id="ffb-status" class="settings-hint"></div>
+    <div class="lineup-tabs" style="margin-top:8px;">
+      <span id="ffb-sec-lineup" class="lineup-tab active" onclick="switchFfbSection('lineup')">My Lineup</span>
+      <span id="ffb-sec-waivers" class="lineup-tab" onclick="switchFfbSection('waivers')">Waivers</span>
+      <span id="ffb-sec-projections" class="lineup-tab" onclick="switchFfbSection('projections')">Projections</span>
+      <span id="ffb-sec-roster" class="lineup-tab" onclick="switchFfbSection('roster')">My Roster</span>
+    </div>
+    <div id="ffb-content">Loading...</div>
   </div>
 
   <div id="tab-content-cfb" style="display:none;">
@@ -2432,6 +2459,7 @@
     document.getElementById("tab-content-mlb").style.display = tab === "mlb" ? "block" : "none";
     document.getElementById("tab-content-npb").style.display = tab === "npb" ? "block" : "none";
     document.getElementById("tab-content-nfl").style.display = tab === "nfl" ? "block" : "none";
+    document.getElementById("tab-content-ffb").style.display = tab === "ffb" ? "block" : "none";
     document.getElementById("tab-content-cfb").style.display = tab === "cfb" ? "block" : "none";
     document.getElementById("tab-content-nhl").style.display = tab === "nhl" ? "block" : "none";
     document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
@@ -2439,6 +2467,7 @@
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-npb").classList.toggle("active", tab === "npb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
+    document.getElementById("tab-btn-ffb").classList.toggle("active", tab === "ffb");
     document.getElementById("tab-btn-cfb").classList.toggle("active", tab === "cfb");
     document.getElementById("tab-btn-nhl").classList.toggle("active", tab === "nhl");
     document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
@@ -2450,6 +2479,8 @@
       loadNpbTab();
     } else if (tab === "nfl") {
       loadNflPointsTab();
+    } else if (tab === "ffb") {
+      loadFfb();
     } else if (tab === "cfb") {
       loadCfbTab();
     } else if (tab === "nhl") {
@@ -6065,6 +6096,263 @@
     } catch (e) {
       statusEl.textContent = "Refresh failed - try again.";
     }
+  }
+
+
+  // ---- FFB: fantasy football (nfl_fantasy_platform.py). Two Yahoo leagues, each with its own scoring + roster slots.
+  // Sections: My Lineup (best start/bench from the saved roster), Waivers, Projections (whole player pool), My Roster
+  // (the player list the lineup and waivers are built from; saved in the database).
+  let ffbLeague = "501858";
+  let ffbSection = "lineup";
+  let ffbPos = "";
+  let ffbRosterDraft = null;     // {players: [...], taken: [...]} while editing
+  let ffbSearchTimer = null;
+
+  function ffbEsc(x) {
+    return String(x == null ? "" : x).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function switchFfbLeague(id) {
+    ffbLeague = id;
+    ffbRosterDraft = null;
+    document.getElementById("subtab-btn-ffb-501858").classList.toggle("active", id === "501858");
+    document.getElementById("subtab-btn-ffb-572561").classList.toggle("active", id === "572561");
+    loadFfb();
+  }
+
+  function switchFfbSection(sec) {
+    ffbSection = sec;
+    ["lineup", "waivers", "projections", "roster"].forEach(k => document.getElementById("ffb-sec-" + k).classList.toggle("active", k === sec));
+    loadFfb();
+  }
+
+  function ffbWeekQuery() {
+    const w = document.getElementById("ffb-week").value;
+    return w ? `&week=${w}` : "";
+  }
+
+  async function ffbGet(path) {
+    const res = await fetch(`${API_BASE}${path}`);
+    return await res.json();
+  }
+
+  function ffbWarnHtml(d) {
+    const w = (d && d.warnings) || [];
+    return w.length ? `<div class="settings-hint" style="margin:6px 0;">${w.map(ffbEsc).join("<br>")}</div>` : "";
+  }
+
+  function ffbNum(x, nd) { return x == null || isNaN(x) ? "-" : Number(x).toFixed(nd == null ? 1 : nd); }
+
+  const FFB_TH = "text-align:right; padding:4px 8px; color:var(--muted); font-weight:500; white-space:nowrap;";
+  const FFB_TD = "text-align:right; padding:4px 8px; white-space:nowrap;";
+  const FFB_TDL = "text-align:left; padding:4px 8px; white-space:nowrap;";
+
+  function ffbStatusTag(status) {
+    if (!status) return "";
+    const bad = /out|ir|pup|susp/i.test(status);
+    return ` <span style="color:${bad ? "#e06060" : "#e0a050"}; font-size:0.75rem;">${ffbEsc(status)}</span>`;
+  }
+
+  function ffbPlayerRow(r, slot, extra) {
+    const band = `${ffbNum(r.floor, 0)}-${ffbNum(r.ceil, 0)}`;
+    return `<tr>
+      ${slot !== undefined ? `<td style="${FFB_TDL} color:var(--muted);">${ffbEsc(slot)}</td>` : ""}
+      <td style="${FFB_TDL}">${ffbEsc(r.player)}${ffbStatusTag(r.status)}</td>
+      <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(r.pos)} · ${ffbEsc(r.team)}</td>
+      <td style="${FFB_TDL} color:var(--muted);">${ffbEsc(r.opp || "")}</td>
+      <td style="${FFB_TD} font-size:1.05rem; font-weight:600;">${ffbNum(r.proj)}</td>
+      <td style="${FFB_TD} color:var(--muted);">${band}</td>
+      <td style="${FFB_TD} color:var(--muted);">${ffbNum(r.last3)}</td>
+      <td style="${FFB_TD} color:var(--muted);" title="Opponent points-allowed rank at this position (1 = toughest)">${r.opp_rank != null ? "#" + r.opp_rank : "-"}</td>
+      ${extra || ""}
+    </tr>`;
+  }
+
+  function ffbTable(headers, rowsHtml) {
+    return `<div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.88rem; width:100%;">
+      <tr>${headers.map((h, i) => `<th style="${i < 3 && h !== "Proj" ? "text-align:left;" : ""}${FFB_TH}${(h === "Player" || h === "Pos" || h === "Slot" || h === "Opp") ? " text-align:left;" : ""}">${h}</th>`).join("")}</tr>
+      ${rowsHtml}</table></div>`;
+  }
+
+  function renderFfbLineup(d) {
+    if (d.status === "loading") return `<div class="settings-hint">${ffbWarnHtml(d)}</div>`;
+    if (d.status !== "ok") return `<div class="settings-hint">Couldn't build the lineup: ${(d.warnings || ["error"])[0]}</div>`;
+    if (!d.start || !d.start.length) {
+      return ffbWarnHtml(d) + `<div class="settings-hint">No roster saved for this league yet. Open <b>My Roster</b> and add your players.</div>`;
+    }
+    const H = ["Slot", "Player", "Pos", "Opp", "Proj", "Range", "L3", "Opp rk"];
+    let h = `<div class="settings-hint" style="margin-top:8px;">Week ${d.week} · projected lineup <b style="font-size:1.1rem;">${ffbNum(d.projected_total)}</b> pts (sum of starters; range ${ffbNum(d.floor_total, 0)}-${ffbNum(d.ceiling_total, 0)} adds each player's own band, so the true range is narrower). Projections assume the player plays.</div>`;
+    h += ffbWarnHtml(d);
+    h += `<div class="hits-side-label" style="margin-top:10px;">Start</div>` + ffbTable(H, d.start.map(r => ffbPlayerRow(r, r.slot)).join(""));
+    if (d.bench && d.bench.length) h += `<div class="hits-side-label" style="margin-top:14px;">Bench</div>` + ffbTable(H, d.bench.map(r => ffbPlayerRow(r, "BN")).join(""));
+    if (d.out && d.out.length) h += `<div class="hits-side-label" style="margin-top:14px;">Out / injured</div>` + ffbTable(H, d.out.map(r => ffbPlayerRow(r, "OUT")).join(""));
+    return h;
+  }
+
+  function renderFfbWaivers(d) {
+    if (d.status === "loading") return `<div class="settings-hint">${ffbWarnHtml(d)}</div>`;
+    if (d.status !== "ok") return `<div class="settings-hint">Couldn't rank waivers: ${(d.warnings || ["error"])[0]}</div>`;
+    if (d.current_lineup_projection == null && !(d.adds && d.adds.length)) {
+      return ffbWarnHtml(d) + `<div class="settings-hint">Save your roster first (My Roster) - pickups are ranked by how much they raise your lineup.</div>`;
+    }
+    const H = ["Player", "Pos", "Opp", "Proj", "Range", "L3", "Opp rk", "Lineup gain"];
+    const gainCell = r => `<td style="${FFB_TD} color:#4caf7d; font-weight:600;">+${ffbNum(r.gain)}</td>`;
+    let h = `<div class="settings-hint" style="margin-top:8px;">Week ${d.week} · current lineup ${ffbNum(d.current_lineup_projection)} pts. "Lineup gain" = change in this week's projected total if you add the player (the displaced starter goes to the bench). Availability is NOT checked - confirm the player is free in Yahoo, or list players owned elsewhere under My Roster to hide them.</div>`;
+    h += ffbWarnHtml({ warnings: (d.warnings || []).filter(w => !/^availability is not checked/.test(w)) });
+    if (d.adds && d.adds.length) {
+      h += `<div class="hits-side-label" style="margin-top:10px;">Best pickups</div>` + ffbTable(H, d.adds.map(r => ffbPlayerRow(r, undefined, gainCell(r)).replace(/^(\s*<tr>)/, "$1")).join(""));
+    } else {
+      h += `<div class="settings-hint" style="margin-top:10px;">No pickup improves this week's lineup.</div>`;
+    }
+    const bp = d.best_by_position || {};
+    const order = ["QB", "RB", "WR", "TE", "K", "DEF"].filter(k => bp[k] && bp[k].length);
+    if (order.length) {
+      h += `<div class="hits-side-label" style="margin-top:14px;">Top available by position</div>`;
+      h += ffbTable(["Player", "Pos", "Opp", "Proj", "Range", "L3", "Opp rk"], order.flatMap(k => bp[k]).map(r => ffbPlayerRow(r)).join(""));
+    }
+    return h;
+  }
+
+  function renderFfbProjections(d, roster) {
+    if (d.status === "loading") return `<div class="settings-hint">${ffbWarnHtml(d)}</div>`;
+    if (d.status !== "ok") return `<div class="settings-hint">Couldn't load projections: ${(d.warnings || ["error"])[0]}</div>`;
+    const mine = new Set((roster || []).map(x => x.toLowerCase().replace(/[^a-z0-9]/g, "")));
+    const isMine = r => mine.has(r.player.toLowerCase().replace(/[^a-z0-9]/g, "")) || (r.pos === "DEF" && mine.has(String(r.team).toLowerCase()));
+    const posBtn = p => `<span class="hits-toggle" style="padding:4px 10px; ${ffbPos === p ? "outline:1px solid var(--accent, #6aa9ff);" : ""}" onclick="setFfbPos('${p}')">${p || "All"}</span>`;
+    const rows = d.players.slice(0, 80);
+    let h = `<div style="display:flex; gap:8px; margin:10px 0; flex-wrap:wrap;">${["", "QB", "RB", "WR", "TE", "K", "DEF"].map(posBtn).join("")}</div>`;
+    h += `<div class="settings-hint">Week ${d.week} · ${d.count} players on this week's sheet (showing the top ${rows.length}). ★ = on your roster. Range = 20th-80th percentile of past outcomes.</div>`;
+    h += ffbWarnHtml(d);
+    h += ffbTable(["#", "Player", "Pos", "Opp", "Proj", "Range", "L3", "Opp rk"], rows.map((r, i) =>
+      ffbPlayerRow(r, undefined).replace("<tr>", `<tr><td style="${FFB_TDL} color:var(--muted);">${r.pos_rank != null && ffbPos ? r.pos_rank : i + 1}</td>`).replace(ffbEsc(r.player), (isMine(r) ? "★ " : "") + ffbEsc(r.player))).join(""));
+    return h;
+  }
+
+  function setFfbPos(p) { ffbPos = p; loadFfb(); }
+
+  function ffbRosterEditorHtml(rosterInfo) {
+    const draft = ffbRosterDraft || { players: rosterInfo.players || [], taken: rosterInfo.taken || [] };
+    ffbRosterDraft = draft;
+    return `
+      <div class="settings-hint" style="margin-top:8px;">One player per line, exactly as Yahoo shows the name (e.g. <b>Josh Allen</b>). Defenses: <b>BUF D/ST</b> or just <b>BUF</b>. This list drives My Lineup and Waivers for this league only.</div>
+      <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:10px;">
+        <div style="flex:1; min-width:260px;">
+          <label style="font-size:0.8rem; color:var(--muted);">My roster (${draft.players.length})</label>
+          <textarea id="ffb-roster-players" rows="18" style="width:100%; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:8px; font-family:inherit;" oninput="ffbRosterInput()">${ffbEsc(draft.players.join("\n"))}</textarea>
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <label style="font-size:0.8rem; color:var(--muted);">Owned by other teams (optional - hidden from waiver picks)</label>
+          <textarea id="ffb-roster-taken" rows="9" style="width:100%; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:8px; font-family:inherit;" oninput="ffbRosterInput()">${ffbEsc(draft.taken.join("\n"))}</textarea>
+          <div style="margin-top:10px;">
+            <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Find a player's exact name</label>
+            <input id="ffb-search" type="text" placeholder="e.g. allen" oninput="ffbSearchDebounced()" style="width:100%; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:6px 8px;" />
+            <div id="ffb-search-results" style="margin-top:6px;"></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:12px; align-items:center;">
+        <span class="hits-toggle" onclick="saveFfbRoster()" style="padding:6px 16px;">Save roster</span>
+        <span id="ffb-roster-msg" class="settings-hint"></span>
+      </div>`;
+  }
+
+  function ffbParseLines(id) {
+    const el = document.getElementById(id);
+    return el ? el.value.split("\n").map(x => x.trim()).filter(Boolean) : [];
+  }
+
+  function ffbRosterInput() {
+    ffbRosterDraft = { players: ffbParseLines("ffb-roster-players"), taken: ffbParseLines("ffb-roster-taken") };
+  }
+
+  function ffbSearchDebounced() {
+    clearTimeout(ffbSearchTimer);
+    ffbSearchTimer = setTimeout(ffbSearch, 250);
+  }
+
+  async function ffbSearch() {
+    const q = document.getElementById("ffb-search").value.trim();
+    const box = document.getElementById("ffb-search-results");
+    if (q.length < 2) { box.innerHTML = ""; return; }
+    try {
+      const d = await ffbGet(`/api/ffb/players?q=${encodeURIComponent(q)}&league=${ffbLeague}`);
+      if (d.status !== "ok") { box.innerHTML = `<div class="settings-hint">${ffbEsc((d.warnings || ["Search unavailable"])[0])}</div>`; return; }
+      if (!d.players.length) { box.innerHTML = `<div class="settings-hint">No match on this week's sheet.</div>`; return; }
+      box.innerHTML = d.players.map(p => `<div style="display:flex; justify-content:space-between; gap:10px; padding:3px 0;">
+        <span>${ffbEsc(p.player)} <span style="color:var(--muted); font-size:0.8rem;">${ffbEsc(p.pos)} · ${ffbEsc(p.team)}</span></span>
+        <span><span class="hits-toggle" style="padding:2px 8px;" onclick="ffbAddName(&quot;ffb-roster-players&quot;, this.dataset.n)" data-n="${ffbEsc(p.player)}">+ Mine</span>
+        <span class="hits-toggle" style="padding:2px 8px;" onclick="ffbAddName(&quot;ffb-roster-taken&quot;, this.dataset.n)" data-n="${ffbEsc(p.player)}">+ Taken</span></span></div>`).join("");
+    } catch (e) { box.innerHTML = ""; }
+  }
+
+  function ffbAddName(id, name) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = ffbParseLines(id);
+    if (!cur.includes(name)) cur.push(name);
+    el.value = cur.join("\n");
+    ffbRosterInput();
+    const lbl = el.previousElementSibling;
+    if (lbl) lbl.textContent = lbl.textContent.replace(/\(\d+\)/, `(${cur.length})`);
+  }
+
+  async function saveFfbRoster() {
+    ffbRosterInput();
+    const msg = document.getElementById("ffb-roster-msg");
+    try {
+      const res = await fetch(`${API_BASE}/api/ffb/roster`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ league: ffbLeague, players: ffbRosterDraft.players, taken: ffbRosterDraft.taken }),
+      });
+      const d = await res.json();
+      if (d.status === "ok") {
+        msg.textContent = `Saved ${d.players} player(s).`;
+        ffbRosterDraft = null;
+      } else {
+        msg.textContent = (d.warnings && d.warnings[0]) || "Couldn't save.";
+      }
+    } catch (e) { msg.textContent = "Couldn't save."; }
+  }
+
+  async function loadFfb() {
+    const box = document.getElementById("ffb-content");
+    if (!box) return;
+    const wq = ffbWeekQuery();
+    box.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const info = await ffbGet("/api/ffb/leagues");
+      const lg = (info.leagues || []).find(l => l.id === ffbLeague);
+      const infoEl = document.getElementById("ffb-league-info");
+      if (lg && infoEl) {
+        const sl = Object.entries(lg.slots || {}).map(([k, v]) => `${v} ${k}`).join(", ");
+        infoEl.textContent = `${lg.name} - ${lg.teams} teams, ${lg.format}. Starting slots: ${sl}. ${lg.notes || ""}`;
+      }
+      const st = document.getElementById("ffb-status");
+      if (st) st.textContent = info.ready === false ? "Fantasy data is still downloading after the deploy (1-2 minutes) - this page fills in automatically when you reload." : "";
+      if (ffbSection === "lineup") {
+        box.innerHTML = renderFfbLineup(await ffbGet(`/api/ffb/lineup?league=${ffbLeague}${wq}`));
+      } else if (ffbSection === "waivers") {
+        box.innerHTML = renderFfbWaivers(await ffbGet(`/api/ffb/waivers?league=${ffbLeague}&top=15${wq}`));
+      } else if (ffbSection === "projections") {
+        const [d, r] = await Promise.all([ffbGet(`/api/ffb/projections?league=${ffbLeague}${ffbPos ? "&pos=" + ffbPos : ""}${wq}`), ffbGet(`/api/ffb/roster?league=${ffbLeague}`)]);
+        box.innerHTML = renderFfbProjections(d, r.players);
+      } else {
+        const r = await ffbGet(`/api/ffb/roster?league=${ffbLeague}`);
+        box.innerHTML = ffbRosterEditorHtml(r);
+      }
+    } catch (e) {
+      box.innerHTML = `<div class="settings-hint">Couldn't load fantasy data.</div>`;
+    }
+  }
+
+  async function refreshFfb() {
+    const st = document.getElementById("ffb-status");
+    st.textContent = "Refreshing player stats, schedule and injuries...";
+    try {
+      const d = await ffbGet("/api/admin/refresh-ffb");
+      st.textContent = d.status === "ok" ? "Refreshed." : (d.status === "skipped" ? "Already refreshed a moment ago." : `Refresh: ${d.status}${d.error ? " - " + d.error : ""}`);
+    } catch (e) { st.textContent = "Refresh failed."; }
+    loadFfb();
   }
 
   // ---- NFL Team Points / Game Total - ported from core_nfl_points.py,
