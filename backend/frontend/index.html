@@ -6439,7 +6439,7 @@
     dfsPoolCache = pool;
     const noSalaries = pool.status === "error" && /no DraftKings salary file/i.test((pool.warnings || [""])[0]);
     box.innerHTML = `
-      <div class="settings-hint" style="margin-top:8px;">DraftKings Classic: $50,000 cap, QB / 2 RB / 3 WR / TE / FLEX / DST. Projections use DraftKings scoring (PPR + 300-yard / 100-yard bonuses). On the DraftKings contest page use <b>Export to CSV</b>, then upload the file here for the week selected above.</div>
+      <div class="settings-hint" style="margin-top:8px;">DraftKings Classic: $50,000 cap, QB / 2 RB / 3 WR / TE / FLEX / DST. Projections use DraftKings scoring (PPR + 300-yard / 100-yard bonuses). On the DraftKings contest page use <b>Export to CSV</b>, then upload the file here for the week selected above. The lineup-upload template (QB, RB, RB, WR... columns) also works - the player list inside it is used.</div>
       <div style="display:flex; gap:12px; align-items:center; margin:10px 0; flex-wrap:wrap;">
         <label class="hits-toggle" style="padding:6px 14px; cursor:pointer;">Upload DKSalaries.csv<input type="file" accept=".csv,text/csv" style="display:none;" onchange="dfsUploadFile(this)" /></label>
         <span id="dfs-upload-msg" class="settings-hint">${noSalaries ? "No salary file for this week yet." : ffbEsc(dfsUploadNote)}</span>

@@ -171,8 +171,41 @@ class FFB(nfp.FantasyPlatform):
         except Exception:
             log.exception("salary restore failed")
 
+    @staticmethod
+    def normalize_dk_csv(text):
+        """DraftKings gives two CSVs: DKSalaries.csv (one player per row, headers Position / Name + ID / Name / ID / Roster
+        Position / Salary / Game Info / TeamAbbrev / AvgPointsPerGame) and the lineup-upload template (DKEntries.csv, columns QB, RB,
+        RB, WR, ..., Instructions), which carries the same player table off to the right, below the instructions.  Accept either:
+        if the text has no Position / Salary header row at the left, find the embedded table and return it as a plain CSV."""
+        import csv
+        import io
+        text = text.lstrip("\ufeff")
+        rows = list(csv.reader(io.StringIO(text)))
+        head = [c.strip().lower() for c in rows[0]] if rows else []
+        if "position" in head and "salary" in head:
+            return text
+        for ri, row in enumerate(rows):
+            low = [c.strip().lower() for c in row]
+            for ci, c in enumerate(low):
+                if c != "position" or "salary" not in low[ci:ci + 12]:
+                    continue
+                end = ci
+                while end < len(row) and row[end].strip():
+                    end += 1
+                out = io.StringIO()
+                w = csv.writer(out)
+                w.writerow([x.strip() for x in row[ci:end]])
+                for r2 in rows[ri + 1:]:
+                    seg = r2[ci:end]
+                    if len(seg) == end - ci and seg[0].strip():
+                        w.writerow(seg)
+                return out.getvalue()
+        return text
+
     def put_salaries(self, csv_text, week=None, season=None):
         self.restore_salaries()
+        if isinstance(csv_text, str):
+            csv_text = self.normalize_dk_csv(csv_text)
         res = self.set_salaries(csv_text, week, season)
         if res.get("status") == "ok":
             data = self._load_sal_db()
