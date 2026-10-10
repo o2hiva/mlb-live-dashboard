@@ -683,3 +683,193 @@ def make_mlb_adapter(get_bundles: Callable) -> Adapter:
                  "pitcher_k": "Pitcher strikeouts (at least N)", "pitcher_ha": "Pitcher hits allowed (at least N)"},
         line_markets=set(),
         notes={"team_pts": "No sportsbook prices are stored with these picks, so this measures whether the probabilities are honest and informative, not betting profit. Pitcher lines sit at the model mean -1, 0, +1. Players who did not play are voided."})
+
+
+# ====================================================================== NFL adapter
+_NFL_OD = 4.4          # same constants as the dashboard: team points = discretised Normal, game total = Negative Binomial
+
+
+def nfl_collect_from_payload(payload: dict) -> list:
+    rows, season, week = payload.get("games") or [], payload.get("season"), payload.get("week")
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r["game_id"], {})["home" if r.get("is_home") else "away"] = r
+    out = []
+    for pair, pr in by.items():
+        h, a = pr.get("home"), pr.get("away")
+        if not h or not a:
+            continue
+        start = h.get("kickoff_utc") or (f"{h['gameday']}T00:00:00" if h.get("gameday") else None)
+        if not start:
+            continue
+        items = []
+        if h.get("moneyline_trusted") and h.get("moneyline_win_prob") is not None:
+            items.append({"m": "ml", "p": round(h["moneyline_win_prob"], 5)})
+        hm, am = h.get("predicted_mean"), a.get("predicted_mean")
+        if hm is not None and am is not None:
+            for side, mean in (("home", hm), ("away", am)):
+                for d in (-3, 0, 3):
+                    n = max(1, int(round(mean)) + d)
+                    items.append({"m": "team_pts", "p": round(mix_ge(mean, n, _NFL_OD, 0.0), 5), "line": n, "side": side})
+            tm = hm + am
+            for d in (-3, 0, 3):
+                n = max(1, int(round(tm)) + d)
+                items.append({"m": "total", "p": round(mix_ge(tm, n, _NFL_OD, 1.0), 5), "line": n})
+        if items:
+            out.append({"id": f"{season}-{week}-{pair}", "start": str(start)[:19], "season": season, "week": week,
+                        "label": f"{a['team']} @ {h['team']}", "ctx": {"home": h["team"], "away": a["team"]}, "items": items})
+    return out
+
+
+def nfl_grade(item, result, rec):
+    hs, as_ = result.get("home"), result.get("away")
+    if hs is None or as_ is None:
+        return None
+    m = item["m"]
+    if m == "ml":
+        return None if hs == as_ else int(hs > as_)
+    if m == "team_pts":
+        return int((hs if item.get("side") == "home" else as_) >= item["line"])
+    if m == "total":
+        return int(hs + as_ >= item["line"])
+    return None
+
+
+def make_nfl_adapter(get_payload: Callable) -> Adapter:
+    def collect(db):
+        return nfl_collect_from_payload(get_payload(db))
+
+    def settle(db, recs):
+        import nfl_points_sync
+        out, cache = {}, {}
+        for r in recs:
+            sw = (r.get("season"), r.get("week"))
+            if not all(sw):
+                continue
+            if sw not in cache:
+                try:
+                    cache[sw] = nfl_points_sync.get_week_games(*sw)
+                except Exception:
+                    log.exception("NFL settle fetch failed %s", sw)
+                    cache[sw] = []
+            for g in cache[sw]:
+                if nfl_points_sync.is_completed_reg(g) and g.get("home_team") == r["ctx"]["home"] \
+                        and g.get("away_team") == r["ctx"]["away"]:
+                    out[r["id"]] = {"home": g["home_score"], "away": g["away_score"]}
+            if r["id"] not in out and (datetime.utcnow() - (_parse_utc(r.get("start")) or datetime.utcnow())).days > 4:
+                out[r["id"]] = {"void": True}   # postponed / not a regular-season game
+        return out
+
+    return Adapter(
+        sport="nfl", label="NFL", collect=collect, settle=settle, grade=nfl_grade,
+        markets={"ml": "Moneyline (home wins)", "team_pts": "Team points (at least N)", "total": "Game total (at least N)"},
+        line_markets=set(),
+        notes={"team_pts": "No sportsbook lines are stored for the NFL tab, so team-points and total rows are 'at least N' lines placed at the model mean -3, 0, +3. This measures honesty and information, not betting profit."})
+
+
+# ====================================================================== NPB adapter
+def make_npb_adapter(get_rows: Callable) -> Adapter:
+    """get_rows(db) -> [{id, start (UTC 'YYYY-MM-DDTHH:MM:SS'), date 'YYYYMMDD', p_yrfi, heuristic, home, away}]"""
+    def collect(db):
+        out = []
+        for g in get_rows(db):
+            if g.get("p_yrfi") is None or not g.get("start"):
+                continue
+            seg = "presumed starters" if g.get("heuristic") else "known starters"
+            d = str(g["date"])
+            out.append({"id": str(g["id"]), "start": g["start"], "shard": f"{d[:4]}-{d[4:6]}",
+                        "label": f"{g.get('away')} @ {g.get('home')}", "ctx": {}, "items": [
+                            {"m": "yrfi", "p": round(g["p_yrfi"], 5), "seg": seg}]})
+        return out
+
+    def settle(db, recs):
+        from models_db import NpbGame
+        out = {}
+        for r in recs:
+            g = db.get(NpbGame, r["id"])
+            if g is not None and g.visitor_scored_1st is not None and g.home_scored_1st is not None:
+                out[r["id"]] = {"yrfi": bool(g.visitor_scored_1st or g.home_scored_1st)}
+            elif (datetime.utcnow() - (_parse_utc(r.get("start")) or datetime.utcnow())).days > 3:
+                out[r["id"]] = {"void": True}
+        return out
+
+    def grade(item, result, rec):
+        v = result.get("yrfi")
+        return None if v is None else int(bool(v))
+
+    return Adapter(sport="npb", label="NPB", collect=collect, settle=settle, grade=grade,
+                   markets={"yrfi": "First-inning run (YRFI)"}, line_markets=set(),
+                   notes={"team_pts": "NPB never publishes starters ahead of time, so most picks use presumed starters; the segment rows show whether that matters."})
+
+
+# ====================================================================== NBA adapter
+_NBA_STEP = {"pts": 2, "reb": 1, "ast": 1, "pra": 3}
+
+
+def nba_collect_from_payloads(payloads: list) -> list:
+    out = []
+    for pl in payloads:
+        for g in pl.get("games") or []:
+            if g.get("completed") or g.get("started") or not g.get("players") or not g.get("tip_off"):
+                continue
+            tip = str(g["tip_off"])[:16] + ":00"
+            items = []
+            for p in g["players"]:
+                for stat, step in _NBA_STEP.items():
+                    pr = (p.get("props") or {}).get(stat)
+                    if not pr or not pr.get("sf"):
+                        continue
+                    sf = pr["sf"]
+                    base = max(1, int(round(pr["projection"])))
+                    for d in (-1, 0, 1):
+                        n = base + d * step
+                        if n < 1:
+                            continue
+                        prob = sf[n - 1] if n - 1 < len(sf) else 0.0
+                        items.append({"m": stat, "p": round(float(prob), 5), "line": n, "pid": str(p["player_id"]),
+                                      "seg": "starter" if p.get("starter") else "bench"})
+            if items:
+                out.append({"id": str(g["game_id"]), "start": tip, "shard": str(pl.get("date", ""))[:7] or "unknown",
+                            "label": f"{g.get('away_team')} @ {g.get('home_team')}", "ctx": {}, "items": items})
+    return out
+
+
+def make_nba_adapter(get_payloads: Callable) -> Adapter:
+    def collect(db):
+        return nba_collect_from_payloads(get_payloads(db))
+
+    def settle(db, recs):
+        import nba_props_service as nps
+        out = {}
+        for r in recs:
+            try:
+                data = nps.bx.get_summary(r["id"], retries=2)
+            except Exception:
+                data = None
+            comp = (((data or {}).get("header") or {}).get("competitions") or [{}])[0]
+            state = (((comp.get("status") or {}).get("type") or {}).get("state")) or None
+            if state != "post":
+                if (datetime.utcnow() - (_parse_utc(r.get("start")) or datetime.utcnow())).days > 3:
+                    out[r["id"]] = {"void": True}
+                continue
+            players = {}
+            for block in (data.get("boxscore") or {}).get("players") or []:
+                for sb in block.get("statistics") or []:
+                    labels = sb.get("labels") or []
+                    for row in sb.get("athletes") or []:
+                        pp = nps.bx.parse_player_row(row, labels)
+                        if pp["dnp"] or not pp["min"] or pp["pts"] is None or pp["reb"] is None or pp["ast"] is None:
+                            continue
+                        players[str(pp["id"])] = {"pts": pp["pts"], "reb": pp["reb"], "ast": pp["ast"],
+                                                  "pra": pp["pts"] + pp["reb"] + pp["ast"]}
+            out[r["id"]] = {"p": players}
+        return out
+
+    def grade(item, result, rec):
+        row = (result.get("p") or {}).get(str(item.get("pid")))
+        return None if not row else int(row[item["m"]] >= item["line"])     # did-not-play = void
+
+    return Adapter(sport="nba", label="NBA", collect=collect, settle=settle, grade=grade,
+                   markets={"pts": "Points (at least N)", "reb": "Rebounds (at least N)", "ast": "Assists (at least N)",
+                            "pra": "Pts+Reb+Ast (at least N)"}, line_markets=set(),
+                   notes={"team_pts": "Lines sit at the projection -1, 0, +1 steps (2 pts / 1 reb / 1 ast / 3 PRA). Player props only. Players who did not play are voided. Measures honesty, not betting profit."})

@@ -221,6 +221,11 @@
   </div>
 
   <div id="tab-content-npb" style="display:none;">
+    <div class="tabs">
+      <span id="npb-view-btn-games" class="tab-btn active" onclick="switchSportView('npb','games')">Games</span>
+      <span id="npb-view-btn-scorecard" class="tab-btn" onclick="switchSportView('npb','scorecard')">Scorecard</span>
+    </div>
+    <div id="npb-games-wrap">
     <div class="sub">NPB (Japan) YRFI/NRFI - real games for the selected date, 1st-inning-run-scored probability. Team batting history combined with each side's presumed starting pitcher's own allowing history (NPB's API doesn't expose a confirmed starter ahead of a game, so this is the team's most-used starter on record - see the Refresh Stats button below). No lineups (not available for NPB, unlike MLB).</div>
     <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
       <div>
@@ -231,12 +236,25 @@
     </div>
     <div id="npb-refresh-status" class="settings-hint"></div>
     <div id="npb-content">Loading...</div>
+    </div>
+    <div id="npb-scorecard-wrap" style="display:none;">
+      <div class="sub">NPB Shadow Scorecard - the pre-game YRFI probability is saved automatically before each game starts and graded against the real first inning. No bets are placed.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('npb','shadow-scorecard-npb',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-npb"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
   </div>
 
   <div id="tab-content-nfl" style="display:none;">
     <div class="tabs">
       <span id="subtab-btn-nfl-points" class="tab-btn active" onclick="switchNflSubTab('points')">Team Points</span>
       <span id="subtab-btn-nfl-byposition" class="tab-btn" onclick="switchNflSubTab('byposition')">By Position</span>
+      <span id="subtab-btn-nfl-scorecard" class="tab-btn" onclick="switchNflSubTab('scorecard')">Scorecard</span>
+    </div>
+
+    <div id="subtab-content-nfl-scorecard" style="display:none;">
+      <div class="sub">NFL Shadow Scorecard - the model's pre-game moneyline, team-points and game-total numbers are saved automatically before kickoff and graded against the real final. No bets are placed.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('nfl','shadow-scorecard-nfl',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-nfl"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
 
     <div id="subtab-content-nfl-points">
@@ -444,6 +462,11 @@
 
   <div id="tab-content-nba" style="display:none;">
     <div class="tabs">
+      <span id="nba-view-btn-games" class="tab-btn active" onclick="switchSportView('nba','games')">Props</span>
+      <span id="nba-view-btn-scorecard" class="tab-btn" onclick="switchSportView('nba','scorecard')">Scorecard</span>
+    </div>
+    <div id="nba-games-wrap">
+    <div class="tabs">
       <span id="nba-stat-btn-pts" class="tab-btn active" onclick="switchNbaStat('pts')">Points</span>
       <span id="nba-stat-btn-reb" class="tab-btn" onclick="switchNbaStat('reb')">Rebounds</span>
       <span id="nba-stat-btn-ast" class="tab-btn" onclick="switchNbaStat('ast')">Assists</span>
@@ -458,6 +481,12 @@
     </div>
     <div id="nba-status" class="settings-hint"></div>
     <div id="nba-content">Loading...</div>
+    </div>
+    <div id="nba-scorecard-wrap" style="display:none;">
+      <div class="sub">NBA Shadow Scorecard - player points, rebounds, assists and PRA projections are saved automatically once lineups are announced (before tip-off) and graded against the real box score. Players who did not play are voided. No bets are placed.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('nba','shadow-scorecard-nba',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-nba"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -2539,6 +2568,9 @@
     document.getElementById("subtab-content-nfl-byposition").style.display = subtab === "byposition" ? "block" : "none";
     document.getElementById("subtab-btn-nfl-points").classList.toggle("active", subtab === "points");
     document.getElementById("subtab-btn-nfl-byposition").classList.toggle("active", subtab === "byposition");
+    document.getElementById("subtab-content-nfl-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
+    document.getElementById("subtab-btn-nfl-scorecard").classList.toggle("active", subtab === "scorecard");
+    if (subtab === "scorecard") loadShadowScorecard("nfl", "shadow-scorecard-nfl", false);
     if (subtab === "points") {
       loadNflPointsTab();
     }
@@ -2571,6 +2603,14 @@
     document.getElementById("subtab-content-cfb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-cfb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("cfb", "shadow-scorecard-cfb", false);
+  }
+
+  function switchSportView(sport, view) {
+    document.getElementById(sport + "-games-wrap").style.display = view === "games" ? "block" : "none";
+    document.getElementById(sport + "-scorecard-wrap").style.display = view === "scorecard" ? "block" : "none";
+    document.getElementById(sport + "-view-btn-games").classList.toggle("active", view === "games");
+    document.getElementById(sport + "-view-btn-scorecard").classList.toggle("active", view === "scorecard");
+    if (view === "scorecard") loadShadowScorecard(sport, "shadow-scorecard-" + sport, false);
   }
 
   // ---- Generic shadow scorecard (any sport registered on the backend: /api/scorecard/{sport}) ----

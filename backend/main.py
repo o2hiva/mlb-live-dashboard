@@ -122,6 +122,9 @@ async def lifespan(app: FastAPI):
         import shadow_scorecard
         shadow_scorecard.register(shadow_scorecard.make_cfb_adapter(lambda _db: cfb_games(_db)))
         shadow_scorecard.register(shadow_scorecard.make_mlb_adapter(_mlb_shadow_bundles))
+        shadow_scorecard.register(shadow_scorecard.make_nfl_adapter(lambda _db: nfl_points_games(_db)))
+        shadow_scorecard.register(shadow_scorecard.make_npb_adapter(_npb_shadow_rows))
+        shadow_scorecard.register(shadow_scorecard.make_nba_adapter(_nba_shadow_payloads))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -683,6 +686,37 @@ def _mlb_shadow_bundles(db, locked_ids):
                 b[key] = None
         out.append(b)
     return out
+
+
+def _npb_shadow_rows(db):
+    """Upcoming NPB games (today + tomorrow, JST) with pre-game YRFI probabilities, start time converted to UTC."""
+    from datetime import datetime, timedelta
+    from models_db import NpbGame
+    import npb_yrfi_sync
+    today = npb_yrfi_sync._jst_today()
+    out = []
+    for d in (today, today + timedelta(days=1)):
+        ds = d.strftime("%Y%m%d")
+        for g in npb_yrfi_games(date=ds, db=db).get("games", []):
+            raw = db.get(NpbGame, g["game_id"])
+            hhmm = (raw.start_time_jst or "") if raw else ""
+            try:
+                start = datetime.strptime(ds + hhmm.zfill(4), "%Y%m%d%H%M") - timedelta(hours=9)
+            except Exception:
+                continue
+            out.append({"id": g["game_id"], "date": ds, "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "p_yrfi": g.get("p_yrfi"), "heuristic": g.get("starters_are_heuristic"),
+                        "home": g["home_team"], "away": g["away_team"]})
+    return out
+
+
+def _nba_shadow_payloads(db):
+    """NBA props payloads for today and tomorrow (US Eastern); players appear once lineups are announced."""
+    import nba_props_service
+    from datetime import timedelta
+    svc = nba_props_service.get_service()
+    today = mlb_client.mlb_today()
+    return [svc.games_payload(d.isoformat()) for d in (today, today + timedelta(days=1))]
 
 
 @app.get("/api/games/{game_pk}/game-lines")
