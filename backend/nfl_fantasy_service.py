@@ -14,6 +14,7 @@ Dashboard-facing wrapper around nfl_fantasy_platform.py (the user's NFL fantasy 
 import json
 import logging
 import os
+import re
 import threading
 
 import nfl_fantasy_platform as nfp
@@ -44,7 +45,8 @@ class FFB(nfp.FantasyPlatform):
             db = SessionLocal()
             try:
                 row = db.get(SyncState, ROSTER_KEY)
-                return json.loads(row.value) if row and row.value else {}
+                if row and row.value:
+                    return json.loads(row.value)
             finally:
                 db.close()
         except Exception:
@@ -52,7 +54,13 @@ class FFB(nfp.FantasyPlatform):
                 with open(os.path.join(self.dir, "ffb_rosters.json")) as f:
                     return json.load(f)
             except Exception:
-                return {}
+                pass
+        # nothing saved yet: start from the committed seed roster (backend/ffb_data/ffb_rosters_seed.json)
+        try:
+            with open(os.path.join(self.dir, "ffb_rosters_seed.json")) as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
     def save_rosters(self, data):
         payload = json.dumps(data, separators=(",", ":"))
@@ -121,19 +129,32 @@ class FFB(nfp.FantasyPlatform):
     def projections_payload(self, league, week=None, pos=None):
         return self.get_projections(league, week, pos) if self.ready() else self._loading()
 
+    @staticmethod
+    def _split_ir(players):
+        """Names written as 'IR: Name' (or 'OUT: Name') are on the user's injured reserve: kept on the roster list but never
+        started and never counted as a roster spot for waiver math."""
+        active, ir = [], []
+        for p in players:
+            m = re.match(r"^\s*(IR|OUT)\s*:\s*(.+)$", p, re.I)
+            (ir if m else active).append(m.group(2).strip() if m else p)
+        return active, ir
+
     def lineup_payload(self, league, week=None):
         if not self.ready():
             return self._loading()
         players, _ = self.roster(league)
-        out = self.get_lineup(league, week, players=players)
+        active, ir = self._split_ir(players)
+        out = self.get_lineup(league, week, players=active)
         out["roster"] = players
+        out["ir"] = ir
         return out
 
     def waivers_payload(self, league, week=None, top=15):
         if not self.ready():
             return self._loading()
         players, taken = self.roster(league)
-        out = self.get_waivers(league, week, top=top, players=players, taken=taken)
+        active, ir = self._split_ir(players)
+        out = self.get_waivers(league, week, top=top, players=active, taken=taken + ir)
         out["roster"] = players
         return out
 

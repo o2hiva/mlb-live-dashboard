@@ -6177,7 +6177,7 @@
   function renderFfbLineup(d) {
     if (d.status === "loading") return `<div class="settings-hint">${ffbWarnHtml(d)}</div>`;
     if (d.status !== "ok") return `<div class="settings-hint">Couldn't build the lineup: ${(d.warnings || ["error"])[0]}</div>`;
-    if (!d.start || !d.start.length) {
+    if (!d.start || !d.start.length) {  // no roster saved
       return ffbWarnHtml(d) + `<div class="settings-hint">No roster saved for this league yet. Open <b>My Roster</b> and add your players.</div>`;
     }
     const H = ["Slot", "Player", "Pos", "Opp", "Proj", "Range", "L3", "Opp rk"];
@@ -6186,6 +6186,7 @@
     h += `<div class="hits-side-label" style="margin-top:10px;">Start</div>` + ffbTable(H, d.start.map(r => ffbPlayerRow(r, r.slot)).join(""));
     if (d.bench && d.bench.length) h += `<div class="hits-side-label" style="margin-top:14px;">Bench</div>` + ffbTable(H, d.bench.map(r => ffbPlayerRow(r, "BN")).join(""));
     if (d.out && d.out.length) h += `<div class="hits-side-label" style="margin-top:14px;">Out / injured</div>` + ffbTable(H, d.out.map(r => ffbPlayerRow(r, "OUT")).join(""));
+    if (d.ir && d.ir.length) h += `<div class="hits-side-label" style="margin-top:14px;">Injured reserve (not started)</div><div class="settings-hint">${d.ir.map(ffbEsc).join(", ")}</div>`;
     return h;
   }
 
@@ -6234,7 +6235,7 @@
     const draft = ffbRosterDraft || { players: rosterInfo.players || [], taken: rosterInfo.taken || [] };
     ffbRosterDraft = draft;
     return `
-      <div class="settings-hint" style="margin-top:8px;">One player per line, exactly as Yahoo shows the name (e.g. <b>Josh Allen</b>). Defenses: <b>BUF D/ST</b> or just <b>BUF</b>. This list drives My Lineup and Waivers for this league only.</div>
+      <div class="settings-hint" style="margin-top:8px;">One player per line, exactly as Yahoo shows the name (e.g. <b>Josh Allen</b>). Defenses: <b>BUF D/ST</b> or just <b>BUF</b> (a team name like "Jaguars" will not match). Put <b>IR:</b> in front of a player on your injured reserve (e.g. <b>IR: Stefon Diggs</b>) so he is never started. This list drives My Lineup and Waivers for this league only.</div>
       <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:10px;">
         <div style="flex:1; min-width:260px;">
           <label style="font-size:0.8rem; color:var(--muted);">My roster (${draft.players.length})</label>
