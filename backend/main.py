@@ -1659,6 +1659,13 @@ def ffb_waivers(league: str, week: int | None = None, top: int = 15):
     return nfl_fantasy_service.get_service().waivers_payload(league, week, top)
 
 
+@app.get("/api/ffb/usage")
+def ffb_usage(week: int | None = None, pos: str | None = None, tag: str | None = None, top: int = 40):
+    """Usage share / snap % / UPTICK (breakout stat) for RB, WR, TE. tag=watch|undervalued|rising."""
+    import nfl_fantasy_service
+    return nfl_fantasy_service.get_service().usage_payload(week, pos, tag, top)
+
+
 @app.get("/api/ffb/players")
 def ffb_players(q: str, league: str | None = None, week: int | None = None):
     import nfl_fantasy_service

@@ -37,6 +37,8 @@ after games, mostly Tuesday).  Yahoo rosters / free agents are not readable with
       GET  /api/fantasy/projections?league=572561&week=5&pos=QB
       GET  /api/fantasy/lineup?league=572561&week=5          GET /api/fantasy/waivers?league=572561&top=15
       GET  /api/fantasy/players?q=allen&league=572561        GET /health
+      GET  /api/fantasy/usage?week=5&pos=WR&tag=watch&top=20     usage share / snap % / UPTICK (breakout stat) for RB, WR, TE; tag=watch|undervalued|rising
+                           (the same usage columns are also on every /projections row: usage_share, snap_pct, uptick, buzz_rank, usage_tag)
       GET  /api/dfs/pool?week=5                     every priced player with projection, floor/ceiling and points per $1k
       GET  /api/dfs/lineups?week=5&cap=50000&lineups=5&stack=1&max_overlap=6&max_per_team=4&lock=Josh Allen&ban=Name&include_played=0
       GET  /api/dfs/backtest                         the last saved DFS backtest report (proxy prices; real-salary weeks reported separately)
@@ -91,7 +93,7 @@ import threading
 import time
 
 # ===================================================================== embedded modules
-_ORDER = ['nfl_io', 'nfl_fantasy_projections', 'nfl_dfs_optimizer']
+_ORDER = ['nfl_io', 'nfl_fantasy_projections', 'nfl_usage', 'nfl_dfs_optimizer']
 _SRC = {}
 # ======================================================================
 # embedded module: nfl_io.py (96 lines)
@@ -194,7 +196,7 @@ class FileLock:
         self.release()
 '''
 # ======================================================================
-# embedded module: nfl_fantasy_projections.py (862 lines)
+# embedded module: nfl_fantasy_projections.py (876 lines)
 # ======================================================================
 _SRC["nfl_fantasy_projections"] = r'''"""
 nfl_fantasy_projections.py  --  weekly fantasy projections for QB / RB / WR / TE under Yahoo PPR scoring.  Stdlib only.
@@ -834,19 +836,33 @@ def project(directory, season, week, scoring=SCORING, fetch=download, out=print,
         for i, s in enumerate(lst):
             s["pos_rank"] = i + 1
     sheet.sort(key=lambda s: (-s["proj"]))
+    try:                                                      # usage / uptick columns (RB, WR, TE); never allowed to break the projections
+        import nfl_usage
+        msg = nfl_usage.attach_usage(sheet, directory, season, week, scoring, fetch)
+        if msg:
+            out("note: " + msg)
+    except Exception as e:
+        out(f"note: usage columns unavailable ({type(e).__name__}: {e})")
+        for s in sheet:
+            for k in USAGE_KEYS:
+                s.setdefault(k, None)
     return sheet, validated, params
 
 
 COLUMNS = [("pos_rank", "Pos rank"), ("pos", "Pos"), ("player", "Player"), ("team", "Team"), ("opp", "Opp"), ("date", "Date"),
            ("proj", "Proj (PPR)"), ("floor", "Floor 20%"), ("ceil", "Ceiling 80%"), ("rate", "Player avg (shrunk)"), ("opp_idx", "Opp index"),
            ("opp_rank", "Opp softness rank (1=softest)"), ("last3", "Last 3 avg"), ("games", "Games"), ("status", "Injury status"),
-           ("team_impl_pts", "Vegas team total"), ("played_actual", "Already played: actual")]
+           ("team_impl_pts", "Vegas team total"), ("played_actual", "Already played: actual"),
+           ("usage_share", "Usage share % (L3)"), ("usage_delta", "Usage chg vs base (pts)"), ("snap_pct", "Snap % (L3)"), ("snap_delta", "Snap chg (pts)"),
+           ("opps_g", "Opps/g (L3)"), ("uptick", "UPTICK (pts/g vs history)"), ("buzz_rank", "Buzz rank (pos, L8 ppg)"), ("usage_tag", "Breakout tag")]
+USAGE_KEYS = ("usage_share", "usage_delta", "snap_pct", "snap_delta", "opps_g", "uptick", "buzz_rank", "usage_tag")
 
 
 def write_sheet(sheet, directory, season, week, tag=None):
     path = os.path.join(directory, f"nfl_projections{LEAGUE_TAG if tag is None else tag}_{season}_wk{week}.csv")
-    fmt = lambda k, v: ("" if v is None else (f"{v:.1f}" if k in ("proj", "floor", "ceil", "rate", "last3", "team_impl_pts", "played_actual") else
-                                              f"{v:.3f}" if k == "opp_idx" else v))
+    fmt = lambda k, v: ("" if v is None else (f"{v:.1f}" if k in ("proj", "floor", "ceil", "rate", "last3", "team_impl_pts", "played_actual", "usage_share", "usage_delta",
+                                                                  "snap_pct", "snap_delta", "opps_g") else
+                                              f"{v:.2f}" if k == "uptick" else f"{v:.3f}" if k == "opp_idx" else v))
     with open(path, "w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
         wr.writerow([c[1] for c in COLUMNS])
@@ -865,9 +881,9 @@ def write_sheet(sheet, directory, season, week, tag=None):
                 c.font = Font(bold=True)
             for s in sheet:
                 if pos == "ALL" or s["pos"] == pos:
-                    ws.append([s.get(k) if not isinstance(s.get(k), float) else round(s[k], 3 if k == "opp_idx" else 1) for k, _ in COLUMNS])
+                    ws.append([s.get(k) if not isinstance(s.get(k), float) else round(s[k], 3 if k == "opp_idx" else 2 if k == "uptick" else 1) for k, _ in COLUMNS])
             ws.freeze_panes = "D2"
-            for col, wdt in zip("ABCDEFGHIJKLMNOPQ", (9, 5, 24, 6, 9, 11, 11, 10, 11, 15, 10, 14, 10, 7, 12, 12, 14)):
+            for col, wdt in zip("ABCDEFGHIJKLMNOPQRSTUVWXY", (9, 5, 24, 6, 9, 11, 11, 10, 11, 15, 10, 14, 10, 7, 12, 12, 14, 12, 14, 10, 10, 9, 14, 12, 16)):
                 ws.column_dimensions[col].width = wdt
         x = os.path.join(directory, f"nfl_projections{LEAGUE_TAG if tag is None else tag}_{season}_wk{week}.xlsx")
         wb.save(x)
@@ -1058,6 +1074,651 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+'''
+# ======================================================================
+# embedded module: nfl_usage.py (641 lines)
+# ======================================================================
+_SRC["nfl_usage"] = r'''#!/usr/bin/env python3
+"""
+nfl_usage.py - usage tracking + "uptick" (breakout-before-the-crowd) stat for RB / WR / TE.
+
+WHAT IT TRACKS (every number is built only from games BEFORE the week being looked at)
+  usage_share  share of the team's weighted opportunities (carries and targets, weighted by what each is worth in fantasy points,
+               fitted from history), last-3-games average, in %            <- the core "role" stat
+  snap_pct     offensive snap share, last-3-games average (nflverse snap counts)
+  opps_g       carries + targets per game, last 3 games
+  usage_delta  last-3 usage share minus his longer baseline (percentage points);  snap_delta the same for snap share
+  uptick       THE BREAKOUT STAT, in fantasy points per game: what his usage (opportunity level, snap level, change in snaps, new-to-the-role flag)
+               says he will score over the next 3 games MINUS what his scoring history alone says.  +1.5 = "his role has outgrown his box scores by
+               1.5 points a game".  Fitted on past seasons only (nfl_usage_model.json); a fixed default ships inside.  It combines two things:
+               a growing role (an uptick in usage) and a role bigger than the production so far (opportunity the box scores have not caught up to).
+  buzz_rank    rank at the position by points per game over the last 8 games (1 = the name everybody knows)
+  tag          BREAKOUT WATCH = uptick >= 1.5, role growing (usage share up 2+ points, or new to the role) and not already a top name (buzz rank
+               beyond RB24 / WR30 / TE12);  UNDERVALUED = uptick >= 1.5 but the role is not growing (opportunity just exceeds production);
+               RISING = uptick >= 1.0 otherwise with a growing role (includes already-known names)
+
+HONEST LIMITS: no route / red-zone / depth-chart data, so "role" is carries, targets and snaps.  A usage jump caused by a teammate's injury
+shows as an uptick too (useful, but it ends when he returns).  QB / K / DEF are not covered.  See `backtest` for what the stat is worth.
+
+CLI:   python nfl_usage.py usage     [--dir .] [--season 2026] [--week 6] [--top 12] [--pos WR]
+       python nfl_usage.py backtest  [--dir .] [--first-test 2019] [--split 2024]
+       python nfl_usage.py probe     (shows the snap / player-file columns this module relies on)
+"""
+import argparse
+import csv
+import datetime as dt
+import math
+import os
+import sys
+
+import nfl_fantasy_projections as fpm
+
+BASE = fpm.BASE
+URL_SNAPS = BASE + "/snap_counts/snap_counts_{y}.csv"
+URL_PLAYERS = BASE + "/players/players.csv"
+SKILL = ("RB", "WR", "TE")
+DEFAULT_W = {"RB": (0.75, 1.5), "WR": (0.75, 1.8), "TE": (0.75, 1.6)}      # (per carry, per target) fallback if too little data to fit
+CFG = dict(nr=3, nb=8, min_base=3, floor_share=4.0, rising_up=1.0, watch_up=1.5, grow_pts=2.0, buzz_cut={"RB": 24, "WR": 30, "TE": 12}, buzz_games=8)
+MODEL_FILE = "nfl_usage_model.json"
+# default coefficients (fitted on 2019-2026 by `python nfl_usage.py fit`; replaced by nfl_usage_model.json when that file exists)
+DEFAULT_MODEL = {"pts": [1.428482, 0.657373, 0.154188], "full": [0.186773, 0.304373, 0.109894, 0.153272, 0.303526, 0.121119, 0.258617, 1.491589], "note": "fitted on 2019-2026 player-weeks"}
+
+
+# ================================================================================================ data
+def _snap_path(directory, y):
+    return os.path.join(fpm.data_dir(directory), f"snaps_{y}.csv")
+
+
+def _players_path(directory):
+    return os.path.join(fpm.data_dir(directory), "players.csv")
+
+
+def fetch_extra(directory, seasons, fetch=fpm.download, cur=None, fresh=False):
+    """Download the snap-count files and the player master list (refresh path only).  Failures are returned, not raised.
+    fresh=True re-downloads the current season's snap file even if it is recent."""
+    cur = cur if cur is not None else fpm.current_season()
+    errs = []
+    for y in seasons:
+        try:
+            fetch(URL_SNAPS.format(y=y), _snap_path(directory, y), max_age_h=(0 if fresh else 6) if y >= cur else None)
+        except Exception as e:
+            errs.append(f"snaps {y}: {type(e).__name__}: {e}")
+    try:
+        fetch(URL_PLAYERS, _players_path(directory), max_age_h=24 * 7)
+    except Exception as e:
+        errs.append(f"players: {type(e).__name__}: {e}")
+    return errs
+
+
+def have_snaps(directory, season):
+    return os.path.exists(_snap_path(directory, season)) and os.path.exists(_players_path(directory))
+
+
+def _read_optional(path):
+    return fpm.read_csv(path) if os.path.exists(path) else []
+
+
+def player_info(directory):
+    """gsis_id -> {pfr, exp, draft_round, rookie}; empty if the player list is not cached."""
+    out = {}
+    for r in _read_optional(_players_path(directory)):
+        if r.get("gsis_id"):
+            out[r["gsis_id"]] = {"pfr": r.get("pfr_id") or "", "exp": r.get("years_of_experience") or "", "draft_round": r.get("draft_round") or "",
+                                 "rookie_season": r.get("rookie_season") or ""}
+    return out
+
+
+def load_usage_rows(directory, seasons, scoring=fpm.SCORING, fetch=fpm.download, cur=None, use_snaps=True):
+    """-> (game rows oldest first, team totals).  One row per RB/WR/TE player-game (REG season): car, tgt, pts, snap (0-100 or None).
+    Games where the player was on the field but had no touch are included when snap counts are cached (a WR with 70% of snaps and 0 targets is information)."""
+    cur = cur if cur is not None else fpm.current_season()
+    info = player_info(directory) if use_snaps else {}
+    pfr2gsis = {v["pfr"]: k for k, v in info.items() if v["pfr"]}
+    rows, team_car, team_tgt = {}, {}, {}
+    for y in seasons:
+        try:
+            p = fetch(fpm.URL_WEEK.format(y=y), os.path.join(fpm.data_dir(directory), f"week_{y}.csv"), max_age_h=6 if y >= cur else None)
+        except Exception:
+            if y >= cur:
+                raise                                     # the current season is required; an older season that is not downloaded is just less history
+            continue
+        for r in fpm.read_csv(p):
+            if r.get("season_type") != "REG":
+                continue
+            car, tgt = fpm._num(r.get("carries")), fpm._num(r.get("targets"))
+            k = (int(r["season"]), int(r["week"]), r["team"])
+            team_car[k] = team_car.get(k, 0.0) + car
+            team_tgt[k] = team_tgt.get(k, 0.0) + tgt
+            pos = fpm.POS_MAP.get(r.get("position"))
+            if pos not in SKILL or car + tgt <= 0:
+                continue
+            rows[(r["player_id"], int(r["season"]), int(r["week"]))] = {
+                "pid": r["player_id"], "season": int(r["season"]), "week": int(r["week"]), "pos": pos, "team": r["team"],
+                "name": r.get("player_display_name") or r.get("player_name"), "car": car, "tgt": tgt,
+                "pts": fpm.fantasy_points(r, scoring), "ay": fpm._num(r.get("receiving_air_yards")), "snap": None}
+        sp = _snap_path(directory, y)
+        if use_snaps and pfr2gsis and os.path.exists(sp):
+            for s in fpm.read_csv(sp):
+                if s.get("game_type") != "REG":
+                    continue
+                gid = pfr2gsis.get(s.get("pfr_player_id"))
+                if not gid:
+                    continue
+                key = (gid, int(s["season"]), int(s["week"]))
+                pct = fpm._num(s.get("offense_pct")) * 100.0
+                if key in rows:
+                    rows[key]["snap"] = pct
+                elif s.get("position") in ("RB", "FB", "WR", "TE") and fpm._num(s.get("offense_snaps")) > 0:
+                    pos = fpm.POS_MAP.get(s["position"], s["position"])
+                    rows[key] = {"pid": gid, "season": int(s["season"]), "week": int(s["week"]), "pos": pos, "team": s.get("team"), "name": s.get("player"),
+                                 "car": 0.0, "tgt": 0.0, "pts": 0.0, "ay": 0.0, "snap": pct}
+    out = sorted(rows.values(), key=lambda r: (r["season"], r["week"], r["pid"]))
+    return out, (team_car, team_tgt)
+
+
+# ================================================================================================ weights + shares
+def _solve2(a, b, c, d, e, f):
+    """Solve [[a b],[c d]] x = [e,f]."""
+    det = a * d - b * c
+    if abs(det) < 1e-9:
+        return None
+    return ((e * d - b * f) / det, (a * f - e * c) / det)
+
+
+def fit_weights(rows, before=None):
+    """Least squares  pts = wc*carries + wt*targets  per position (no intercept), on games before `before` = (season, week)."""
+    w = dict(DEFAULT_W)
+    for pos in SKILL:
+        sub = [r for r in rows if r["pos"] == pos and (before is None or (r["season"], r["week"]) < before)]
+        if len(sub) < 300:
+            continue
+        scc = sum(r["car"] * r["car"] for r in sub); sct = sum(r["car"] * r["tgt"] for r in sub); stt = sum(r["tgt"] * r["tgt"] for r in sub)
+        scy = sum(r["car"] * r["pts"] for r in sub); sty = sum(r["tgt"] * r["pts"] for r in sub)
+        sol = _solve2(scc, sct, sct, stt, scy, sty)
+        if sol and sol[0] > 0 and sol[1] > 0:
+            w[pos] = sol
+    return w
+
+
+def add_shares(rows, team_tot, weights):
+    """Fills r['wopp'], r['share'] (% of the team's weighted opportunities), r['opps']."""
+    team_car, team_tgt = team_tot
+    team_w = {}
+    for r in rows:
+        wc, wt = weights[r["pos"]]
+        r["wopp"] = wc * r["car"] + wt * r["tgt"]
+        r["opps"] = r["car"] + r["tgt"]
+        k = (r["season"], r["week"], r["team"])
+        team_w[k] = team_w.get(k, 0.0) + r["wopp"]
+    for r in rows:
+        tw = team_w.get((r["season"], r["week"], r["team"]), 0.0)
+        r["share"] = 100.0 * r["wopp"] / tw if tw > 0 else 0.0
+    return rows
+
+
+# ================================================================================================ features
+def _mean(xs):
+    xs = list(xs)
+    return sum(xs) / len(xs) if xs else None
+
+
+def player_features(hist, cfg=CFG):
+    """Raw features for one player from his games before the target week (oldest first).  None if there is not enough to say anything."""
+    nr, nb = cfg["nr"], cfg["nb"]
+    if len(hist) < 2:
+        return None
+    rec, base = hist[-nr:], hist[-(nr + nb):-nr]
+    if len(rec) < 2:
+        return None
+    r_share = _mean(g["share"] for g in rec)
+    pad = max(cfg["min_base"] - len(base), 0)
+    b_share = (sum(g["share"] for g in base)) / (len(base) + pad)      # missing baseline games count as zero usage: a player new to a role scores high
+    r_snaps = [g["snap"] for g in rec if g["snap"] is not None]
+    b_snaps = [g["snap"] for g in base if g["snap"] is not None]
+    d_snap = None
+    if len(r_snaps) == len(rec) and len(b_snaps) >= cfg["min_base"]:
+        d_snap = _mean(r_snaps) - _mean(b_snaps)
+    ppg = hist[-cfg["buzz_games"]:]
+    last = hist[-1]
+    r_w = _mean(g["wopp"] for g in rec)
+    b_w = sum(g["wopp"] for g in base) / (len(base) + pad)
+    return {"pid": last["pid"], "name": last["name"], "pos": last["pos"], "team": last["team"], "games": len(hist), "last": (last["season"], last["week"]),
+            "usage_share": r_share, "base_share": b_share, "usage_delta": r_share - b_share, "wopp_recent": r_w, "wopp_base": b_w,
+            "snap_pct": _mean(r_snaps) if r_snaps else None, "snap_delta": d_snap,
+            "opps_g": _mean(g["opps"] for g in rec), "tgt_g": _mean(g["tgt"] for g in rec), "car_g": _mean(g["car"] for g in rec),
+            "streak": sum(1 for g in rec if g["share"] > b_share), "n_recent": len(rec), "new_role": len(base) < cfg["min_base"],
+            "ppg8": _mean(g["pts"] for g in ppg), "last3_pts": _mean(g["pts"] for g in rec),
+            "slope": _slope([g["share"] for g in hist[-6:]])}
+
+
+def _slope(ys):
+    n = len(ys)
+    if n < 3:
+        return None
+    xm, ym = (n - 1) / 2.0, sum(ys) / n
+    den = sum((i - xm) ** 2 for i in range(n))
+    return sum((i - xm) * (y - ym) for i, y in enumerate(ys)) / den
+
+
+def vec_pts(f):
+    """What scoring history alone knows."""
+    return [1.0, f["ppg8"], f["last3_pts"]]
+
+
+def vec_full(f):
+    """Scoring history plus usage (opportunity level recent / baseline, snap level and change, new to the role)."""
+    sn = (f["snap_pct"] if f["snap_pct"] is not None else 50.0) / 10.0
+    sd = (f["snap_delta"] or 0.0) / 10.0
+    return [1.0, f["ppg8"], f["last3_pts"], f["wopp_recent"], f["wopp_base"], sn, sd, 1.0 if f["new_role"] else 0.0]
+
+
+def trend_part(model, f):
+    """The part of the usage forecast that comes from CHANGE (recent opportunity above his baseline, snap gain, new to the role) - the 'uptick'.
+    Positive = his role is growing, negative = shrinking.  The remainder of (usage forecast - history forecast) is level: usage_edge."""
+    fm = model["full"]
+    d_w = f["wopp_recent"] - f["wopp_base"]
+    return fm[3] * d_w + fm[6] * (f["snap_delta"] or 0.0) / 10.0 + fm[7] * (1.0 if f["new_role"] else 0.0)
+
+
+def _dot(b, x):
+    return sum(p * q for p, q in zip(b, x))
+
+
+def load_model(directory):
+    """nfl_usage_model.json in `directory` if present and valid, else the shipped default."""
+    try:
+        import json
+        with open(os.path.join(directory, MODEL_FILE)) as f:
+            m = json.load(f)
+        if len(m["pts"]) == 3 and len(m["full"]) == 8:
+            return m
+    except Exception:
+        pass
+    return DEFAULT_MODEL
+
+
+def eligible(f, cfg=CFG):
+    return f["usage_share"] >= cfg["floor_share"] or (f["snap_pct"] or 0) >= 30
+
+
+def fit_model(recs):
+    """Least squares of the next-3-game average on (a) scoring history and (b) history + usage.  recs come from collect()."""
+    out = {}
+    for key, vec in (("pts", vec_pts), ("full", vec_full)):
+        X = [vec(r) for r in recs]
+        y = [r["next3"] for r in recs]
+        k = len(X[0])
+        xtx = [[sum(x[i] * x[j] for x in X) for j in range(k)] for i in range(k)]
+        for i in range(1, k):
+            xtx[i][i] += 1e-6 * len(X)                    # tiny ridge: keeps the fit solvable if a feature never varies in the sample
+        xty = [sum(x[i] * v for x, v in zip(X, y)) for i in range(k)]
+        inv = _inv(xtx)
+        out[key] = [sum(inv[i][j] * xty[j] for j in range(k)) for i in range(k)]
+    out["n"] = len(recs)
+    return out
+
+
+def score_features(feats, model, cfg=CFG):
+    """Adds uptick (points per game), buzz_rank and tag to feature dicts that are all 'as of' the same week."""
+    for f in feats:
+        ok = eligible(f, cfg) and model.get("full") and model.get("pts")
+        f["uptick"] = (_dot(model["full"], vec_full(f)) - _dot(model["pts"], vec_pts(f))) if ok else None
+    for pos in SKILL:
+        grp = [f for f in feats if f["pos"] == pos]
+        ranked = sorted((f for f in grp if f["games"] >= 3 and f["ppg8"] is not None), key=lambda f: -f["ppg8"])
+        for i, f in enumerate(ranked):
+            f["buzz_rank"] = i + 1
+        for f in grp:
+            f.setdefault("buzz_rank", None)
+            f["tag"] = tag_of(f, cfg)
+    return feats
+
+
+def role_growing(f, cfg=CFG):
+    return bool(f.get("new_role")) or f.get("usage_delta", 0.0) >= cfg["grow_pts"]
+
+
+def tag_of(f, cfg=CFG):
+    u = f.get("uptick")
+    if u is None or u < cfg["rising_up"]:
+        return ""
+    growing = role_growing(f, cfg)
+    br = f.get("buzz_rank")
+    under = br is None or br > cfg["buzz_cut"][f["pos"]]
+    if u >= cfg["watch_up"] and under:
+        return "BREAKOUT WATCH" if growing else "UNDERVALUED"
+    return "RISING" if growing else "UNDERVALUED"
+
+
+def build_histories(rows):
+    h = {}
+    for r in rows:
+        h.setdefault(r["pid"], []).append(r)
+    return h
+
+
+_ROWS_CACHE = {}
+
+
+def _sig(directory, seasons):
+    paths = [os.path.join(fpm.data_dir(directory), f"week_{y}.csv") for y in seasons] + [_snap_path(directory, y) for y in seasons] + [_players_path(directory)]
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((p, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((p, None, None))
+    return tuple(out)
+
+
+def cached_rows(directory, seasons, scoring, fetch, cur):
+    """load_usage_rows, re-read only when a data file changed (the platform calls this on every sheet build)."""
+    key = (os.path.abspath(directory), tuple(seasons), _sig(directory, seasons), tuple(sorted(scoring.items(), key=lambda kv: kv[0])) if all(
+        isinstance(v, (int, float)) for v in scoring.values()) else id(scoring))
+    hit = _ROWS_CACHE.get(os.path.abspath(directory))
+    if hit and hit[0] == key:
+        return hit[1]
+    val = load_usage_rows(directory, seasons, scoring, fetch, cur=cur)
+    _ROWS_CACHE[os.path.abspath(directory)] = (key, val)
+    return val
+
+
+def usage_table(directory, season, week, scoring=fpm.SCORING, fetch=fpm.download, cfg=CFG, first=2018, rows_tot=None, model=None):
+    """Features for every recently active RB/WR/TE as of (season, week), using games before it only.  Sorted by uptick."""
+    if rows_tot is None:
+        rows_tot = cached_rows(directory, list(range(first, season + 1)), scoring, fetch, season)
+    rows, tot = rows_tot
+    w = fit_weights(rows, before=(season, week))
+    add_shares(rows, tot, w)
+    hist = build_histories([r for r in rows if (r["season"], r["week"]) < (season, week)])
+    info = player_info(directory)
+    feats = []
+    for pid, h in hist.items():
+        last = h[-1]
+        if not (last["season"] == season or (last["season"] == season - 1 and week <= 2)):
+            continue
+        if last["season"] == season and week - last["week"] > 5:
+            continue
+        f = player_features(h, cfg)
+        if f:
+            pi = info.get(pid, {})
+            f["exp"] = pi.get("exp", ""); f["draft_round"] = pi.get("draft_round", "")
+            feats.append(f)
+    score_features(feats, model or load_model(directory), cfg)
+    feats.sort(key=lambda f: -(f["uptick"] if f["uptick"] is not None else -99))
+    return feats, w
+
+
+# ================================================================================================ attach to the projection sheet
+USAGE_COLUMNS = [("usage_share", "Usage share % (L3)"), ("usage_delta", "Usage chg vs base (pts)"), ("snap_pct", "Snap % (L3)"), ("snap_delta", "Snap chg (pts)"),
+                 ("opps_g", "Opps/g (L3)"), ("uptick", "UPTICK (pts/g vs history)"), ("buzz_rank", "Buzz rank (pos, L8 ppg)"),
+                 ("usage_tag", "Breakout tag")]
+
+
+def attach_usage(sheet, directory, season, week, scoring=fpm.SCORING, fetch=fpm.download, cfg=CFG):
+    """Adds the usage columns to projection-sheet rows in place (QB / K / DEF get blanks).  Never raises: returns a warning string or ''."""
+    try:
+        feats, _ = usage_table(directory, season, week, scoring, fetch, cfg)
+        warn = "" if have_snaps(directory, season) else "snap counts not downloaded yet: uptick is approximate (run refresh)"
+    except Exception as e:
+        for s in sheet:
+            for k, _ in USAGE_COLUMNS:
+                s.setdefault(k, None)
+        return f"usage stats unavailable: {type(e).__name__}: {e}"
+    by = {f["pid"]: f for f in feats}
+    for s in sheet:
+        f = by.get(s.get("pid"))
+        for k, _ in USAGE_COLUMNS:
+            s[k] = None
+        if f:
+            s.update({"usage_share": f["usage_share"], "usage_delta": f["usage_delta"], "snap_pct": f["snap_pct"], "snap_delta": f["snap_delta"],
+                      "opps_g": f["opps_g"], "uptick": f["uptick"], "buzz_rank": f["buzz_rank"], "usage_tag": f["tag"] or None})
+    return warn
+
+
+# ================================================================================================ backtest
+def _inv(m):
+    n = len(m)
+    a = [row[:] + [1.0 if i == j else 0.0 for j in range(n)] for i, row in enumerate(m)]
+    for c in range(n):
+        p = max(range(c, n), key=lambda r: abs(a[r][c]))
+        if abs(a[p][c]) < 1e-12:
+            raise ValueError("singular")
+        a[c], a[p] = a[p], a[c]
+        piv = a[c][c]
+        a[c] = [v / piv for v in a[c]]
+        for r in range(n):
+            if r != c:
+                f = a[r][c]
+                if f:
+                    a[r] = [x - f * y for x, y in zip(a[r], a[c])]
+    return [row[n:] for row in a]
+
+
+def ols_cluster(X, y, groups):
+    """OLS with an intercept already in X.  Returns (beta, se) with week-clustered standard errors."""
+    k = len(X[0])
+    xtx = [[sum(r[i] * r[j] for r in X) for j in range(k)] for i in range(k)]
+    xty = [sum(r[i] * v for r, v in zip(X, y)) for i in range(k)]
+    inv = _inv(xtx)
+    beta = [sum(inv[i][j] * xty[j] for j in range(k)) for i in range(k)]
+    meat = [[0.0] * k for _ in range(k)]
+    sc = {}
+    for r, v, g in zip(X, y, groups):
+        e = v - sum(b * x for b, x in zip(beta, r))
+        s = sc.setdefault(g, [0.0] * k)
+        for i in range(k):
+            s[i] += r[i] * e
+    for s in sc.values():
+        for i in range(k):
+            for j in range(k):
+                meat[i][j] += s[i] * s[j]
+    G, n = len(sc), len(X)
+    adj = G / max(G - 1, 1) * (n - 1) / max(n - k, 1)
+    cov = [[sum(inv[i][a] * meat[a][b] * inv[b][j] for a in range(k) for b in range(k)) * adj for j in range(k)] for i in range(k)]
+    return beta, [math.sqrt(max(cov[i][i], 0.0)) for i in range(k)]
+
+
+def collect(directory, first_test, last, scoring=fpm.SCORING, fetch=fpm.download, cfg=CFG, rows_tot=None, first=2018):
+    """Walk forward over every (season, week >= 4): features from games BEFORE it; outcome = the player's average over this week and the next two
+    (same season), counted only when he plays that week (the same condition the projections use).  One dict per eligible player-week."""
+    if rows_tot is None:
+        rows_tot = load_usage_rows(directory, list(range(first, last + 1)), scoring, fetch, cur=last + 1)
+    rows, tot = rows_tot
+    out = []
+    byp = {}
+    for r in rows:
+        byp.setdefault((r["pid"], r["season"]), {})[r["week"]] = r
+    weeks = sorted({(r["season"], r["week"]) for r in rows if r["season"] >= first_test and r["week"] >= 4})
+    wcache = {}
+    for (s, w) in weeks:
+        if s not in wcache:
+            wcache[s] = fit_weights(rows, before=(s, 1))                  # opportunity weights fitted on prior seasons only
+        add_shares(rows, tot, wcache[s])
+        hist = build_histories([r for r in rows if (r["season"], r["week"]) < (s, w)])
+        feats = []
+        for pid, h in hist.items():
+            last_g = h[-1]
+            if last_g["season"] != s or w - last_g["week"] > 3:
+                continue
+            f = player_features(h, cfg)
+            if f and eligible(f, cfg):
+                feats.append(f)
+        for pos in SKILL:                                                  # buzz rank among everyone at the position (not only eligible)
+            ranked = sorted((f for f in feats if f["pos"] == pos and f["games"] >= 3), key=lambda f: -f["ppg8"])
+            for i, f in enumerate(ranked):
+                f["buzz_rank"] = i + 1
+        for f in feats:
+            mine = byp.get((f["pid"], s), {})
+            if w not in mine:
+                continue
+            nxt = [mine[k] for k in (w, w + 1, w + 2) if k in mine]
+            f2 = dict(f)
+            f2.update({"season": s, "week": w, "next3": _mean(g["pts"] for g in nxt), "next_share": _mean(g["share"] for g in nxt), "buzz_rank": f.get("buzz_rank")})
+            out.append(f2)
+    return out
+
+
+def _se(xs):
+    m = _mean(xs)
+    return m, (math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) / math.sqrt(len(xs)) if len(xs) > 1 else float("nan"))
+
+
+def walk_forward_eval(recs, first_eval=2021, cfg=CFG, min_train=3000):
+    """Out-of-sample scoring: every season >= first_eval is scored by a model fitted ONLY on the seasons before it.  Adds r['uptick'], r['fp'] (history-only forecast)."""
+    scored = []
+    for s in sorted({r["season"] for r in recs}):
+        if s < first_eval:
+            continue
+        train = [r for r in recs if r["season"] < s]
+        if len(train) < min_train:
+            continue
+        m = fit_model(train)
+        for r in (r for r in recs if r["season"] == s):
+            r["fp"] = _dot(m["pts"], vec_pts(r))
+            r["ff"] = _dot(m["full"], vec_full(r))
+            r["uptick"] = r["ff"] - r["fp"]
+            scored.append(r)
+    return scored
+
+
+def report(scored, label, cfg=CFG, out=print):
+    res = {}
+    if len(scored) < 300:
+        out(f"\n--- {label}: too few player-weeks ({len(scored)}) ---")
+        return res
+    mse_p = _mean((r["next3"] - r["fp"]) ** 2 for r in scored)
+    mse_f = _mean((r["next3"] - r["ff"]) ** 2 for r in scored)
+    xs = [r["uptick"] for r in scored]
+    ys = [r["next3"] - r["fp"] for r in scored]
+    mx, my = _mean(xs), _mean(ys)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+    out(f"\n--- {label}: {len(scored)} player-weeks, {len({(r['season'], r['week']) for r in scored})} weeks (all scored by models fitted on EARLIER seasons) ---")
+    out(f"  next-3-game points, MSE: history-only {mse_p:.2f}  ->  with usage {mse_f:.2f}  ({(1 - mse_f / mse_p) * 100:.1f}% lower)")
+    out(f"  calibration: each predicted uptick point showed up as {slope:.2f} real points per game (1.00 = perfect); sd of uptick {math.sqrt(_mean((x - mx) ** 2 for x in xs)):.2f}")
+    out("  by uptick bucket (realized = next-3 ppg minus the history-only forecast):")
+    for lo, hi in ((-99, -1.5), (-1.5, -0.5), (-0.5, 0.5), (0.5, 1.0), (1.0, 1.5), (1.5, 2.5), (2.5, 99)):
+        sub = [r for r in scored if lo <= r["uptick"] < hi]
+        if len(sub) >= 20:
+            m, se = _se([r["next3"] - r["fp"] for r in sub])
+            out(f"    uptick [{lo if lo > -99 else '-inf'},{hi if hi < 99 else 'inf'}): n={len(sub):>5}  predicted {_mean(r['uptick'] for r in sub):+.2f}  realized {m:+.2f} (se {se:.2f})")
+    allhit = _mean(1.0 if r["next3"] >= r["ppg8"] + 3 else 0.0 for r in scored)
+    for r in scored:
+        r["tag"] = tag_of(r, cfg)
+    for nm in ("BREAKOUT WATCH", "UNDERVALUED", "RISING"):
+        sub = [r for r in scored if r["tag"] == nm]
+        if len(sub) >= 15:
+            m, se = _se([r["next3"] - r["fp"] for r in sub])
+            hit = _mean(1.0 if r["next3"] >= r["ppg8"] + 3 else 0.0 for r in sub)
+            out(f"  tag {nm:<15} n={len(sub):>4}  predicted {_mean(r['uptick'] for r in sub):+.2f}, realized {m:+.2f} pts/g vs his history-only forecast (se {se:.2f}); "
+                f"next-3 ppg beats his L8 ppg by 3+: {hit * 100:.0f}% vs {allhit * 100:.0f}% of all")
+            res[nm] = (len(sub), m)
+    res.update(mse_gain=1 - mse_f / mse_p, slope=slope)
+    return res
+
+
+def backtest(directory, first_test=2019, first_eval=2021, last=None, scoring=fpm.SCORING, fetch=fpm.download, out=print, grid=True):
+    last = last or fpm.current_season()
+    rt = load_usage_rows(directory, list(range(2018, last + 1)), scoring, fetch, cur=last + 1)
+    have = any(r["snap"] is not None for r in rt[0])
+    out(f"{len(rt[0])} RB/WR/TE player-games, snap counts {'merged' if have else 'NOT available (usage share only)'}; "
+        f"each season from {first_eval} on is scored by a model fitted only on earlier seasons")
+    cfgs = [("default (last 3 vs prior 8)", CFG)]
+    if grid:
+        cfgs += [(f"window sensitivity: last {nr} vs prior {nb}", dict(CFG, nr=nr, nb=nb)) for nr, nb in ((2, 6), (3, 6), (3, 10), (4, 8))]
+    results = {}
+    for nm, cfg in cfgs:
+        recs = collect(directory, first_test, last, scoring, fetch, cfg, rows_tot=rt)
+        scored = walk_forward_eval(recs, first_eval, cfg)
+        if nm.startswith("default"):
+            for s in sorted({r["season"] for r in scored}):
+                report([r for r in scored if r["season"] == s], f"{nm} - season {s}", cfg, out)
+        results[nm] = report(scored, f"{nm} - ALL {first_eval}+", cfg, out)
+    return results
+
+
+def fit_and_save(directory, first_test=2019, last=None, scoring=fpm.SCORING, fetch=fpm.download, out=print):
+    import json
+    last = last or fpm.current_season()
+    recs = collect(directory, first_test, last, scoring, fetch)
+    m = fit_model(recs)
+    m["through"] = f"{max(r['season'] for r in recs)}"
+    m["generated"] = dt.date.today().isoformat()
+    tmp = os.path.join(directory, MODEL_FILE + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(m, f, indent=1)
+    os.replace(tmp, os.path.join(directory, MODEL_FILE))
+    out(f"fitted on {m['n']} player-weeks through {m['through']}\n  history-only  [const, ppg8, last3]: {[round(x, 4) for x in m['pts']]}"
+        f"\n  with usage    [const, ppg8, last3, opp_recent, opp_base, snap/10, snapchg/10, new_role]: {[round(x, 4) for x in m['full']]}")
+    return m
+
+
+# ================================================================================================ CLI
+def print_table(feats, pos=None, top=12, out=print):
+    for p in SKILL:
+        if pos and p != pos:
+            continue
+        out(f"\n{p}: biggest usage upticks (as of this week)")
+        out(f"{'player':<22}{'tm':<4}{'use%':>6}{'chg':>6}{'snap%':>7}{'chg':>6}{'opp/g':>6}{'ppg8':>6}{'UPTICK':>8}{'buzz':>6}  tag")
+        for f in [f for f in feats if f["pos"] == p and f["uptick"] is not None][:top]:
+            sn = f"{f['snap_pct']:.0f}" if f["snap_pct"] is not None else "-"
+            sd = f"{f['snap_delta']:+.0f}" if f["snap_delta"] is not None else "-"
+            bz = str(f["buzz_rank"]) if f["buzz_rank"] else "-"
+            tg = (f["tag"] + (" (new role)" if f["new_role"] and f["tag"] else "")).strip()
+            out(f"{f['name'][:21]:<22}{f['team']:<4}{f['usage_share']:>6.1f}{f['usage_delta']:>+6.1f}{sn:>7}{sd:>6}{f['opps_g']:>6.1f}{f['ppg8']:>6.1f}"
+                f"{f['uptick']:>+8.2f}{bz:>6}  {tg}")
+
+
+def write_csv(feats, directory, season, week):
+    path = os.path.join(directory, f"nfl_usage_{season}_wk{week}.csv")
+    cols = [("pos", "Pos"), ("name", "Player"), ("team", "Team"), ("exp", "Yrs exp"), ("draft_round", "Draft rd")] + USAGE_COLUMNS + [("ppg8", "Last-8 ppg")]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        wr = csv.writer(f)
+        wr.writerow([c[1] for c in cols])
+        for x in feats:
+            wr.writerow([x["tag"] if k == "usage_tag" else ("" if x.get(k) is None else (f"{x[k]:.2f}" if isinstance(x.get(k), float) else x.get(k))) for k, _ in cols])
+    return path
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=["usage", "backtest", "fit", "probe"])
+    ap.add_argument("--dir", default=".")
+    ap.add_argument("--season", type=int)
+    ap.add_argument("--week", type=int)
+    ap.add_argument("--top", type=int, default=12)
+    ap.add_argument("--pos")
+    ap.add_argument("--first-eval", type=int, default=2021)
+    ap.add_argument("--no-grid", action="store_true")
+    a = ap.parse_args(argv)
+    season = a.season or fpm.current_season()
+    if a.cmd == "probe":
+        for u in (URL_SNAPS.format(y=season - 1), URL_PLAYERS):
+            p = fpm.download(u, os.path.join(fpm.data_dir(a.dir), os.path.basename(u)), max_age_h=24)
+            print(u, "->", os.path.getsize(p), "bytes; columns:", list(fpm.read_csv(p)[0].keys())[:20])
+        return 0
+    errs = fetch_extra(a.dir, range(2018, season + 1), cur=season)
+    for e in errs:
+        print("note:", e)
+    if a.cmd == "usage":
+        week = a.week or fpm.next_week(a.dir, season)
+        feats, w = usage_table(a.dir, season, week)
+        if load_model(a.dir).get("full") is None:
+            print("note: no fitted usage model yet; run `python nfl_usage.py fit` first")
+        print(f"Usage / uptick as of {season} week {week}  (fitted opportunity weights per carry / per target: " + ", ".join(f"{p} {w[p][0]:.2f}/{w[p][1]:.2f}" for p in SKILL) + ")")
+        print_table(feats, a.pos.upper() if a.pos else None, a.top)
+        print("\nwrote", write_csv(feats, a.dir, season, week))
+        return 0
+    if a.cmd == "fit":
+        fit_and_save(a.dir, last=season)
+        return 0
+    backtest(a.dir, first_eval=a.first_eval, last=season, grid=not a.no_grid)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 '''
 # ======================================================================
 # embedded module: nfl_dfs_optimizer.py (666 lines)
@@ -1760,6 +2421,7 @@ def _install():
 _install()
 import nfl_fantasy_projections as fpm                                          # noqa: E402
 import nfl_dfs_optimizer as dfs                                                # noqa: E402
+import nfl_usage as usage                                                      # noqa: E402
 from nfl_io import FileLock, LockBusy, atomic_json_dump, load_json_retry       # noqa: E402
 
 ROSTER_FILE = "nfl_rosters.json"
@@ -1801,7 +2463,7 @@ def _quiet(*_a, **_k):
 def _row(r):
     """Sheet row -> JSON-friendly dict."""
     keys = ("pos", "pos_rank", "player", "team", "opp", "date", "proj", "floor", "ceil", "rate", "opp_idx", "opp_rank", "last3", "games",
-            "status", "team_impl_pts", "played_actual", "pid")
+            "status", "team_impl_pts", "played_actual", "pid") + fpm.USAGE_KEYS
     return {k: r.get(k) for k in keys}
 
 
@@ -1898,7 +2560,8 @@ class FantasyPlatform:
         pname = self._params_name(lg)
         d = fpm.data_dir(self.dir)
         files = [os.path.join(d, "games.csv"), os.path.join(d, f"week_{season}.csv"), os.path.join(d, f"team_{season}.csv"),
-                 os.path.join(d, f"injuries_{season}.csv"), self._p(pname), self._p("nfl_fantasy_params.json"), self._p(f"nfl_league_{lg['id']}.json")]
+                 os.path.join(d, f"injuries_{season}.csv"), usage._snap_path(self.dir, season), usage._players_path(self.dir), self._p(usage.MODEL_FILE),
+                 self._p(pname), self._p("nfl_fantasy_params.json"), self._p(f"nfl_league_{lg['id']}.json")]
         key = _stat_key(*files)
         ck = (str(lg["id"]), season, week)
         hit = self._cache.get(ck)
@@ -1933,8 +2596,47 @@ class FantasyPlatform:
             n = fpm_norm(q)
             hits = [r for r in sheet if n and (n in fpm_norm(r["player"]) or (r["pos"] == "DEF" and n == fpm_norm(r["team"])))]
             hits.sort(key=lambda r: -r["proj"])
-            return clean({"status": "ok", "query": q, "players": [{k: r[k] for k in ("player", "pos", "team", "proj", "status")} for r in hits[:limit]],
+            return clean({"status": "ok", "query": q, "players": [{k: r.get(k) for k in ("player", "pos", "team", "proj", "status", "uptick", "usage_tag", "usage_share", "snap_pct")} for r in hits[:limit]],
                           "warnings": warnings})
+        except Exception as e:
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"], "players": []}
+
+    def get_usage(self, week=None, pos=None, tag=None, top=40):
+        """Usage / uptick table for RB, WR, TE (league independent).  tag='watch' keeps BREAKOUT WATCH, 'rising' keeps RISING + BREAKOUT WATCH."""
+        try:
+            season = self.season()
+            week = int(week) if week not in (None, "") else fpm.next_week(self.dir, season, self._offline, today=self._now().date().isoformat())
+            d = fpm.data_dir(self.dir)
+            key = _stat_key(os.path.join(d, f"week_{season}.csv"), usage._snap_path(self.dir, season), usage._players_path(self.dir), self._p(usage.MODEL_FILE))
+            ck = ("usage", season, week)
+            with self._lock:
+                hit = self._cache.get(ck)
+                if hit and hit[0] == key:
+                    feats, w = hit[1], hit[2]
+                else:
+                    feats, w = usage.usage_table(self.dir, season, week, fetch=self._offline)
+                    self._cache[ck] = (key, feats, w)
+            warnings = []
+            if not usage.have_snaps(self.dir, season):
+                warnings.append("snap counts not downloaded yet: uptick is approximate (POST /api/fantasy/refresh {\"what\": \"data\"})")
+            if usage.load_model(self.dir).get("full") is None:
+                warnings.append("no fitted usage model")
+            rows = [f for f in feats if f["uptick"] is not None]
+            if pos:
+                rows = [f for f in rows if f["pos"] == str(pos).upper()]
+            if tag:
+                tg = str(tag).lower()
+                want = (("BREAKOUT WATCH",) if tg in ("watch", "breakout", "breakout_watch") else ("UNDERVALUED",) if tg in ("undervalued", "value") else
+                        ("RISING", "BREAKOUT WATCH"))
+                rows = [f for f in rows if f["tag"] in want]
+            keys = ("pid", "name", "pos", "team", "exp", "draft_round", "usage_share", "usage_delta", "snap_pct", "snap_delta", "opps_g", "tgt_g", "car_g",
+                    "ppg8", "uptick", "buzz_rank", "tag", "new_role", "games")
+            return clean({"status": "ok", "season": season, "week": week, "generated_at": self._now().isoformat(timespec="seconds") + "Z", "warnings": warnings,
+                          "count": len(rows[:top]), "players": [{k: f.get(k) for k in keys} for f in rows[:top]],
+                          "opportunity_weights": {p: {"per_carry": w[p][0], "per_target": w[p][1]} for p in usage.SKILL},
+                          "note": "uptick = points per game his usage says he will score over the next 3 games beyond what his scoring history says (RB/WR/TE only); "
+                                  "BREAKOUT WATCH = uptick >= 1.5, role growing, not already a top-24 RB / top-30 WR / top-12 TE by recent points; UNDERVALUED = same uptick but the role is "
+                                  "not growing (opportunity exceeds production); RISING = uptick >= 1.0 with a growing role"})
         except Exception as e:
             return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"], "players": []}
 
@@ -2220,6 +2922,8 @@ class FantasyPlatform:
                     got.append(name)
                 except Exception as e:                       # one missing file (e.g. injuries before week 1) must not stop the rest
                     errors.append(f"{name}: {type(e).__name__}: {e}")
+            for e in usage.fetch_extra(self.dir, [season], fetch=self._fetch, cur=season, fresh=True):      # snap counts + player list: nice-to-have
+                errors.append(e)
             critical = {"games.csv", f"week_{season}.csv"}
             info = {"status": "ok" if critical <= set(got) else "error", "season": season, "files": got, "errors": errors,
                     "finished_at": self._now().isoformat(timespec="seconds") + "Z", "finished_at_ts": time.time(),
@@ -2254,6 +2958,17 @@ class FantasyPlatform:
                 self._fetch(fpm.URL_INJ.format(y=season), os.path.join(d, f"injuries_{season}.csv"), max_age_h=0)
             except Exception:
                 pass
+            self._boot["step"] = "snap counts + player list"
+            log(self._boot["step"])
+            for e in usage.fetch_extra(self.dir, range(first, season + 1), fetch=self._fetch, cur=season, fresh=True):
+                log("  " + e)
+            if retune:
+                self._boot["step"] = "usage / uptick model"
+                log(self._boot["step"])
+                try:
+                    usage.fit_and_save(self.dir, last=season, fetch=self._offline, out=_quiet)
+                except Exception as e:
+                    log(f"  usage model not fitted ({type(e).__name__}: {e}); the shipped default is used")
             tuned = []
             if retune:
                 for lid, lg in self.leagues().items():
@@ -2340,6 +3055,7 @@ def serve(platform, host="127.0.0.1", port=8054, cors=False, allow_write=False, 
                       "/api/fantasy/lineup": lambda: platform.get_lineup(q.get("league"), q.get("week")),
                       "/api/fantasy/waivers": lambda: platform.get_waivers(q.get("league"), q.get("week"), top),
                       "/api/fantasy/players": lambda: platform.search_players(q.get("q", ""), q.get("league"), q.get("week")),
+                      "/api/fantasy/usage": lambda: platform.get_usage(q.get("week"), q.get("pos"), q.get("tag"), top if "top" in q else 40),
                       "/health": platform.health, "/api/fantasy/health": platform.health}
             fn = routes.get(u.path)
             if fn is None:

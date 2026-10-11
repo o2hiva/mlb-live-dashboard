@@ -276,6 +276,9 @@ class FFB(nfp.FantasyPlatform):
         out["roster"] = players
         return out
 
+    def usage_payload(self, week=None, pos=None, tag=None, top=40):
+        return self.get_usage(week, pos, tag, top) if self.ready() else self._loading()
+
     def players_payload(self, q, league=None, week=None):
         return self.search_players(q, league, week) if self.ready() else self._loading()
 
