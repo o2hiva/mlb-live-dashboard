@@ -195,7 +195,6 @@
     <div class="tabs">
       <span id="subtab-btn-mlb-live" class="tab-btn active" onclick="switchMlbSubTab('live')">Live Games</span>
       <span id="subtab-btn-mlb-bybets" class="tab-btn" onclick="switchMlbSubTab('bybets')">By Bets</span>
-      <span id="subtab-btn-mlb-playoffs" class="tab-btn" onclick="switchMlbSubTab('playoffs')">Playoffs</span>
       <span id="subtab-btn-mlb-scorecard" class="tab-btn" onclick="switchMlbSubTab('scorecard')">Scorecard</span>
     </div>
 
@@ -577,12 +576,10 @@
       const res = await fetch(`${API_BASE}/api/games/today?game_date=${selectedDate}`);
       let games = await res.json();
       await ensurePlayoffInfo(selectedDate, false);
-      if (playoffMode) games = games.filter(g => playoffInfo[g.game_pk]);
       lastFetchedGames = games;
       render(games);
-      if (playoffMode && !games.length) document.getElementById("grid").innerHTML = `<div class="empty">No postseason games found for this date.</div>`;
       document.getElementById("status-line").textContent =
-        `Showing ${playoffMode ? "postseason games for " : ""}${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
+        `Showing ${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
     } catch (e) {
       document.getElementById("status-line").textContent =
         "Couldn't reach backend — is it running at " + API_BASE + " ?";
@@ -2180,7 +2177,7 @@
     const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
     const state = getKBetState(gamePk, side);
     const line = state.threshold;
-    const yesPct = (pitcher.mean != null) ? probKAtLeastPoisson(kMeanFor(gamePk, pitcher.mean), line) * 100 : null;
+    const yesPct = (pitcher.mean != null) ? probKAtLeastPoisson(pitcher.mean, line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
@@ -2210,6 +2207,104 @@
       <div class="hits-side-label">Home</div>
       ${homeHtml}
     `;
+  }
+
+
+  // ---- K (PO): postseason strikeout tab. Same pitcher-k data as the regular K tab, with the mean scaled by the
+  // postseason factor (POST_K, starters get a shorter leash in October). Own bet state so it never collides with K. ----
+  const kpoBetState = {};
+  function getKpoState(gamePk, side) {
+    if (!kpoBetState[gamePk]) kpoBetState[gamePk] = {};
+    if (!kpoBetState[gamePk][side]) {
+      kpoBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 5 };
+    }
+    return kpoBetState[gamePk][side];
+  }
+  function rerenderKpo(gamePk) {
+    if (activeLineupTab[gamePk] !== "kpo") return;
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    if (contentDiv && kDataCache[gamePk]) contentDiv.innerHTML = kpoSectionHtml(gamePk, kDataCache[gamePk]);
+  }
+  function updateKpoThreshold(gamePk, side, value) {
+    getKpoState(gamePk, side).threshold = Math.max(1, parseInt(value, 10) || 5);
+    rerenderKpo(gamePk);
+  }
+  function updateKpoField(gamePk, side, field, value) {
+    const state = getKpoState(gamePk, side);
+    if (field === "market") state.market = value === "" ? null : parseFloat(value);
+    else if (field === "manualWager") state.manualWager = parseFloat(value) || 0;
+    else state[field] = value;
+    rerenderKpo(gamePk);
+  }
+  async function toggleKpoTrack(gamePk, side, checked, pitcherId, pitcherName, line, modelProb, marketPct, wager, profit) {
+    const state = getKpoState(gamePk, side);
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: gamePk, bet_type: "pitcher_k", batter_id: pitcherId, batter_name: pitcherName,
+            team_side: side, line: line, yn: state.yn, model_probability: modelProb, market_probability: marketPct,
+            wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        state.tracked = true; state.trackedId = data.id;
+      } catch (e) { state.tracked = false; }
+    } else if (state.trackedId != null) {
+      try { await fetch(`${API_BASE}/api/bet-tracker/track/${state.trackedId}`, { method: "DELETE" }); } catch (e) {}
+      state.tracked = false; state.trackedId = null;
+    }
+    rerenderKpo(gamePk);
+  }
+  function kpoRowHtml(gamePk, side, pitcher) {
+    const kiStr = pitcher.pitcher_k_index != null ? pitcher.pitcher_k_index.toFixed(2) : "—";
+    const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
+    const state = getKpoState(gamePk, side);
+    const line = state.threshold;
+    const postMean = pitcher.mean != null ? pitcher.mean * playoffKFactor : null;
+    const yesPct = postMean != null ? probKAtLeastPoisson(postMean, line) * 100 : null;
+    const noPct = yesPct != null ? 100 - yesPct : null;
+    const modelProb = (state.yn === "yes" ? yesPct : noPct) != null ? (state.yn === "yes" ? yesPct : noPct) / 100 : null;
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
+    const profit = profitIfWon(wager, state.market);
+    const marketVal = state.market != null ? state.market : "";
+    const idBase = `kpo-${gamePk}-${side}`;
+    const name = pitcher.pitcher_name || "";
+    const wagerCell = state.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input id="wager-${idBase}" type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateKpoField(${gamePk},'${side}','manualWager',this.value)" />`;
+    const trackArgs = `${gamePk},'${side}',this.checked,${pitcher.pitcher_id},'${name.replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const meanNote = pitcher.mean != null
+      ? `<br><small style="opacity:.7;" class="kpo-note">avg ${pitcher.mean.toFixed(1)} → PO ${postMean.toFixed(1)}</small>` : "";
+    return `
+      <div class="hits-batter" style="grid-template-columns: 1.5fr 75px 28px 34px 34px 46px 52px 30px 60px 30px 40px;">
+        <span>${name || "TBD"}${pitcher.pitcher_hand ? " (" + pitcher.pitcher_hand + ")" : ""}${meanNote}</span>
+        <span class="hits-index">${kiStr} VS ${oppStr}</span>
+        <input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateKpoThreshold(${gamePk},'${side}',this.value)" />
+        <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
+        <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
+        <select id="yn-${idBase}" onchange="updateKpoField(${gamePk},'${side}','yn',this.value)">
+          <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
+          <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
+        </select>
+        <input id="market-${idBase}" type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateKpoField(${gamePk},'${side}','market',this.value)" />
+        <input id="kelly-${idBase}" type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateKpoField(${gamePk},'${side}','useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input id="track-${idBase}" type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleKpoTrack(${trackArgs})" />
+      </div>`;
+  }
+  function kpoSectionHtml(gamePk, data) {
+    const p = playoffInfo[gamePk];
+    const note = `<div class="hits-side-label">Postseason strikeouts: starter mean × ${playoffKFactor}${p ? " — " + [p.round, p.series_game ? "Game " + p.series_game : ""].filter(Boolean).join(" · ") : " (not a postseason game — what-if view)"}</div>`;
+    const homeHtml = data.away_lineup_confirmed ? kpoRowHtml(gamePk, "home", data.home_pitcher)
+      : `<div class="hits-side-label">Home Pitcher — Opposing Lineup Not Confirmed</div>`;
+    const awayHtml = data.home_lineup_confirmed ? kpoRowHtml(gamePk, "away", data.away_pitcher)
+      : `<div class="hits-side-label">Away Pitcher — Opposing Lineup Not Confirmed</div>`;
+    return `${note}${K_TABLE_HEADER.replace("<span>Pitcher</span>","<span>Pitcher (PO)</span>")}
+      <div class="hits-side-label">Away</div>${awayHtml}
+      <div class="hits-side-label">Home</div>${homeHtml}`;
   }
 
   // ---- HRR prop: same structure as Hits, but a NORMAL distribution
@@ -2450,6 +2545,7 @@
         <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
         <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
         <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
+        <span class="lineup-tab ${tab === "kpo" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'kpo')">K (PO)</span>
         <span class="lineup-tab ${tab === "pha" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'pha')">P-Hits</span>
         <span class="lineup-tab ${tab === "f5" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'f5')">1st 5</span>
         <span class="lineup-tab ${tab === "gamelines" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'gamelines')">Game Lines</span>
@@ -2463,6 +2559,7 @@
       hr: { cache: hrDataCache, render: hrSectionHtml, path: "hr" },
       hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
       k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
+      kpo: { cache: kDataCache, render: kpoSectionHtml, path: "pitcher-k" },
       pha: { cache: phaDataCache, render: phaSectionHtml, path: "pitcher-hits-allowed" },
       f5: { cache: f5DataCache, render: f5SectionHtml, path: "f5-lines" },
       gamelines: { cache: gameLinesDataCache, render: gameLinesSectionHtml, path: "game-lines" },
@@ -2556,16 +2653,11 @@
   }
 
   function switchMlbSubTab(subtab) {
-    playoffMode = subtab === "playoffs";
-    document.getElementById("subtab-content-mlb-live").style.display = (subtab === "live" || subtab === "playoffs") ? "block" : "none";
-    document.getElementById("live-sub").textContent = playoffMode
-      ? "MLB Postseason - the same game boxes as Live Games, for playoff games only. Starter strikeouts carry the postseason adjustment (starters get a shorter leash in October); series and game number are shown on each box."
-      : "First-inning run probability, updated live during games.";
+    document.getElementById("subtab-content-mlb-live").style.display = subtab === "live" ? "block" : "none";
     document.getElementById("subtab-content-mlb-bybets").style.display = subtab === "bybets" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-live").classList.toggle("active", subtab === "live");
     document.getElementById("subtab-btn-mlb-bybets").classList.toggle("active", subtab === "bybets");
-    document.getElementById("subtab-btn-mlb-playoffs").classList.toggle("active", subtab === "playoffs");
-    if (subtab === "live" || subtab === "playoffs") fetchGames();
+    if (subtab === "live") fetchGames();
     document.getElementById("subtab-content-mlb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("mlb", "shadow-scorecard-mlb", false);
@@ -2618,8 +2710,7 @@
 
   // ---- MLB Playoffs: the same Live Games boxes, filtered to postseason games. Series info and the postseason strikeout
   // factor (POST_K from mlb_k_sheet.py) come from /api/mlb/playoffs; every other piece of the box is the normal Live Games code.
-  let playoffMode = false;
-  let playoffInfo = {};              // game_pk -> {round, series_game, games_in_series, ...} for the date being shown
+    let playoffInfo = {};              // game_pk -> {round, series_game, games_in_series, ...} for the date being shown
   let playoffKFactor = 0.89;
   let playoffInfoFetched = { date: null, at: 0 };
 
@@ -2636,11 +2727,6 @@
         (d.games || []).forEach(g => { playoffInfo[g.game_pk] = g; });
       }
     } catch (e) { /* keep whatever was loaded before */ }
-  }
-
-  // Strikeout mean for a starter: postseason games get the shorter-leash factor, everything else is untouched.
-  function kMeanFor(gamePk, mean) {
-    return mean != null && playoffInfo[gamePk] ? mean * playoffKFactor : mean;
   }
 
   function playoffMetaPrefix(g) {
@@ -3413,7 +3499,7 @@
           if (!pitcher || pitcher.mean == null) continue;
           const state = getKBetState(gamePk, side);
           const line = state.threshold;
-          const yesPct = probKAtLeastPoisson(kMeanFor(gamePk, pitcher.mean), line) * 100;
+          const yesPct = probKAtLeastPoisson(pitcher.mean, line) * 100;
           const noPct = 100 - yesPct;
           const modelPct = state.yn === "yes" ? yesPct : noPct;
           const modelProb = modelPct != null ? modelPct / 100 : null;
