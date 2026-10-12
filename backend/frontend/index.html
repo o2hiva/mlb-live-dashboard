@@ -204,18 +204,6 @@
       <div id="bybets-content">Loading...</div>
     </div>
 
-    <div id="subtab-content-mlb-playoffs" style="display:none;">
-      <div class="sub">MLB Postseason - the day's playoff games with series info, first-inning-run and moneyline numbers, and each starter's strikeouts with the postseason adjustment (starters get a shorter leash in October).</div>
-      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
-        <div>
-          <label for="playoff-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
-          <input id="playoff-date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="loadMlbPlayoffs()" />
-        </div>
-        <span class="hits-toggle" onclick="loadMlbPlayoffs()" style="padding:6px 14px;">Refresh</span>
-      </div>
-      <div id="playoff-content">Open this tab to load.</div>
-    </div>
-
     <div id="subtab-content-mlb-scorecard" style="display:none;">
       <div class="sub">MLB Shadow Scorecard - the model's pre-game numbers (YRFI, moneyline, batter hits / home runs / hits+runs+RBI, pitcher strikeouts and hits allowed) are saved automatically before first pitch and graded against the real box score. No bets are placed.</div>
       <button class="tab-btn" onclick="loadShadowScorecard('mlb','shadow-scorecard-mlb',true)" style="margin-bottom:10px;">Refresh</button>
@@ -223,7 +211,7 @@
     </div>
 
     <div id="subtab-content-mlb-live">
-      <div class="sub">First-inning run probability, updated live during games.</div>
+      <div class="sub" id="live-sub">First-inning run probability, updated live during games.</div>
       <div style="margin-bottom:16px;">
         <label for="date-picker" style="font-size:0.8rem; color:var(--muted); margin-right:8px;">Date:</label>
         <input id="date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" />
@@ -587,11 +575,14 @@
     const selectedDate = datePicker.value || todayIso();
     try {
       const res = await fetch(`${API_BASE}/api/games/today?game_date=${selectedDate}`);
-      const games = await res.json();
+      let games = await res.json();
+      await ensurePlayoffInfo(selectedDate, false);
+      if (playoffMode) games = games.filter(g => playoffInfo[g.game_pk]);
       lastFetchedGames = games;
       render(games);
+      if (playoffMode && !games.length) document.getElementById("grid").innerHTML = `<div class="empty">No postseason games found for this date.</div>`;
       document.getElementById("status-line").textContent =
-        `Showing ${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
+        `Showing ${playoffMode ? "postseason games for " : ""}${selectedDate} — last updated ${new Date().toLocaleTimeString()} — polling every ${REFRESH_MS / 1000}s`;
     } catch (e) {
       document.getElementById("status-line").textContent =
         "Couldn't reach backend — is it running at " + API_BASE + " ?";
@@ -656,7 +647,7 @@
     return `
       <div class="card">
         <div class="meta">
-          ${statusLabel}
+          ${playoffMetaPrefix(g)}${statusLabel}
           ${g.inning ? ` · Inning ${g.inning} ${g.inning_half || ""}` : ""}
         </div>
         ${(awayMlPct != null || homeMlPct != null) ? `
@@ -2189,7 +2180,7 @@
     const oppStr = pitcher.opposing_lineup_k_index != null ? pitcher.opposing_lineup_k_index.toFixed(2) : "—";
     const state = getKBetState(gamePk, side);
     const line = state.threshold;
-    const yesPct = (pitcher.mean != null) ? probKAtLeastPoisson(pitcher.mean, line) * 100 : null;
+    const yesPct = (pitcher.mean != null) ? probKAtLeastPoisson(kMeanFor(gamePk, pitcher.mean), line) * 100 : null;
     const noPct = yesPct != null ? 100 - yesPct : null;
 
     return `
@@ -2565,13 +2556,16 @@
   }
 
   function switchMlbSubTab(subtab) {
-    document.getElementById("subtab-content-mlb-live").style.display = subtab === "live" ? "block" : "none";
+    playoffMode = subtab === "playoffs";
+    document.getElementById("subtab-content-mlb-live").style.display = (subtab === "live" || subtab === "playoffs") ? "block" : "none";
+    document.getElementById("live-sub").textContent = playoffMode
+      ? "MLB Postseason - the same game boxes as Live Games, for playoff games only. Starter strikeouts carry the postseason adjustment (starters get a shorter leash in October); series and game number are shown on each box."
+      : "First-inning run probability, updated live during games.";
     document.getElementById("subtab-content-mlb-bybets").style.display = subtab === "bybets" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-live").classList.toggle("active", subtab === "live");
     document.getElementById("subtab-btn-mlb-bybets").classList.toggle("active", subtab === "bybets");
-    document.getElementById("subtab-content-mlb-playoffs").style.display = subtab === "playoffs" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-playoffs").classList.toggle("active", subtab === "playoffs");
-    if (subtab === "playoffs") loadMlbPlayoffs();
+    if (subtab === "live" || subtab === "playoffs") fetchGames();
     document.getElementById("subtab-content-mlb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("mlb", "shadow-scorecard-mlb", false);
@@ -2622,151 +2616,38 @@
     if (subtab === "scorecard") loadShadowScorecard("cfb", "shadow-scorecard-cfb", false);
   }
 
-  // ---- MLB Playoffs: postseason slate + starter strikeouts with the postseason factor (POST_K from mlb_k_sheet.py).
-  let poCache = null;
-  const poState = {};
+  // ---- MLB Playoffs: the same Live Games boxes, filtered to postseason games. Series info and the postseason strikeout
+  // factor (POST_K from mlb_k_sheet.py) come from /api/mlb/playoffs; every other piece of the box is the normal Live Games code.
+  let playoffMode = false;
+  let playoffInfo = {};              // game_pk -> {round, series_game, games_in_series, ...} for the date being shown
+  let playoffKFactor = 0.89;
+  let playoffInfoFetched = { date: null, at: 0 };
 
-  function poGet(key, defLine) {
-    if (!poState[key]) poState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: defLine };
-    return poState[key];
-  }
-
-  function poSet(key, field, value) {
-    const st = poGet(key);
-    if (field === "market") st.market = value === "" ? null : parseFloat(value);
-    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
-    else if (field === "threshold") st.threshold = Math.max(1, parseInt(value, 10) || 1);
-    else if (field === "useKelly") st.useKelly = !!value;
-    else st[field] = value;
-    poRender();
-  }
-
-  // Track / untrack: posts the same bet types the rest of the app already grades (first_inning_run, full_game_moneyline_*, pitcher_k),
-  // so playoff bets settle automatically and show up in Bet Tracker with the model probability that was used.
-  async function poTrack(key, checked) {
-    const st = poState[key];
-    const meta = st && st.meta;
-    if (!meta) return;
-    if (checked) {
-      const modelProb = meta.modelProb(st);
-      const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
-      const profit = profitIfWon(wager, st.market);
-      try {
-        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(Object.assign({}, meta.payload(st), { model_probability: modelProb, market_probability: st.market, wager: wager, potential_profit: profit })),
-        });
-        const data = await res.json();
-        st.tracked = !!(res.ok && data && data.id != null);
-        st.trackedId = st.tracked ? data.id : null;
-      } catch (e) { st.tracked = false; }
-    } else if (st.trackedId != null) {
-      try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker tab's Remove button can clean it up */ }
-      st.tracked = false; st.trackedId = null;
-    }
-    poRender();
-  }
-
-  // One bet row: model Yes/No %, Yes/No pick, market price %, Kelly stake, profit if it wins, track box.
-  function poBetRow(key, label, defLine, opts) {
-    const st = poGet(key, defLine);
-    const yesPct = opts.yesPct(st);                                  // model chance of the "Yes" side, in %
-    const noPct = yesPct != null ? 100 - yesPct : null;
-    const modelPct = opts.yesNo === false ? yesPct : (st.yn === "yes" ? yesPct : noPct);
-    const modelProb = modelPct != null ? modelPct / 100 : null;
-    const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
-    const profit = profitIfWon(wager, st.market);
-    st.meta = { modelProb: (x) => { const y = opts.yesPct(x); if (y == null) return null; return (opts.yesNo === false ? y : (x.yn === "yes" ? y : 100 - y)) / 100; }, payload: (x) => opts.payload(x) };
-    const e = (f) => `poSet('${key}','${f}',`;
-    const cell = "padding:3px 6px; white-space:nowrap; text-align:center;";
-    return `<tr>
-      <td style="${cell} text-align:left;">${label}</td>
-      <td style="${cell}">${opts.line ? `<input type="number" min="1" step="1" value="${st.threshold}" style="width:46px; text-align:center;" onchange="${e("threshold")}this.value)" />` : ""}</td>
-      <td style="${cell}" class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</td>
-      <td style="${cell}" class="prob-no">${opts.yesNo === false ? "" : (noPct != null ? Math.round(noPct) + "%" : "N/A")}</td>
-      <td style="${cell}">${opts.yesNo === false ? "Yes" : `<select onchange="${e("yn")}this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>Yes</option><option value="no" ${st.yn === "no" ? "selected" : ""}>No</option></select>`}</td>
-      <td style="${cell}"><input type="number" step="0.1" min="0" max="100" value="${st.market != null ? st.market : ""}" placeholder="%" style="width:58px;" onchange="${e("market")}this.value)" /></td>
-      <td style="${cell}"><input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="${e("useKelly")}this.checked)" /></td>
-      <td style="${cell}">${st.useKelly ? "$" + wager.toFixed(2) : `<input type="number" step="0.01" min="0" value="${st.manualWager}" style="width:64px;" onchange="${e("manualWager")}this.value)" />`}</td>
-      <td style="${cell}">${profit != null ? "$" + profit.toFixed(2) : "—"}</td>
-      <td style="${cell}"><input type="checkbox" ${st.tracked ? "checked" : ""} onchange="poTrack('${key}', this.checked)" /></td>
-    </tr>`;
-  }
-
-  const PO_TH = "text-align:center; padding:3px 6px; color:var(--muted); font-weight:500; white-space:nowrap; font-size:0.78rem;";
-  function poTableHead(lineHeader) {
-    return `<tr><th style="${PO_TH} text-align:left;">Bet</th><th style="${PO_TH}">${lineHeader}</th><th style="${PO_TH}">Yes %</th><th style="${PO_TH}">No %</th><th style="${PO_TH}">Pick</th><th style="${PO_TH}">Market %</th><th style="${PO_TH}">Kelly</th><th style="${PO_TH}">Wager</th><th style="${PO_TH}">Profit</th><th style="${PO_TH}">Track</th></tr>`;
-  }
-
-  async function loadMlbPlayoffs() {
-    const box = document.getElementById("playoff-content");
-    const dp = document.getElementById("playoff-date-picker");
-    if (!dp.value) {
-      const t = new Date();
-      dp.value = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-    }
-    box.innerHTML = `<div class="settings-hint">Loading...</div>`;
+  async function ensurePlayoffInfo(date, force) {
+    const now = Date.now();
+    if (!force && playoffInfoFetched.date === date && now - playoffInfoFetched.at < 60000) return;
+    playoffInfoFetched = { date, at: now };
     try {
-      const res = await fetch(`${API_BASE}/api/mlb/playoffs?date=${dp.value}`);
-      poCache = await res.json();
-      poRender();
-    } catch (e) {
-      box.innerHTML = `<div class="settings-hint">Couldn't load the playoff slate.</div>`;
-    }
+      const res = await fetch(`${API_BASE}/api/mlb/playoffs?date=${date}`);
+      const d = await res.json();
+      if (d && d.status === "ok") {
+        playoffKFactor = d.k_factor || playoffKFactor;
+        playoffInfo = {};
+        (d.games || []).forEach(g => { playoffInfo[g.game_pk] = g; });
+      }
+    } catch (e) { /* keep whatever was loaded before */ }
   }
 
-  function poRender() {
-    const box = document.getElementById("playoff-content");
-    if (box) box.innerHTML = playoffHtml(poCache);
+  // Strikeout mean for a starter: postseason games get the shorter-leash factor, everything else is untouched.
+  function kMeanFor(gamePk, mean) {
+    return mean != null && playoffInfo[gamePk] ? mean * playoffKFactor : mean;
   }
 
-  function playoffHtml(d) {
-    if (!d || d.status !== "ok") return `<div class="settings-hint">${ffbEsc((d && d.warnings && d.warnings[0]) || "Playoff data unavailable.")}</div>`;
-    if (!d.games.length) return `<div class="settings-hint">No postseason games on this date.</div>`;
-    const pc = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
-    let h = `<div class="settings-hint">${ffbEsc(d.note)} Type the market price (the % the book or exchange implies) to get the Kelly stake; tick Track to log the bet in Bet Tracker, where it is graded automatically.</div>${(d.warnings || []).map(w => `<div class="settings-hint">${ffbEsc(w)}</div>`).join("")}`;
-    h += `<div class="grid" style="margin-top:12px;">`;
-    d.games.forEach(g => {
-      const pk = g.game_pk;
-      const when = g.game_datetime_utc ? new Date(g.game_datetime_utc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
-      const sc = g.home_score != null && g.away_score != null ? ` · ${g.away_score}-${g.home_score}` : "";
-      h += `<div class="card" style="grid-column: 1 / -1;"><div class="teams"><span>${ffbEsc(g.away_team)} @ ${ffbEsc(g.home_team)}</span></div>
-        <div class="settings-hint">${ffbEsc(g.round || "")}${g.series_game ? ` · Game ${g.series_game}${g.games_in_series ? " of " + g.games_in_series : ""}` : ""} · ${when} · ${ffbEsc(g.status || "")}${sc}</div>`;
-      if (!g.in_database) {
-        h += `<div class="settings-hint">Not loaded in the app yet - it appears once the poller loads this day's slate.</div></div>`;
-        return;
-      }
-      let rows = "";
-      if (g.first_inning_run_yes_probability != null) {
-        rows += poBetRow(`yrfi-${pk}`, "1st inning run", 1, {
-          yesPct: () => g.first_inning_run_yes_probability * 100,
-          payload: (st) => ({ game_pk: pk, bet_type: "first_inning_run", batter_name: "1st Inning Run", yn: st.yn }),
-        });
-      }
-      [["away", g.away_team, g.away_moneyline_win_prob], ["home", g.home_team, g.home_moneyline_win_prob]].forEach(([side, team, wp]) => {
-        if (wp == null) return;
-        rows += poBetRow(`ml-${pk}-${side}`, `${ffbEsc(team)} moneyline`, 1, {
-          yesNo: false, yesPct: () => wp * 100,
-          payload: () => ({ game_pk: pk, bet_type: "full_game_moneyline_" + side, batter_name: team + " ML", team_side: side, yn: "yes" }),
-        });
-      });
-      if (rows) h += `<div class="hits-side-label" style="margin-top:8px;">Game bets</div><div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">${poTableHead("")}${rows}</table></div>`;
-      let krows = "";
-      ["away", "home"].forEach(side => {
-        const p = g.pitchers && g.pitchers[side];
-        if (!p || p.mean == null || !p.pitcher_id) return;
-        const def = Math.max(1, Math.round(p.post_mean));
-        krows += poBetRow(`k-${pk}-${side}`, `${ffbEsc(p.name || "TBD")}${p.hand ? " (" + p.hand + ")" : ""} <span style="color:var(--muted); font-size:0.75rem;">${side === "home" ? ffbEsc(g.home_team) : ffbEsc(g.away_team)} · mean ${p.post_mean.toFixed(2)} <span title="regular-season model">(reg ${p.mean.toFixed(2)})</span></span>`, def, {
-          line: true,
-          yesPct: (st) => probKAtLeastPoisson(p.post_mean, st.threshold) * 100,
-          payload: (st) => ({ game_pk: pk, bet_type: "pitcher_k", batter_id: p.pitcher_id, batter_name: p.name || "TBD", team_side: side, line: st.threshold, yn: st.yn }),
-        });
-      });
-      if (krows) h += `<div class="hits-side-label" style="margin-top:10px;">Starter strikeouts - at least N, postseason-adjusted (x${d.k_factor})</div><div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">${poTableHead("At least")}${krows}</table></div>`;
-      else h += `<div class="settings-hint">Starter strikeout numbers appear once both probable pitchers are posted.</div>`;
-      h += `</div>`;
-    });
-    return h + `</div>`;
+  function playoffMetaPrefix(g) {
+    const p = playoffInfo[g.game_pk];
+    if (!p) return "";
+    const series = [p.round, p.series_game ? `Game ${p.series_game}${p.games_in_series ? " of " + p.games_in_series : ""}` : ""].filter(Boolean).join(" · ");
+    return `<span style="color:var(--accent); font-weight:600;">${series}</span> · `;
   }
 
   function switchSportView(sport, view) {
@@ -3532,7 +3413,7 @@
           if (!pitcher || pitcher.mean == null) continue;
           const state = getKBetState(gamePk, side);
           const line = state.threshold;
-          const yesPct = probKAtLeastPoisson(pitcher.mean, line) * 100;
+          const yesPct = probKAtLeastPoisson(kMeanFor(gamePk, pitcher.mean), line) * 100;
           const noPct = 100 - yesPct;
           const modelPct = state.yn === "yes" ? yesPct : noPct;
           const modelProb = modelPct != null ? modelPct / 100 : null;
