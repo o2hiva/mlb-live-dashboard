@@ -195,12 +195,25 @@
     <div class="tabs">
       <span id="subtab-btn-mlb-live" class="tab-btn active" onclick="switchMlbSubTab('live')">Live Games</span>
       <span id="subtab-btn-mlb-bybets" class="tab-btn" onclick="switchMlbSubTab('bybets')">By Bets</span>
+      <span id="subtab-btn-mlb-playoffs" class="tab-btn" onclick="switchMlbSubTab('playoffs')">Playoffs</span>
       <span id="subtab-btn-mlb-scorecard" class="tab-btn" onclick="switchMlbSubTab('scorecard')">Scorecard</span>
     </div>
 
     <div id="subtab-content-mlb-bybets" style="display:none;">
       <div class="sub">Every bet across every confirmed game, ranked highest to lowest Yes probability.</div>
       <div id="bybets-content">Loading...</div>
+    </div>
+
+    <div id="subtab-content-mlb-playoffs" style="display:none;">
+      <div class="sub">MLB Postseason - the day's playoff games with series info, first-inning-run and moneyline numbers, and each starter's strikeouts with the postseason adjustment (starters get a shorter leash in October).</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+        <div>
+          <label for="playoff-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
+          <input id="playoff-date-picker" type="date" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="loadMlbPlayoffs()" />
+        </div>
+        <span class="hits-toggle" onclick="loadMlbPlayoffs()" style="padding:6px 14px;">Refresh</span>
+      </div>
+      <div id="playoff-content">Open this tab to load.</div>
     </div>
 
     <div id="subtab-content-mlb-scorecard" style="display:none;">
@@ -2556,6 +2569,9 @@
     document.getElementById("subtab-content-mlb-bybets").style.display = subtab === "bybets" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-live").classList.toggle("active", subtab === "live");
     document.getElementById("subtab-btn-mlb-bybets").classList.toggle("active", subtab === "bybets");
+    document.getElementById("subtab-content-mlb-playoffs").style.display = subtab === "playoffs" ? "block" : "none";
+    document.getElementById("subtab-btn-mlb-playoffs").classList.toggle("active", subtab === "playoffs");
+    if (subtab === "playoffs") loadMlbPlayoffs();
     document.getElementById("subtab-content-mlb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-mlb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("mlb", "shadow-scorecard-mlb", false);
@@ -2604,6 +2620,63 @@
     document.getElementById("subtab-content-cfb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-cfb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("cfb", "shadow-scorecard-cfb", false);
+  }
+
+  // ---- MLB Playoffs: postseason slate + starter strikeouts with the postseason factor (POST_K from mlb_k_sheet.py).
+  async function loadMlbPlayoffs() {
+    const box = document.getElementById("playoff-content");
+    const dp = document.getElementById("playoff-date-picker");
+    if (!dp.value) {
+      const t = new Date();
+      dp.value = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    }
+    box.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/mlb/playoffs?date=${dp.value}`);
+      box.innerHTML = playoffHtml(await res.json());
+    } catch (e) {
+      box.innerHTML = `<div class="settings-hint">Couldn't load the playoff slate.</div>`;
+    }
+  }
+
+  function playoffHtml(d) {
+    if (!d || d.status !== "ok") return `<div class="settings-hint">${ffbEsc((d && d.warnings && d.warnings[0]) || "Playoff data unavailable.")}</div>`;
+    if (!d.games.length) return `<div class="settings-hint">No postseason games on this date.</div>`;
+    const pc = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
+    const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500; white-space:nowrap;";
+    const td = "text-align:right; padding:3px 8px; white-space:nowrap;";
+    const tdl = "text-align:left; padding:3px 8px; white-space:nowrap;";
+    let h = `<div class="settings-hint">${ffbEsc(d.note)}</div>${(d.warnings || []).map(w => `<div class="settings-hint">${ffbEsc(w)}</div>`).join("")}`;
+    h += `<div class="grid" style="margin-top:12px;">`;
+    d.games.forEach(g => {
+      const when = g.game_datetime_utc ? new Date(g.game_datetime_utc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+      const sc = g.home_score != null && g.away_score != null ? ` · ${g.away_score}-${g.home_score}` : "";
+      h += `<div class="card"><div class="teams"><span>${ffbEsc(g.away_team)} @ ${ffbEsc(g.home_team)}</span></div>
+        <div class="settings-hint">${ffbEsc(g.round || "")}${g.series_game ? ` · Game ${g.series_game}${g.games_in_series ? " of " + g.games_in_series : ""}` : ""} · ${when} · ${ffbEsc(g.status || "")}${sc}</div>`;
+      if (!g.in_database) {
+        h += `<div class="settings-hint">Not loaded in the app yet.</div></div>`;
+        return;
+      }
+      h += `<div class="settings-hint">First-inning run: <b>${pc(g.first_inning_run_yes_probability)}</b> yes · Moneyline: ${ffbEsc(g.away_team)} ${pc(g.away_moneyline_win_prob)} / ${ffbEsc(g.home_team)} ${pc(g.home_moneyline_win_prob)}</div>`;
+      const rows = ["away", "home"].map(side => ({ side, p: g.pitchers && g.pitchers[side] })).filter(x => x.p && x.p.mean != null);
+      if (rows.length) {
+        h += `<div class="hits-side-label" style="margin-top:8px;">Starter strikeouts - chance of at least N (postseason-adjusted)</div>
+          <div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">
+          <tr><th style="${th} text-align:left;">Pitcher</th><th style="${th}">Reg. mean</th><th style="${th}">Playoff mean</th>${[-2, -1, 0, 1, 2].map(o => `<th style="${th}">${o === 0 ? "N = mean" : (o > 0 ? "+" + o : o)}</th>`).join("")}</tr>`;
+        rows.forEach(({ side, p }) => {
+          const base = Math.max(1, Math.round(p.post_mean));
+          h += `<tr><td style="${tdl}">${ffbEsc(p.name || "TBD")}${p.hand ? " (" + p.hand + ")" : ""} <span style="color:var(--muted); font-size:0.75rem;">${side === "home" ? ffbEsc(g.home_team) : ffbEsc(g.away_team)}</span></td>
+            <td style="${td} color:var(--muted);">${p.mean.toFixed(2)}</td><td style="${td}"><b>${p.post_mean.toFixed(2)}</b></td>
+            ${[-2, -1, 0, 1, 2].map(o => { const n = base + o; if (n < 1) return `<td style="${td}">-</td>`;
+              return `<td style="${td}" title="At least ${n} Ks. Regular-season model: ${pc(probKAtLeastPoisson(p.mean, n))}"><b>${n}+</b> ${pc(probKAtLeastPoisson(p.post_mean, n))} <span style="color:var(--muted); font-size:0.72rem;">(${pc(probKAtLeastPoisson(p.mean, n))})</span></td>`; }).join("")}</tr>`;
+        });
+        h += `</table></div>`;
+      } else {
+        h += `<div class="settings-hint">Starter strikeout numbers appear once both probable pitchers are posted.</div>`;
+      }
+      h += `</div>`;
+    });
+    return h + `</div>`;
   }
 
   function switchSportView(sport, view) {

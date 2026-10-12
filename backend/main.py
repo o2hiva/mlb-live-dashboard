@@ -719,6 +719,79 @@ def _nba_shadow_payloads(db):
     return [svc.games_payload(d.isoformat()) for d in (today, today + timedelta(days=1))]
 
 
+# Postseason strikeout factor, from the user's mlb_k_sheet.py (K_Params POST_K): over 4 postseasons / 314 starts, starters faced
+# ~18.6 batters vs 21.6 expected and strikeouts ran ~11% below the regular-season model. Judgment-based (out-of-sample log loss
+# could not separate it from no change), so the Playoffs tab always shows the unadjusted number next to it.
+POSTSEASON_K_FACTOR = 0.89
+_PLAYOFF_GAME_TYPES = "F,D,L,W"        # wild card, division series, league championship, world series
+_PLAYOFF_ROUND = {"F": "Wild Card", "D": "Division Series", "L": "League Championship", "W": "World Series"}
+
+
+@app.get("/api/mlb/playoffs")
+def mlb_playoffs(date: str | None = None, db: Session = Depends(get_db)):
+    """Postseason games for one date: series info from MLB's schedule (gameType F/D/L/W), the app's own game row (first-inning-run and
+    moneyline probabilities) and each starter's strikeout mean with the postseason factor applied next to the regular-season mean."""
+    import requests
+    import pitcher_k_sync
+    d = date or mlb_client.mlb_today().isoformat()
+    try:
+        resp = requests.get(f"{mlb_client.BASE}/v1/schedule", timeout=mlb_client.TIMEOUT,
+                            params={"sportId": 1, "date": d, "gameType": _PLAYOFF_GAME_TYPES, "hydrate": "team,probablePitcher"})
+        resp.raise_for_status()
+        sched = [g for day in resp.json().get("dates", []) for g in day.get("games", [])]
+    except Exception as e:
+        import logging
+        logging.getLogger("main").exception("playoff schedule fetch failed")
+        return {"status": "error", "date": d, "warnings": [f"Couldn't load the MLB schedule: {type(e).__name__}"], "games": []}
+    by_pk = {g["game_pk"]: g for g in games_today(game_date=d, db=db)}
+    la_b13 = None
+    out = []
+    for g in sched:
+        pk = g["gamePk"]
+        row = by_pk.get(pk)
+        teams = g.get("teams", {})
+        item = {
+            "game_pk": pk, "game_datetime_utc": g.get("gameDate"),
+            "status": g.get("status", {}).get("detailedState"), "abstract_status": g.get("status", {}).get("abstractGameState"),
+            "round": _PLAYOFF_ROUND.get(g.get("gameType"), g.get("gameType")),
+            "series": g.get("seriesDescription"), "series_game": g.get("seriesGameNumber"), "games_in_series": g.get("gamesInSeries"),
+            "home_team": teams.get("home", {}).get("team", {}).get("name"), "away_team": teams.get("away", {}).get("team", {}).get("name"),
+            "home_score": teams.get("home", {}).get("score"), "away_score": teams.get("away", {}).get("score"),
+            "in_database": row is not None,
+            "first_inning_run_yes_probability": row["first_inning_run_yes_probability"] if row else None,
+            "home_moneyline_win_prob": row["home_moneyline_win_prob"] if row else None,
+            "away_moneyline_win_prob": row["away_moneyline_win_prob"] if row else None,
+            "home_lineup_confirmed": row["home_lineup_confirmed"] if row else False,
+            "away_lineup_confirmed": row["away_lineup_confirmed"] if row else False,
+            "pitchers": {},
+        }
+        game = db.get(Game, pk) if row else None
+        if game is not None:
+            try:
+                if la_b13 is None:
+                    la_b13 = pitcher_k_sync.get_league_k_rate()
+                k = _build_pitcher_k_response(db, game, la_b13)
+                for side in ("home", "away"):
+                    p = k.get(f"{side}_pitcher") or {}
+                    mean = p.get("mean")
+                    item["pitchers"][side] = {
+                        "pitcher_id": p.get("pitcher_id"), "name": p.get("pitcher_name"), "hand": p.get("pitcher_hand"),
+                        "mean": mean, "post_mean": (mean * POSTSEASON_K_FACTOR) if mean is not None else None,
+                        "k_index": p.get("pitcher_k_index"), "opp_k_index": p.get("opposing_lineup_k_index"),
+                    }
+            except Exception:
+                import logging
+                logging.getLogger("main").exception("playoff pitcher K failed for %s", pk)
+        out.append(item)
+    out.sort(key=lambda x: (x["game_datetime_utc"] or "", x["game_pk"]))
+    warn = []
+    if sched and not any(x["in_database"] for x in out):
+        warn.append("These games are not in the app's database yet (the poller loads each day's slate), so only series info is shown.")
+    return {"status": "ok", "date": d, "k_factor": POSTSEASON_K_FACTOR, "games": out, "warnings": warn,
+            "note": "Strikeout means are multiplied by the postseason factor (starters get a shorter leash). The factor comes from 4 past postseasons "
+                    "(314 starts) and is judgment-based - the regular-season number is shown next to it. Other props are not adjusted."}
+
+
 @app.get("/api/games/{game_pk}/game-lines")
 def game_lines(game_pk: int, db: Session = Depends(get_db)):
     """
