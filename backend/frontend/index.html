@@ -2623,6 +2623,81 @@
   }
 
   // ---- MLB Playoffs: postseason slate + starter strikeouts with the postseason factor (POST_K from mlb_k_sheet.py).
+  let poCache = null;
+  const poState = {};
+
+  function poGet(key, defLine) {
+    if (!poState[key]) poState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: defLine };
+    return poState[key];
+  }
+
+  function poSet(key, field, value) {
+    const st = poGet(key);
+    if (field === "market") st.market = value === "" ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else if (field === "threshold") st.threshold = Math.max(1, parseInt(value, 10) || 1);
+    else if (field === "useKelly") st.useKelly = !!value;
+    else st[field] = value;
+    poRender();
+  }
+
+  // Track / untrack: posts the same bet types the rest of the app already grades (first_inning_run, full_game_moneyline_*, pitcher_k),
+  // so playoff bets settle automatically and show up in Bet Tracker with the model probability that was used.
+  async function poTrack(key, checked) {
+    const st = poState[key];
+    const meta = st && st.meta;
+    if (!meta) return;
+    if (checked) {
+      const modelProb = meta.modelProb(st);
+      const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
+      const profit = profitIfWon(wager, st.market);
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.assign({}, meta.payload(st), { model_probability: modelProb, market_probability: st.market, wager: wager, potential_profit: profit })),
+        });
+        const data = await res.json();
+        st.tracked = !!(res.ok && data && data.id != null);
+        st.trackedId = st.tracked ? data.id : null;
+      } catch (e) { st.tracked = false; }
+    } else if (st.trackedId != null) {
+      try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker tab's Remove button can clean it up */ }
+      st.tracked = false; st.trackedId = null;
+    }
+    poRender();
+  }
+
+  // One bet row: model Yes/No %, Yes/No pick, market price %, Kelly stake, profit if it wins, track box.
+  function poBetRow(key, label, defLine, opts) {
+    const st = poGet(key, defLine);
+    const yesPct = opts.yesPct(st);                                  // model chance of the "Yes" side, in %
+    const noPct = yesPct != null ? 100 - yesPct : null;
+    const modelPct = opts.yesNo === false ? yesPct : (st.yn === "yes" ? yesPct : noPct);
+    const modelProb = modelPct != null ? modelPct / 100 : null;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, st.market) : st.manualWager;
+    const profit = profitIfWon(wager, st.market);
+    st.meta = { modelProb: (x) => { const y = opts.yesPct(x); if (y == null) return null; return (opts.yesNo === false ? y : (x.yn === "yes" ? y : 100 - y)) / 100; }, payload: (x) => opts.payload(x) };
+    const e = (f) => `poSet('${key}','${f}',`;
+    const cell = "padding:3px 6px; white-space:nowrap; text-align:center;";
+    return `<tr>
+      <td style="${cell} text-align:left;">${label}</td>
+      <td style="${cell}">${opts.line ? `<input type="number" min="1" step="1" value="${st.threshold}" style="width:46px; text-align:center;" onchange="${e("threshold")}this.value)" />` : ""}</td>
+      <td style="${cell}" class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</td>
+      <td style="${cell}" class="prob-no">${opts.yesNo === false ? "" : (noPct != null ? Math.round(noPct) + "%" : "N/A")}</td>
+      <td style="${cell}">${opts.yesNo === false ? "Yes" : `<select onchange="${e("yn")}this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>Yes</option><option value="no" ${st.yn === "no" ? "selected" : ""}>No</option></select>`}</td>
+      <td style="${cell}"><input type="number" step="0.1" min="0" max="100" value="${st.market != null ? st.market : ""}" placeholder="%" style="width:58px;" onchange="${e("market")}this.value)" /></td>
+      <td style="${cell}"><input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="${e("useKelly")}this.checked)" /></td>
+      <td style="${cell}">${st.useKelly ? "$" + wager.toFixed(2) : `<input type="number" step="0.01" min="0" value="${st.manualWager}" style="width:64px;" onchange="${e("manualWager")}this.value)" />`}</td>
+      <td style="${cell}">${profit != null ? "$" + profit.toFixed(2) : "—"}</td>
+      <td style="${cell}"><input type="checkbox" ${st.tracked ? "checked" : ""} onchange="poTrack('${key}', this.checked)" /></td>
+    </tr>`;
+  }
+
+  const PO_TH = "text-align:center; padding:3px 6px; color:var(--muted); font-weight:500; white-space:nowrap; font-size:0.78rem;";
+  function poTableHead(lineHeader) {
+    return `<tr><th style="${PO_TH} text-align:left;">Bet</th><th style="${PO_TH}">${lineHeader}</th><th style="${PO_TH}">Yes %</th><th style="${PO_TH}">No %</th><th style="${PO_TH}">Pick</th><th style="${PO_TH}">Market %</th><th style="${PO_TH}">Kelly</th><th style="${PO_TH}">Wager</th><th style="${PO_TH}">Profit</th><th style="${PO_TH}">Track</th></tr>`;
+  }
+
   async function loadMlbPlayoffs() {
     const box = document.getElementById("playoff-content");
     const dp = document.getElementById("playoff-date-picker");
@@ -2633,47 +2708,62 @@
     box.innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
       const res = await fetch(`${API_BASE}/api/mlb/playoffs?date=${dp.value}`);
-      box.innerHTML = playoffHtml(await res.json());
+      poCache = await res.json();
+      poRender();
     } catch (e) {
       box.innerHTML = `<div class="settings-hint">Couldn't load the playoff slate.</div>`;
     }
+  }
+
+  function poRender() {
+    const box = document.getElementById("playoff-content");
+    if (box) box.innerHTML = playoffHtml(poCache);
   }
 
   function playoffHtml(d) {
     if (!d || d.status !== "ok") return `<div class="settings-hint">${ffbEsc((d && d.warnings && d.warnings[0]) || "Playoff data unavailable.")}</div>`;
     if (!d.games.length) return `<div class="settings-hint">No postseason games on this date.</div>`;
     const pc = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
-    const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500; white-space:nowrap;";
-    const td = "text-align:right; padding:3px 8px; white-space:nowrap;";
-    const tdl = "text-align:left; padding:3px 8px; white-space:nowrap;";
-    let h = `<div class="settings-hint">${ffbEsc(d.note)}</div>${(d.warnings || []).map(w => `<div class="settings-hint">${ffbEsc(w)}</div>`).join("")}`;
+    let h = `<div class="settings-hint">${ffbEsc(d.note)} Type the market price (the % the book or exchange implies) to get the Kelly stake; tick Track to log the bet in Bet Tracker, where it is graded automatically.</div>${(d.warnings || []).map(w => `<div class="settings-hint">${ffbEsc(w)}</div>`).join("")}`;
     h += `<div class="grid" style="margin-top:12px;">`;
     d.games.forEach(g => {
+      const pk = g.game_pk;
       const when = g.game_datetime_utc ? new Date(g.game_datetime_utc).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
       const sc = g.home_score != null && g.away_score != null ? ` · ${g.away_score}-${g.home_score}` : "";
-      h += `<div class="card"><div class="teams"><span>${ffbEsc(g.away_team)} @ ${ffbEsc(g.home_team)}</span></div>
+      h += `<div class="card" style="grid-column: 1 / -1;"><div class="teams"><span>${ffbEsc(g.away_team)} @ ${ffbEsc(g.home_team)}</span></div>
         <div class="settings-hint">${ffbEsc(g.round || "")}${g.series_game ? ` · Game ${g.series_game}${g.games_in_series ? " of " + g.games_in_series : ""}` : ""} · ${when} · ${ffbEsc(g.status || "")}${sc}</div>`;
       if (!g.in_database) {
-        h += `<div class="settings-hint">Not loaded in the app yet.</div></div>`;
+        h += `<div class="settings-hint">Not loaded in the app yet - it appears once the poller loads this day's slate.</div></div>`;
         return;
       }
-      h += `<div class="settings-hint">First-inning run: <b>${pc(g.first_inning_run_yes_probability)}</b> yes · Moneyline: ${ffbEsc(g.away_team)} ${pc(g.away_moneyline_win_prob)} / ${ffbEsc(g.home_team)} ${pc(g.home_moneyline_win_prob)}</div>`;
-      const rows = ["away", "home"].map(side => ({ side, p: g.pitchers && g.pitchers[side] })).filter(x => x.p && x.p.mean != null);
-      if (rows.length) {
-        h += `<div class="hits-side-label" style="margin-top:8px;">Starter strikeouts - chance of at least N (postseason-adjusted)</div>
-          <div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">
-          <tr><th style="${th} text-align:left;">Pitcher</th><th style="${th}">Reg. mean</th><th style="${th}">Playoff mean</th>${[-2, -1, 0, 1, 2].map(o => `<th style="${th}">${o === 0 ? "N = mean" : (o > 0 ? "+" + o : o)}</th>`).join("")}</tr>`;
-        rows.forEach(({ side, p }) => {
-          const base = Math.max(1, Math.round(p.post_mean));
-          h += `<tr><td style="${tdl}">${ffbEsc(p.name || "TBD")}${p.hand ? " (" + p.hand + ")" : ""} <span style="color:var(--muted); font-size:0.75rem;">${side === "home" ? ffbEsc(g.home_team) : ffbEsc(g.away_team)}</span></td>
-            <td style="${td} color:var(--muted);">${p.mean.toFixed(2)}</td><td style="${td}"><b>${p.post_mean.toFixed(2)}</b></td>
-            ${[-2, -1, 0, 1, 2].map(o => { const n = base + o; if (n < 1) return `<td style="${td}">-</td>`;
-              return `<td style="${td}" title="At least ${n} Ks. Regular-season model: ${pc(probKAtLeastPoisson(p.mean, n))}"><b>${n}+</b> ${pc(probKAtLeastPoisson(p.post_mean, n))} <span style="color:var(--muted); font-size:0.72rem;">(${pc(probKAtLeastPoisson(p.mean, n))})</span></td>`; }).join("")}</tr>`;
+      let rows = "";
+      if (g.first_inning_run_yes_probability != null) {
+        rows += poBetRow(`yrfi-${pk}`, "1st inning run", 1, {
+          yesPct: () => g.first_inning_run_yes_probability * 100,
+          payload: (st) => ({ game_pk: pk, bet_type: "first_inning_run", batter_name: "1st Inning Run", yn: st.yn }),
         });
-        h += `</table></div>`;
-      } else {
-        h += `<div class="settings-hint">Starter strikeout numbers appear once both probable pitchers are posted.</div>`;
       }
+      [["away", g.away_team, g.away_moneyline_win_prob], ["home", g.home_team, g.home_moneyline_win_prob]].forEach(([side, team, wp]) => {
+        if (wp == null) return;
+        rows += poBetRow(`ml-${pk}-${side}`, `${ffbEsc(team)} moneyline`, 1, {
+          yesNo: false, yesPct: () => wp * 100,
+          payload: () => ({ game_pk: pk, bet_type: "full_game_moneyline_" + side, batter_name: team + " ML", team_side: side, yn: "yes" }),
+        });
+      });
+      if (rows) h += `<div class="hits-side-label" style="margin-top:8px;">Game bets</div><div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">${poTableHead("")}${rows}</table></div>`;
+      let krows = "";
+      ["away", "home"].forEach(side => {
+        const p = g.pitchers && g.pitchers[side];
+        if (!p || p.mean == null || !p.pitcher_id) return;
+        const def = Math.max(1, Math.round(p.post_mean));
+        krows += poBetRow(`k-${pk}-${side}`, `${ffbEsc(p.name || "TBD")}${p.hand ? " (" + p.hand + ")" : ""} <span style="color:var(--muted); font-size:0.75rem;">${side === "home" ? ffbEsc(g.home_team) : ffbEsc(g.away_team)} · mean ${p.post_mean.toFixed(2)} <span title="regular-season model">(reg ${p.mean.toFixed(2)})</span></span>`, def, {
+          line: true,
+          yesPct: (st) => probKAtLeastPoisson(p.post_mean, st.threshold) * 100,
+          payload: (st) => ({ game_pk: pk, bet_type: "pitcher_k", batter_id: p.pitcher_id, batter_name: p.name || "TBD", team_side: side, line: st.threshold, yn: st.yn }),
+        });
+      });
+      if (krows) h += `<div class="hits-side-label" style="margin-top:10px;">Starter strikeouts - at least N, postseason-adjusted (x${d.k_factor})</div><div style="overflow-x:auto;"><table style="border-collapse:collapse; font-size:0.85rem; width:100%;">${poTableHead("At least")}${krows}</table></div>`;
+      else h += `<div class="settings-hint">Starter strikeout numbers appear once both probable pitchers are posted.</div>`;
       h += `</div>`;
     });
     return h + `</div>`;
