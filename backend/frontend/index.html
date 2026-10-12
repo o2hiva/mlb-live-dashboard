@@ -5066,8 +5066,11 @@
     const predictedDiff = (homePredicted - awayPredicted) + hfa;
     const varianceDiff = CFB_SPREAD_VARIANCE_SCALE * (CFB_TEAM_OVERDISPERSION * homePredicted + CFB_TEAM_OVERDISPERSION * awayPredicted);
     const sigma = varianceDiff > 0 ? Math.sqrt(varianceDiff) : 1.0;
-    // P(home covers) = P(diff > -home_spread)
-    return Math.max(0, Math.min(1, 1 - normCdf(-homeSpread, predictedDiff, sigma)));
+    // Shrunk toward 50% (core_ncaa_spread.py shrunk_cover_probability, leave-one-season-out on 1574 real games:
+    // the model has no measurable information about covers beyond the posted line). Lopsided lines show exactly 50%.
+    const lam = Math.abs(homeSpread) >= CFB_SPREAD_LOPSIDED_THRESHOLD ? 0.0 : 0.15;
+    const d = predictedDiff + homeSpread;
+    return Math.max(0, Math.min(1, normCdf(lam * d / sigma, 0, 1)));
   }
 
   // gameId -> user-entered spread line, always stored in HOME-team
@@ -5209,7 +5212,7 @@
           ${cfbSpreadBetRowCellsHtml(gameId, side, row.team, spreadVal, coverPct)}
           <span></span>
         </div>
-        ${lopsided ? `<div class="settings-hint" style="margin-top:2px;">⚠ Lopsided line (|spread| ≥ 13) - cover % confirmed overconfident here, use with caution</div>` : ""}
+        ${lopsided ? `<div class="settings-hint" style="margin-top:2px;">⚠ Lopsided line (|spread| ≥ 13) - model has no edge over the line here - cover % shown as 50%</div>` : ""}
       </div>`;
   }
 

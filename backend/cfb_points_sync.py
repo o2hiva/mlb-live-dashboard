@@ -627,6 +627,28 @@ def spread_cover_probability(home_predicted: float | None, away_predicted: float
     return 1.0 - _normal_cdf(-home_spread, predicted_diff, sigma)
 
 
+# SHRINK TOWARD 50% (ported from the updated core_ncaa_spread.py, backtest_ncaa_spread_shrink.py, leave-one-season-out on
+# 1574 real games 2023-25): the model has NO measurable information about covers beyond the posted line. Held-out Brier:
+# raw 0.2648, 50% = 0.2500, shrunk 0.2504. Raw "3%+ edge" picks hit 51.9% while claiming 62.6% (break-even 52.4%).
+# Shrunk prob = Phi(lam * d / sigma): the DISPLAYED / LOGGED / BET probability. Lopsided lines (|spread| >= 13) show exactly 50%.
+SHRINK_LAMBDA_MODERATE = 0.15
+SHRINK_LAMBDA_LOPSIDED = 0.0
+
+
+def shrunk_cover_probability(home_predicted: float | None, away_predicted: float | None, home_spread: float | None,
+                             neutral_site: bool = False) -> float | None:
+    """Raw model disagreement with the line, scaled by lambda (moderate or lopsided) before the Normal CDF.
+    lambda=1 reproduces spread_cover_probability exactly. None if degenerate or no line."""
+    if home_predicted is None or away_predicted is None or home_predicted <= 0 or away_predicted <= 0 or home_spread is None:
+        return None
+    lam = SHRINK_LAMBDA_LOPSIDED if abs(home_spread) >= LOPSIDED_THRESHOLD else SHRINK_LAMBDA_MODERATE
+    hfa = 0.0 if neutral_site else SPREAD_HOME_FIELD_POINTS
+    d = (home_predicted - away_predicted) + hfa + home_spread
+    var = SPREAD_VARIANCE_SCALE * DEFAULT_TEAM_OVERDISPERSION * (home_predicted + away_predicted)
+    sigma = math.sqrt(var) if var > 0 else 1.0
+    return _normal_cdf(lam * d / sigma, 0.0, 1.0)
+
+
 def compute_cfb_spread(home_team: str, away_team: str, home_spread: float | None, db,
                         league_avg: float | None = None, neutral_site: bool = False) -> dict:
     """Returns {"home_covers_probability":, "away_covers_probability":,
@@ -657,13 +679,15 @@ def compute_cfb_spread(home_team: str, away_team: str, home_spread: float | None
     if home_pred is None or away_pred is None:
         return {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
-    home_cover_prob = spread_cover_probability(home_pred["mean"], away_pred["mean"], home_spread, neutral_site=neutral_site)
+    home_cover_prob = shrunk_cover_probability(home_pred["mean"], away_pred["mean"], home_spread, neutral_site=neutral_site)
+    raw_cover_prob = spread_cover_probability(home_pred["mean"], away_pred["mean"], home_spread, neutral_site=neutral_site)
     if home_cover_prob is None:
         return {"home_covers_probability": None, "away_covers_probability": None, "trusted": False, "lopsided": None}
 
     return {
         "home_covers_probability": home_cover_prob,
         "away_covers_probability": 1.0 - home_cover_prob,
+        "raw_home_covers_probability": raw_cover_prob,
         "trusted": True,
         "lopsided": abs(home_spread) >= LOPSIDED_THRESHOLD,
     }
