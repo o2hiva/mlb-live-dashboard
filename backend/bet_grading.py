@@ -211,7 +211,26 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nhl_goalie_saves", "npb_yrfi",
                           "nba_pts", "nba_reb", "nba_ast", "nba_pra",
                           "nhl_ml_home", "nhl_ml_away", "nhl_tg_home", "nhl_tg_away",
-                          "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3"}
+                          "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3",
+                          "tennis_ml", "tennis_games", "tennis_sets"}
+
+TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
+
+
+def _grade_tennis_bet(bet: TrackedBet):
+    """ATP tennis bets from the Tennis tab. The bet IS a Kalshi market (its ticker is in external_player_id): moneyline = that
+    player wins, total games / sets = Over the line. yn == "yes" wins when Kalshi settles the market YES, "no" when it
+    settles NO. Returns None until Kalshi has settled the market; a market that settled to neither (void) is a push."""
+    import tennis_service
+    if not bet.external_player_id:
+        return None
+    res = tennis_service.get_service().final_market_result(bet.external_player_id)
+    if res is None:
+        return None
+    if res == "void":
+        return 0.0, "push"
+    return (1.0 if res == "yes" else 0.0), ("win" if res == bet.yn else "loss")
+
 
 NBA_BET_STATS = {"nba_pts": "pts", "nba_reb": "reb", "nba_ast": "ast", "nba_pra": "pra"}
 
@@ -807,9 +826,14 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES:
                 try:
-                    graded_nba = _grade_nba_prop(bet) if bet.bet_type in NBA_BET_STATS else _grade_nhl_goal_bet(bet)
+                    if bet.bet_type in NBA_BET_STATS:
+                        graded_nba = _grade_nba_prop(bet)
+                    elif bet.bet_type in TENNIS_BET_TYPES:
+                        graded_nba = _grade_tennis_bet(bet)
+                    else:
+                        graded_nba = _grade_nhl_goal_bet(bet)
                 except Exception:
                     log.exception("NBA/NHL grading failed for bet %s", bet.id)
                     graded_nba = None

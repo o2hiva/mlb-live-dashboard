@@ -188,6 +188,7 @@
     <span id="tab-btn-cfb" class="tab-btn" onclick="switchTab('cfb')">CFB</span>
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
+    <span id="tab-btn-tennis" class="tab-btn" onclick="switchTab('tennis')">Tennis</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
   </div>
 
@@ -488,6 +489,21 @@
       <button class="tab-btn" onclick="loadShadowScorecard('nba','shadow-scorecard-nba',true)" style="margin-bottom:10px;">Refresh</button>
       <div id="shadow-scorecard-nba"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
+  </div>
+
+  <div id="tab-content-tennis" style="display:none;">
+    <div class="sub">ATP tennis - every match Kalshi currently lists, with the model's moneyline, total-games and total-sets probabilities next to Kalshi's live prices. Market is pre-filled with the Kalshi ask for the side you bet (Over = YES ask, Under = NO ask); type your own price to override it. Tracked bets are graded automatically when Kalshi settles the market. Research display: against Kalshi's prices this model has not shown a proven edge, so treat Edge as a question, not an answer.</div>
+    <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
+      <div>
+        <label for="tennis-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day (Kalshi match date)</label>
+        <select id="tennis-date-select" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="setTennisDate(this.value)"></select>
+      </div>
+      <label class="settings-hint" style="margin:0;"><input type="checkbox" onchange="setTennisFee(this.checked)" /> Include Kalshi taker fee in Market</label>
+      <label class="settings-hint" style="margin:0;"><input type="checkbox" onchange="setTennisUnrated(this.checked)" /> Show not-modelled</label>
+      <span class="hits-toggle" onclick="loadTennisTab()" style="padding:6px 14px;">Refresh</span>
+    </div>
+    <div id="tennis-status" class="settings-hint"></div>
+    <div id="tennis-content">Loading...</div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -2612,6 +2628,7 @@
     document.getElementById("tab-content-cfb").style.display = tab === "cfb" ? "block" : "none";
     document.getElementById("tab-content-nhl").style.display = tab === "nhl" ? "block" : "none";
     document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
+    document.getElementById("tab-content-tennis").style.display = tab === "tennis" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-npb").classList.toggle("active", tab === "npb");
@@ -2620,6 +2637,7 @@
     document.getElementById("tab-btn-cfb").classList.toggle("active", tab === "cfb");
     document.getElementById("tab-btn-nhl").classList.toggle("active", tab === "nhl");
     document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
+    document.getElementById("tab-btn-tennis").classList.toggle("active", tab === "tennis");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     if (tab === "bettracker") {
       loadBetTrackerSettings();
@@ -2636,6 +2654,8 @@
       loadNhlGamesTab();
     } else if (tab === "nba") {
       loadNbaTab();
+    } else if (tab === "tennis") {
+      loadTennisTab();
     }
     // "mlb" needs nothing extra here - its own sub-tabs (switchMlbSubTab)
     // handle their own loading, and "Live Games" (the default MLB
@@ -2829,6 +2849,9 @@
     { label: "NBA Rebounds", filter: b => b.bet_type === "nba_reb" },
     { label: "NBA Assists", filter: b => b.bet_type === "nba_ast" },
     { label: "NBA PRA", filter: b => b.bet_type === "nba_pra" },
+    { label: "Tennis Moneyline", filter: b => b.bet_type === "tennis_ml" },
+    { label: "Tennis Total Games", filter: b => b.bet_type === "tennis_games" },
+    { label: "Tennis Total Sets", filter: b => b.bet_type === "tennis_sets" },
     { label: "NPB YRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "yes" },
     { label: "NPB NRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "no" },
   ];
@@ -2890,6 +2913,7 @@
     { label: "NHL", filter: b => b.bet_type.startsWith("nhl_") },
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
+    { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
   ];
 
   // Top "Hit Rates" group: Overall first, then MLB/NFL/CFB.
@@ -3114,7 +3138,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5715,6 +5739,285 @@
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadNbaTab(true);
   }, 60000);
+
+  // ---- Tennis tab (ATP). Model: tennis_platform.py (point->game->set->match Markov engine + Elo blend) served by
+  // /api/tennis/slate (see tennis_service.py). Every open Kalshi ATP match is a card: moneyline (each player), total games
+  // and total sets (every Kalshi rung). Market is pre-filled from Kalshi's LIVE price for the side being bet (Yes = ask of the
+  // YES contract, No = ask of the NO contract), the server re-pulls Kalshi every minute and this tab re-reads it every 30 s.
+  // Typing your own Market % overrides the live price for that row; clearing the box goes back to live.
+  // Tracked bets are the Kalshi market itself (ticker saved), so they grade automatically when Kalshi settles it. ----
+  let tennisData = null;
+  let tennisDateChoice = null;          // null = not chosen yet (auto: first date >= today), "" = all open matches
+  let tennisIncludeFee = false;
+  let tennisShowUnrated = false;
+  const tennisState = {};
+  let tennisRows = {};
+  let tennisTimer = null;
+
+  function getTennisState(key) {
+    if (!tennisState[key]) tennisState[key] = { yn: "yes", market: null, manual: false, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return tennisState[key];
+  }
+
+  function tennisFee(p) { return 0.07 * p * (1 - p); }
+
+  // Market % for the side being bet: the manual box if the viewer typed one, else Kalshi's live ask for that side.
+  function tennisMarketPct(row, st) {
+    if (st.manual) return st.market;
+    const k = row.kalshi;
+    if (!k) return null;
+    const side = st.yn === "yes" ? k.yes_ask : k.no_ask;
+    if (side == null || side <= 0 || side >= 1) return null;
+    const p = tennisIncludeFee ? side + tennisFee(side) : side;
+    return Math.round(p * 1000) / 10;
+  }
+
+  function tennisCalc(key) {
+    const row = tennisRows[key];
+    if (!row) return null;
+    const st = getTennisState(key);
+    if (row.isMl) st.yn = "yes";
+    const modelYes = row.modelYes;
+    const modelProb = st.yn === "yes" ? modelYes : 1 - modelYes;
+    const market = tennisMarketPct(row, st);
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function tennisCents(x) { return x == null ? "–" : Math.round(x * 100) + "¢"; }
+
+  function tennisKalshiCell(row, st) {
+    const k = row.kalshi;
+    if (!k) return `<span class="hits-index" title="No Kalshi market for this line">–</span>`;
+    const bid = st.yn === "yes" ? k.yes_bid : (k.yes_ask != null ? 1 - k.yes_ask : null);
+    const ask = st.yn === "yes" ? k.yes_ask : k.no_ask;
+    const vol = k.volume != null ? ` · vol ${Math.round(k.volume)}` : "";
+    return `<span class="hits-index" title="Kalshi ${st.yn === "yes" ? "YES" : "NO"}: bid ${tennisCents(bid)} / ask ${tennisCents(ask)}${vol}">${tennisCents(bid)}/${tennisCents(ask)}</span>`;
+  }
+
+  function updateTennisField(key, field, value) {
+    const st = getTennisState(key);
+    if (field === "market") {
+      if (value === "" || isNaN(parseFloat(value))) { st.manual = false; st.market = null; }
+      else { st.manual = true; st.market = parseFloat(value); }
+    } else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else if (field === "yn") { st.yn = value; }
+    else st[field] = value;
+    renderTennisFromCache();
+  }
+
+  function setTennisFee(checked) { tennisIncludeFee = !!checked; renderTennisFromCache(); }
+  function setTennisUnrated(checked) { tennisShowUnrated = !!checked; renderTennisFromCache(); }
+  function setTennisDate(v) { tennisDateChoice = v; renderTennisFromCache(); }
+
+  async function toggleTennisTrack(key, checked) {
+    const c = tennisCalc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      if (!row.ticker) { st.tracked = false; renderTennisFromCache(); return; }
+      const side = row.isMl ? "yes" : st.yn;
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: row.betType, external_player_id: row.ticker,
+            batter_name: row.betName, team_side: row.matchup, line: row.isMl ? null : row.line, yn: side,
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; }
+        else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderTennisFromCache();
+  }
+
+  const TENNIS_ML_COLS = "minmax(120px, 1.4fr) 44px 60px 62px 48px 30px 58px 54px 40px";
+  const TENNIS_OU_COLS = "minmax(70px, 0.9fr) 40px 40px 56px 60px 62px 48px 30px 58px 54px 40px";
+
+  function tennisEdgeCell(modelProb, market) {
+    if (modelProb == null || market == null) return `<span>–</span>`;
+    const d = (modelProb * 100) - market;
+    return `<span style="color:${d >= 0 ? "var(--green, #3ddc97)" : "var(--red, #ff6b6b)"};" title="Model minus market, in percentage points">${d >= 0 ? "+" : ""}${d.toFixed(1)}</span>`;
+  }
+
+  function tennisBetCellsHtml(key, c, withYn) {
+    const { row, st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const marketVal = market != null ? market : "";
+    const live = !st.manual && market != null;
+    const wagerCell = st.useKelly
+      ? `<span>$${wager.toFixed(2)}</span>`
+      : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateTennisField(${k},'manualWager',this.value)" />`;
+    const trackDisabled = !row.ticker ? "disabled title=\"No Kalshi market for this line - can't be tracked\"" : "";
+    return {
+      yn: withYn ? `<select onchange="updateTennisField(${k},'yn',this.value)">
+          <option value="yes" ${st.yn === "yes" ? "selected" : ""}>Over</option>
+          <option value="no" ${st.yn === "no" ? "selected" : ""}>Under</option></select>` : "",
+      rest: `
+        <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Live Kalshi price - type to override, clear to go back to live" : "Your own price - clear to go back to the live Kalshi price"}" onchange="updateTennisField(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateTennisField(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} ${trackDisabled} onchange="toggleTennisTrack(${k},this.checked)" />`,
+    };
+  }
+
+  function tennisMlRowHtml(ev, who) {
+    const p = ev.players[who];
+    const key = `${ev.event}|ml|${who}`;
+    const ml = ev.moneyline;
+    tennisRows[key] = { isMl: true, ticker: ml.kalshi && ml.kalshi[who] ? ml.kalshi[who].ticker : null, kalshi: ml.kalshi ? ml.kalshi[who] : null,
+      modelYes: ml.model[who], betType: "tennis_ml", betName: `${p.name} to win`, matchup: `${ev.players.a.name} vs ${ev.players.b.name}`, line: null };
+    const c = tennisCalc(key);
+    const cells = tennisBetCellsHtml(key, c, false);
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${TENNIS_ML_COLS}; padding:4px 0;">
+        <span style="font-size:1rem; font-weight:600;">${p.name}</span>
+        <span class="prob-yes" title="Model win probability (serve/return simulator blended with Elo)">${Math.round(ml.model[who] * 100)}%</span>
+        ${tennisKalshiCell(tennisRows[key], c.st)}
+        ${cells.rest}
+      </div>`;
+  }
+
+  function tennisOuHeader(first) {
+    return `<div class="hits-batter-header" style="display:grid; grid-template-columns: ${TENNIS_OU_COLS}; gap:4px; margin-top:8px;">
+      <span style="text-align:left;">${first}</span><span>Over</span><span>Under</span><span>Y/N</span><span>Kalshi</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function tennisOuRowHtml(ev, kind, r, idx) {
+    const key = `${ev.event}|${kind}|${r.line}`;
+    const matchup = `${ev.players.a.name} vs ${ev.players.b.name}`;
+    tennisRows[key] = { isMl: false, ticker: r.kalshi ? r.kalshi.ticker : null, kalshi: r.kalshi || null, modelYes: r.model_over, line: r.line,
+      betType: kind === "games" ? "tennis_games" : "tennis_sets", betName: `${matchup} Total ${kind === "games" ? "Games" : "Sets"}`, matchup };
+    const c = tennisCalc(key);
+    const cells = tennisBetCellsHtml(key, c, true);
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${TENNIS_OU_COLS};">
+        <span style="font-size:0.85rem;">${r.line}${r.kalshi ? "" : ` <span class="hits-index" title="Kalshi has no market on this line - model only, enter your own price">model</span>`}</span>
+        <span class="prob-yes">${Math.round(r.model_over * 100)}%</span>
+        <span class="prob-no">${Math.round((1 - r.model_over) * 100)}%</span>
+        ${cells.yn}
+        ${tennisKalshiCell(tennisRows[key], c.st)}
+        ${cells.rest}
+      </div>`;
+  }
+
+  function tennisEventCardHtml(ev) {
+    const a = ev.players.a, b = ev.players.b;
+    const when = ev.scheduled_start ? formatKickoffPacific(ev.scheduled_start) : (ev.date ? ev.date.join("-") : "Time TBD");
+    const inPlay = ev.maybe_in_play ? ` · <span style="color:#e0a050;" title="The scheduled start has passed - Kalshi prices may be in-play, but the model is pre-match">prices may be in-play</span>` : "";
+    const thin = [a, b].filter(p => p.rated_matches != null && p.rated_matches < 25).map(p => p.name);
+    const thinNote = thin.length ? ` · <span style="color:#e0a050;" title="${thin.join(", ")}: fewer than 25 rated matches - the model is less reliable">thin history</span>` : "";
+    const g = ev.games, s = ev.sets;
+    const gRungs = g.kalshi_rungs.length ? g.kalshi_rungs : g.model_only_lines.map(x => ({ line: x.line, model_over: x.model_over, kalshi: null }));
+    const sRungs = s.kalshi_rungs.length ? s.kalshi_rungs : s.model_only_lines.map(x => ({ line: x.line, model_over: x.model_over, kalshi: null }));
+    const scores = Object.entries(s.score_probabilities || {}).filter(([, v]) => v >= 0.005)
+      .map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(" · ");
+    return `
+      <div class="card">
+        <div class="meta">${when} · ${ev.tournament || "ATP"} · ${ev.surface} · Best of ${ev.best_of}${inPlay}${thinNote}</div>
+        <div class="hits-batter-header" style="display:grid; grid-template-columns: ${TENNIS_ML_COLS}; gap:4px; margin-top:6px;">
+          <span style="text-align:left;">Moneyline</span><span>Win</span><span>Kalshi</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
+        </div>
+        ${tennisMlRowHtml(ev, "a")}
+        ${tennisMlRowHtml(ev, "b")}
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
+          <div class="meta">Total games — model expects ${g.expected.toFixed(1)} (fair line ${g.fair_line})</div>
+          ${tennisOuHeader("Games")}
+          ${gRungs.map((r, i) => tennisOuRowHtml(ev, "games", r, i)).join("")}
+        </div>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
+          <div class="meta">Total sets${scores ? " — set scores: " + scores : ""}</div>
+          ${tennisOuHeader("Sets")}
+          ${sRungs.map((r, i) => tennisOuRowHtml(ev, "sets", r, i)).join("")}
+        </div>
+        ${ev.warnings && ev.warnings.length ? `<div class="settings-hint" style="margin-top:8px; font-size:0.7rem;">${ev.warnings.join(" · ")}</div>` : ""}
+      </div>`;
+  }
+
+  function tennisUnratedHtml(list) {
+    const rows = list.map(ev => {
+      const names = ev.players ? `${ev.players.a.name} vs ${ev.players.b.name}` : ev.event;
+      const raw = ev.markets && ev.markets.moneyline ? ev.markets.moneyline.map(m => `${m.player || "?"} ${tennisCents(m.yes_bid)}/${tennisCents(m.yes_ask)}`).join(" · ") : "";
+      return `<div class="settings-hint" style="margin:2px 0;"><b>${names}</b> — ${ev.reason || "not modelled"}${raw ? ` <span class="hits-index">Kalshi: ${raw}</span>` : ""}</div>`;
+    }).join("");
+    return `<div style="margin-top:14px;"><div class="meta">Not modelled (${list.length}) — qualifiers / players without ATP-level history</div>${rows}</div>`;
+  }
+
+  function renderTennisFromCache() {
+    const container = document.getElementById("tennis-content");
+    if (!container || !tennisData) return;
+    const statusEl = document.getElementById("tennis-status");
+    const d = tennisData;
+    if (d.status === "error") {
+      container.innerHTML = d.needs_bootstrap
+        ? `<div class="settings-hint">Building the tennis ratings - the first start downloads the ATP results (about a minute). This page will fill in by itself.</div>`
+        : `<div class="settings-hint">${(d.warnings || ["Tennis data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    const dateKey = ev => (ev.date ? ev.date.map((x, i) => i === 0 ? x : String(x).padStart(2, "0")).join("-") : "");
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (tennisDateChoice === null) {
+      const today = todayIso();
+      tennisDateChoice = dates.find(x => x >= today) || "";
+    }
+    const sel = document.getElementById("tennis-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All open matches (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === tennisDateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      if (!tennisDateChoice) sel.value = "";
+    }
+    const shown = tennisDateChoice ? all.filter(e => dateKey(e) === tennisDateChoice) : all;
+    const ok = shown.filter(e => e.status === "ok");
+    const rest = shown.filter(e => e.status !== "ok");
+    tennisRows = {};
+    if (statusEl) {
+      const age = d.kalshi_age_minutes != null ? `Kalshi prices ${d.kalshi_age_minutes < 1.5 ? "live (<2 min old)" : Math.round(d.kalshi_age_minutes) + " min old"}` : "";
+      const through = d.data_through ? `ATP results through ${String(d.data_through).replace(/(\d{4})(\d\d)(\d\d)/, "$1-$2-$3")}` : "";
+      const warns = (d.warnings || []).filter(w => !/^RESEARCH DISPLAY|^ATP results end/.test(w));
+      statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
+    }
+    if (!ok.length && !rest.length) {
+      container.innerHTML = `<div class="settings-hint">No ATP matches with open Kalshi markets${tennisDateChoice ? " on " + tennisDateChoice : ""} right now.</div>`;
+      return;
+    }
+    container.innerHTML = `
+      ${ok.length ? `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(700px, 1fr));">${ok.map(tennisEventCardHtml).join("")}</div>` : `<div class="settings-hint">None of these matches could be modelled yet.</div>`}
+      ${rest.length ? (tennisShowUnrated ? tennisUnratedHtml(rest) : `<div class="settings-hint" style="margin-top:10px;">${rest.length} match(es) not modelled (qualifiers / no ATP history) - tick "Show not-modelled" to list them.</div>`) : ""}`;
+  }
+
+  async function loadTennisTab(silent) {
+    const container = document.getElementById("tennis-content");
+    if (!silent && !tennisData) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/tennis/slate`);
+      tennisData = await res.json();
+      renderTennisFromCache();
+    } catch (e) {
+      if (!silent) container.innerHTML = `<div class="settings-hint">Couldn't load tennis matches.</div>`;
+    }
+  }
+
+  // Kalshi prices move constantly: re-read every 30 s while the Tennis tab is open (skipped while the viewer is typing).
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-tennis");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadTennisTab(true);
+  }, 30000);
 
   // ---- NHL Goalie Saves - ported from core_nhl_goalie_saves.py, same
   // log5-style index-multiplication pattern as CFB/NFL Team Points, plus

@@ -112,6 +112,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("NHL goals service failed to start")
     try:
+        import tennis_service
+        tennis_service.start_background()
+    except Exception:
+        # tennis is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("Tennis service failed to start")
+    try:
         import nfl_fantasy_service
         nfl_fantasy_service.start_background()
     except Exception:
@@ -1837,6 +1844,49 @@ def nhl_goals_health():
     return nhl_goals_service.get_service().health()
 
 
+@app.get("/api/tennis/slate")
+def tennis_slate(date: str | None = None):
+    """Every open Kalshi ATP match (moneyline, total games, total sets) with the model's probabilities next to Kalshi's live
+    bid/ask. date=YYYY-MM-DD filters to one day (Kalshi's own match date); omit for everything currently open. See
+    tennis_service.py / tennis_platform.py."""
+    import tennis_service
+    return tennis_service.get_service().slate(date)
+
+
+@app.get("/api/tennis/health")
+def tennis_health():
+    import tennis_service
+    return tennis_service.get_service().health()
+
+
+@app.get("/api/tennis/scorecard")
+def tennis_scorecard():
+    """The platform's own live record: last pre-match prediction for every settled Kalshi market vs Kalshi's price."""
+    import tennis_service
+    return tennis_service.get_service().get_scorecard()
+
+
+@app.get("/api/tennis/predict")
+def tennis_predict(p1: str, p2: str, surface: str = "Hard", best_of: int = 3, lines: str | None = None):
+    import tennis_service
+    ls = [float(x) for x in lines.split(",") if x.strip()] if lines else None
+    return tennis_service.get_service().predict(p1, p2, surface, best_of, ls)
+
+
+@app.get("/api/admin/refresh-tennis")
+def refresh_tennis(what: str = "kalshi"):
+    """Manual trigger: what = data | kalshi | results | bootstrap."""
+    import tennis_service
+    svc = tennis_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_kalshi()
+
+
 @app.get("/api/nba/health")
 def nba_health():
     import nba_props_service
@@ -2132,7 +2182,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,
