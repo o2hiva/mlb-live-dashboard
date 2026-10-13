@@ -132,6 +132,7 @@ async def lifespan(app: FastAPI):
         shadow_scorecard.register(shadow_scorecard.make_nfl_adapter(lambda _db: nfl_points_games(_db)))
         shadow_scorecard.register(shadow_scorecard.make_npb_adapter(_npb_shadow_rows))
         shadow_scorecard.register(shadow_scorecard.make_nba_adapter(_nba_shadow_payloads))
+        shadow_scorecard.register(shadow_scorecard.make_tennis_adapter(_tennis_shadow_events, _tennis_shadow_result))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -715,6 +716,17 @@ def _npb_shadow_rows(db):
                         "p_yrfi": g.get("p_yrfi"), "heuristic": g.get("starters_are_heuristic"),
                         "home": g["home_team"], "away": g["away_team"]})
     return out
+
+
+def _tennis_shadow_events(db):
+    """Open Kalshi ATP matches with model + prices (the same slate the Tennis tab shows)."""
+    import tennis_service
+    return (tennis_service.get_service().slate() or {}).get("events") or []
+
+
+def _tennis_shadow_result(ticker):
+    import tennis_service
+    return tennis_service.get_service().final_market_result(ticker)
 
 
 def _nba_shadow_payloads(db):

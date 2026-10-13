@@ -492,6 +492,11 @@
   </div>
 
   <div id="tab-content-tennis" style="display:none;">
+    <div class="tabs">
+      <span id="tennis-view-btn-games" class="tab-btn active" onclick="switchSportView('tennis','games')">Matches</span>
+      <span id="tennis-view-btn-scorecard" class="tab-btn" onclick="switchSportView('tennis','scorecard')">Scorecard</span>
+    </div>
+    <div id="tennis-games-wrap">
     <div class="sub">ATP tennis - every match Kalshi currently lists, with the model's moneyline, total-games and total-sets probabilities next to Kalshi's live prices. Market is pre-filled with the Kalshi ask for the side you bet (Over = YES ask, Under = NO ask); type your own price to override it. Tracked bets are graded automatically when Kalshi settles the market. Research display: against Kalshi's prices this model has not shown a proven edge, so treat Edge as a question, not an answer.</div>
     <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
       <div>
@@ -504,6 +509,12 @@
     </div>
     <div id="tennis-status" class="settings-hint"></div>
     <div id="tennis-content">Loading...</div>
+    </div>
+    <div id="tennis-scorecard-wrap" style="display:none;">
+      <div class="sub">Tennis Shadow Scorecard - the model's moneyline (favourite wins), total-games and total-sets probabilities are saved automatically before each match starts, for every Kalshi line, and graded from Kalshi's own settlement. No bets are placed. Judge it after 100+ graded markets.</div>
+      <button class="tab-btn" onclick="loadShadowScorecard('tennis','shadow-scorecard-tennis',true)" style="margin-bottom:10px;">Refresh</button>
+      <div id="shadow-scorecard-tennis"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">

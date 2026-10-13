@@ -873,3 +873,73 @@ def make_nba_adapter(get_payloads: Callable) -> Adapter:
                    markets={"pts": "Points (at least N)", "reb": "Rebounds (at least N)", "ast": "Assists (at least N)",
                             "pra": "Pts+Reb+Ast (at least N)"}, line_markets=set(),
                    notes={"team_pts": "Lines sit at the projection -1, 0, +1 steps (2 pts / 1 reb / 1 ast / 3 PRA). Player props only. Players who did not play are voided. Measures honesty, not betting profit."})
+
+
+# ====================================================================== Tennis adapter
+def tennis_collect_from_events(events: list) -> list:
+    """events = the tennis slate's `events` list. One record per match: the favourite's moneyline probability plus every Kalshi
+    total-games / total-sets rung (so each logged prediction is a real, settleable Kalshi market, graded by its ticker)."""
+    out = []
+    for ev in events or []:
+        if ev.get("status") != "ok" or ev.get("maybe_in_play") or not ev.get("scheduled_start"):
+            continue
+        try:
+            ml = ev["moneyline"]
+            who = "a" if ml["model"]["a"] >= 0.5 else "b"
+            k = (ml.get("kalshi") or {}).get(who) or {}
+            seg_bo = f"best of {ev.get('best_of')}"
+            items = []
+            if k.get("ticker"):
+                items.append({"m": "ml", "p": round(float(ml["model"][who]), 5), "tk": k["ticker"], "seg": ev.get("surface")})
+            for kind, rungs in (("games", ev["games"]["kalshi_rungs"]), ("sets", ev["sets"]["kalshi_rungs"])):
+                for r in rungs:
+                    tk = (r.get("kalshi") or {}).get("ticker")
+                    if tk and r.get("model_over") is not None:
+                        items.append({"m": kind, "p": round(float(r["model_over"]), 5), "line": r["line"], "tk": tk, "seg": seg_bo})
+            if not items:
+                continue
+            start = str(ev["scheduled_start"])[:19]
+            out.append({"id": str(ev["event"]), "start": start, "shard": start[:7],
+                        "label": f"{ev['players']['a']['name']} vs {ev['players']['b']['name']}", "ctx": {}, "items": items})
+        except Exception:
+            continue
+    return out
+
+
+def make_tennis_adapter(get_events: Callable, get_result: Callable) -> Adapter:
+    """get_events(db) -> slate events; get_result(ticker) -> 'yes' | 'no' | 'void' | None (Kalshi's settled result)."""
+    def collect(db):
+        return tennis_collect_from_events(get_events(db))
+
+    def settle(db, recs):
+        out = {}
+        now = datetime.utcnow()
+        for r in recs:
+            start = _parse_utc(r.get("start")) or now
+            age = now - start
+            if age.total_seconds() < 90 * 60:
+                continue                                    # a match cannot be over yet
+            res = {}
+            for it in r.get("items", []):
+                try:
+                    v = get_result(it["tk"])
+                except Exception:
+                    v = None
+                if v in ("yes", "no"):
+                    res[it["tk"]] = v
+            ml_done = any(it["m"] == "ml" and it["tk"] in res for it in r.get("items", []))
+            if ml_done or (res and age.days >= 1):
+                out[r["id"]] = {"r": res}
+            elif age.days > 3:
+                out[r["id"]] = {"void": True}                # never settled: postponed / cancelled
+        return out
+
+    def grade(item, result, rec):
+        v = (result.get("r") or {}).get(item.get("tk"))
+        return None if v is None else int(v == "yes")
+
+    return Adapter(sport="tennis", label="Tennis", collect=collect, settle=settle, grade=grade,
+                   markets={"ml": "Moneyline - the favourite wins", "games": "Total games Over (Kalshi lines)",
+                            "sets": "Total sets Over (Kalshi lines)"}, line_markets=set(),
+                   notes={"team_pts": "ATP only. Every Kalshi line is logged before the scheduled start and graded from Kalshi's own settlement. "
+                                      "Against Kalshi's prices the model has not shown an edge in backtests: this card is the live check. Retired / walkover matches are graded the way Kalshi settles them."})
