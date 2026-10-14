@@ -409,8 +409,10 @@
           <input id="cfb-week-input" type="number" step="1" min="1" max="15" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
         </div>
         <span class="hits-toggle" onclick="refreshCfbStats()" style="padding:6px 14px;">Refresh Stats</span>
+        <label class="settings-hint" style="margin:0;"><input type="checkbox" onchange="setCfbKalshiFee(this.checked)" /> Include Kalshi taker fee in Market</label>
       </div>
       <div id="cfb-refresh-status" class="settings-hint"></div>
+      <div id="cfb-kalshi-status" class="settings-hint"></div>
 
       <div id="cfb-content">Loading...</div>
     </div>
@@ -4824,6 +4826,7 @@
 
   function updateCfbTotalThreshold(gameId, value) {
     const state = getCfbTotalBetState(gameId);
+    state.lineTouched = true;
     state.threshold = Math.max(1, parseInt(value, 10) || 50);
     renderCfbFromCache();
   }
@@ -4878,6 +4881,7 @@
 
   function updateCfbThreshold(team, value) {
     const state = getCfbBetState(team);
+    state.lineTouched = true;
     state.threshold = Math.max(1, parseInt(value, 10) || 24);
     renderCfbFromCache();
   }
@@ -4932,12 +4936,109 @@
 
   let cfbDataCache = null;
 
+  // ---- Kalshi live prices for the CFB markets (server: cfb_kalshi.py, /api/cfb/kalshi). Every Market box that is left empty is
+  // filled with Kalshi's ask for the side being bet (Yes = YES ask, No = NO ask); type your own % to override it, clear the box to
+  // go back to live. Lines default to the nearest line Kalshi actually lists, so a price is there; change the line and the price
+  // follows whenever Kalshi lists it. ----
+  let cfbKalshi = null;
+  let cfbKalshiFee = false;
+
+  function cfbK(gameId) { return cfbKalshi && cfbKalshi.games ? (cfbKalshi.games[gameId] || null) : null; }
+
+  function cfbKPct(v, side) {
+    if (!v) return null;
+    const p = side === "yes" ? v.yes_ask : v.no_ask;
+    if (p == null || p <= 0 || p >= 1) return null;
+    const q = cfbKalshiFee ? p + 0.07 * p * (1 - p) : p;
+    return Math.round(q * 1000) / 10;
+  }
+
+  function cfbKMoneyline(gameId, side) {
+    const k = cfbK(gameId);
+    return k && k.ml ? cfbKPct(k.ml[side], "yes") : null;
+  }
+
+  // Dashboard "line N" means at least N points = Kalshi's "over N-0.5".
+  function cfbKTotal(gameId, line, yn) {
+    const k = cfbK(gameId);
+    const r = k && k.total ? k.total.find(x => Math.abs(x.strike - (line - 0.5)) < 0.01) : null;
+    return cfbKPct(r, yn);
+  }
+
+  function cfbKTeamTotal(gameId, side, line, yn) {
+    const k = cfbK(gameId);
+    const rows = k && k.team_total ? k.team_total[side] : null;
+    const r = rows ? rows.find(x => Math.abs(x.strike - (line - 0.5)) < 0.01) : null;
+    return cfbKPct(r, yn);
+  }
+
+  // Team spread s (own perspective, negative = favourite). Kalshi lists "TEAM wins by over K": a favourite -K covers on YES; an
+  // underdog +K covers when the favourite does NOT win by over K, i.e. the favourite's NO.
+  function cfbKSpread(gameId, side, s) {
+    const k = cfbK(gameId);
+    if (!k || !k.spread || s == null || s === 0) return null;
+    if (s < 0) {
+      const r = k.spread.find(x => x.team === side && Math.abs(x.strike + s) < 0.01);
+      if (r) return cfbKPct(r, "yes");
+      return null;
+    }
+    const opp = side === "home" ? "away" : "home";
+    const r = k.spread.find(x => x.team === opp && Math.abs(x.strike - s) < 0.01);
+    return r ? cfbKPct(r, "no") : null;
+  }
+
+  // Home-perspective spreads Kalshi has a market for.
+  function cfbKSpreadCandidates(gameId) {
+    const k = cfbK(gameId);
+    if (!k || !k.spread) return [];
+    return k.spread.map(r => ({ home: r.team === "home" ? -r.strike : r.strike, mid: r.yes_ask != null && r.yes_bid != null ? (r.yes_ask + r.yes_bid) / 2 : null }));
+  }
+
+  // Move an untouched line to the Kalshi line nearest to it (strikes are x.5: "at least ceil(strike)").
+  function cfbAutoLine(state, strikes) {
+    if (state.lineTouched || !strikes || !strikes.length) return;
+    let best = null;
+    for (const k of strikes) if (best == null || Math.abs(k + 0.5 - state.threshold) < Math.abs(best + 0.5 - state.threshold)) best = k;
+    if (best != null) state.threshold = Math.ceil(best);
+  }
+
+  function cfbLiveStyle(state, mkt) {
+    return state.market == null && mkt != null
+      ? `style="border-color:rgba(61,220,151,0.5);" title="Live Kalshi price - type to override, clear to go back to live"` : "";
+  }
+
+  async function loadCfbKalshi() {
+    try {
+      const res = await fetch(`${API_BASE}/api/cfb/kalshi`);
+      cfbKalshi = await res.json();
+      const el = document.getElementById("cfb-kalshi-status");
+      if (el) {
+        el.textContent = cfbKalshi.status === "ok"
+          ? `Kalshi: ${cfbKalshi.n_games_priced} game(s) priced, ${cfbKalshi.markets} markets, ${cfbKalshi.age_minutes < 1.5 ? "live" : Math.round(cfbKalshi.age_minutes) + " min old"}${(cfbKalshi.warnings || []).length ? " · " + cfbKalshi.warnings.join(" · ") : ""}`
+          : `Kalshi: ${((cfbKalshi.warnings || [])[0]) || "unavailable"}`;
+      }
+      renderCfbFromCache();
+    } catch (e) { /* prices are optional - the manual Market boxes still work */ }
+  }
+
+  function setCfbKalshiFee(checked) { cfbKalshiFee = !!checked; renderCfbFromCache(); }
+
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-cfb");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadCfbKalshi();
+  }, 30000);
+
+
   async function loadCfbTab() {
     const container = document.getElementById("cfb-content");
     container.innerHTML = `<div class="settings-hint">Loading...</div>`;
     try {
       const res = await fetch(`${API_BASE}/api/cfb/games`);
       cfbDataCache = await res.json();
+      loadCfbKalshi();
       if (cfbDataCache.season != null) document.getElementById("cfb-season-input").value = cfbDataCache.season;
       if (cfbDataCache.week != null) document.getElementById("cfb-week-input").value = cfbDataCache.week;
       renderCfbFromCache();
@@ -5041,20 +5142,21 @@
 
   function cfbMoneylineBetRowCellsHtml(gameId, side, teamName, winPct) {
     const state = getCfbMoneylineBetState(gameId, side);
+    const mkt = state.market != null ? state.market : cfbKMoneyline(gameId, side);
     const modelProb = winPct != null ? winPct / 100 : null;
 
-    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-    const profit = profitIfWon(wager, state.market);
-    const marketVal = state.market != null ? state.market : "";
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, mkt) : state.manualWager;
+    const profit = profitIfWon(wager, mkt);
+    const marketVal = mkt != null ? mkt : "";
 
     const wagerHtml = state.useKelly
       ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbMoneylineBetField(${gameId},'${side}','manualWager',this.value)" />`;
 
-    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${modelProb},${mkt},${wager},${profit}`;
 
     return `
-      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbMoneylineBetField(${gameId},'${side}','market',this.value)" />
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" ${cfbLiveStyle(state, mkt)} onchange="updateCfbMoneylineBetField(${gameId},'${side}','market',this.value)" />
       <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbMoneylineBetField(${gameId},'${side}','useKelly',this.checked)" />
       ${wagerHtml}
       <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
@@ -5181,20 +5283,21 @@
 
   function cfbSpreadBetRowCellsHtml(gameId, side, teamName, spreadVal, coverPct) {
     const state = getCfbSpreadBetState(gameId, side);
+    const mkt = state.market != null ? state.market : cfbKSpread(gameId, side, spreadVal);
     const modelProb = coverPct != null ? coverPct / 100 : null;
 
-    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-    const profit = profitIfWon(wager, state.market);
-    const marketVal = state.market != null ? state.market : "";
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, mkt) : state.manualWager;
+    const profit = profitIfWon(wager, mkt);
+    const marketVal = mkt != null ? mkt : "";
 
     const wagerHtml = state.useKelly
       ? `<span style="text-align:center;">$${wager.toFixed(2)}</span>`
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbSpreadBetField(${gameId},'${side}','manualWager',this.value)" />`;
 
-    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${spreadVal},${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `${gameId},'${side}',this.checked,'${(teamName || "").replace(/'/g, "\\'")}',${spreadVal},${modelProb},${mkt},${wager},${profit}`;
 
     return `
-      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbSpreadBetField(${gameId},'${side}','market',this.value)" />
+      <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" ${cfbLiveStyle(state, mkt)} onchange="updateCfbSpreadBetField(${gameId},'${side}','market',this.value)" />
       <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbSpreadBetField(${gameId},'${side}','useKelly',this.checked)" />
       ${wagerHtml}
       <span style="text-align:center;">${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
@@ -5265,8 +5368,17 @@
     // side carries it; a user override replaces it entirely once set.
     const defaultHomeSpread = homeRow && homeRow.spread != null ? homeRow.spread
       : (awayRow && awayRow.spread != null ? -awayRow.spread : null);
+    // Kalshi: default to the nearest spread Kalshi lists (so a live price exists); with no posted line, the most balanced Kalshi market.
+    let kalshiHomeSpread = null;
+    {
+      const cands = cfbKSpreadCandidates(gameId);
+      if (cands.length) {
+        const key = c => defaultHomeSpread != null ? Math.abs(c.home - defaultHomeSpread) : (c.mid != null ? Math.abs(c.mid - 0.5) : Math.abs(c.home));
+        kalshiHomeSpread = cands.reduce((b, c) => (b == null || key(c) < key(b)) ? c : b, null).home;
+      }
+    }
     const override = cfbSpreadOverride[gameId];
-    const effectiveHomeSpread = override !== undefined && override !== null ? override : defaultHomeSpread;
+    const effectiveHomeSpread = override !== undefined && override !== null ? override : (kalshiHomeSpread != null ? kalshiHomeSpread : defaultHomeSpread);
     const isAdjusted = override !== undefined && override !== null;
 
     const homeCoverProb = dataTrusted ? cfbSpreadCoverProbability(homePredicted, awayPredicted, effectiveHomeSpread, neutralSite) : null;
@@ -5330,18 +5442,20 @@
     }
 
     const state = getCfbBetState(row.team, Math.max(1, Math.round(row.predicted_mean)));   // default line = the model's own prediction
+    { const _k = cfbK(row.game_id); cfbAutoLine(state, _k && _k.team_total ? _k.team_total[side].map(r => r.strike) : []); }
+    const mkt = state.market != null ? state.market : cfbKTeamTotal(row.game_id, side, state.threshold, state.yn);
     const line = state.threshold;
     const yesPct = probCfbPointsAtLeast(row.predicted_mean, line) * 100;
     const noPct = 100 - yesPct;
     const modelPct = state.yn === "yes" ? yesPct : noPct;
     const modelProb = modelPct != null ? modelPct / 100 : null;
-    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-    const profit = profitIfWon(wager, state.market);
-    const marketVal = state.market != null ? state.market : "";
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, mkt) : state.manualWager;
+    const profit = profitIfWon(wager, mkt);
+    const marketVal = mkt != null ? mkt : "";
     const wagerHtml = state.useKelly
       ? `<span>$${wager.toFixed(2)}</span>`
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbBetField('${row.team}','manualWager',this.value)" />`;
-    const trackArgs = `'${row.team}',this.checked,'${(row.opponent || "").replace(/'/g, "\\'")}','${side}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `'${row.team}',this.checked,'${(row.opponent || "").replace(/'/g, "\\'")}','${side}',${line},${modelProb},${mkt},${wager},${profit}`;
     const teamIndexStr = row.team_index != null ? row.team_index.toFixed(2) : "—";
     const oppIndexStr = row.opp_index != null ? row.opp_index.toFixed(2) : "—";
 
@@ -5372,7 +5486,7 @@
             <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
             <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
           </select>
-          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbBetField('${row.team}','market',this.value)" />
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" ${cfbLiveStyle(state, mkt)} onchange="updateCfbBetField('${row.team}','market',this.value)" />
           <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbBetField('${row.team}','useKelly',this.checked)" />
           ${wagerHtml}
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
@@ -5402,18 +5516,20 @@
     const postedTotal = homeRow.posted_total != null ? homeRow.posted_total : awayRow.posted_total;
     // default line = posted sportsbook total as an "over" line (at least floor(total)+1); else the model's own total
     const state = getCfbTotalBetState(gameId, postedTotal != null ? Math.floor(postedTotal) + 1 : Math.max(1, Math.round(totalMean)));
+    { const _k = cfbK(gameId); cfbAutoLine(state, _k && _k.total ? _k.total.map(r => r.strike) : []); }
+    const mkt = state.market != null ? state.market : cfbKTotal(gameId, state.threshold, state.yn);
     const line = state.threshold;
     const yesPct = probCfbTotalAtLeast(totalMean, line) * 100;
     const noPct = 100 - yesPct;
     const modelPct = state.yn === "yes" ? yesPct : noPct;
     const modelProb = modelPct != null ? modelPct / 100 : null;
-    const wager = state.useKelly ? kellyWagerAmount(modelProb, state.market) : state.manualWager;
-    const profit = profitIfWon(wager, state.market);
-    const marketVal = state.market != null ? state.market : "";
+    const wager = state.useKelly ? kellyWagerAmount(modelProb, mkt) : state.manualWager;
+    const profit = profitIfWon(wager, mkt);
+    const marketVal = mkt != null ? mkt : "";
     const wagerHtml = state.useKelly
       ? `<span>$${wager.toFixed(2)}</span>`
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateCfbTotalBetField(${gameId},'manualWager',this.value)" />`;
-    const trackArgs = `${gameId},this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${wager},${profit}`;
+    const trackArgs = `${gameId},this.checked,'${(homeRow.team || "").replace(/'/g, "\\'")}','${(awayRow.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${mkt},${wager},${profit}`;
 
     return `
       <div>
@@ -5432,7 +5548,7 @@
             <option value="yes" ${state.yn === "yes" ? "selected" : ""}>Yes</option>
             <option value="no" ${state.yn === "no" ? "selected" : ""}>No</option>
           </select>
-          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateCfbTotalBetField(${gameId},'market',this.value)" />
+          <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" ${cfbLiveStyle(state, mkt)} onchange="updateCfbTotalBetField(${gameId},'market',this.value)" />
           <input type="checkbox" ${state.useKelly ? "checked" : ""} onchange="updateCfbTotalBetField(${gameId},'useKelly',this.checked)" />
           ${wagerHtml}
           <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>

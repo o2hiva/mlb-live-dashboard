@@ -112,6 +112,12 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("NHL goals service failed to start")
     try:
+        import cfb_kalshi
+        cfb_kalshi.start_background()
+    except Exception:
+        import logging
+        logging.getLogger("main").exception("CFB Kalshi service failed to start")
+    try:
         import tennis_service
         tennis_service.start_background()
     except Exception:
@@ -1854,6 +1860,36 @@ def nhl_shadow_scorecard(log_now: bool = False):
 def nhl_goals_health():
     import nhl_goals_service
     return nhl_goals_service.get_service().health()
+
+
+def _cfb_games_for_kalshi(db):
+    from models_db import CfbGame
+    out = {}
+    for g in db.query(CfbGame).all():
+        e = out.setdefault(g.game_id, {"game_id": g.game_id, "home": None, "away": None, "start_utc": g.start_date_utc})
+        e["home" if g.is_home else "away"] = g.team
+    return [e for e in out.values() if e["home"] and e["away"]]
+
+
+@app.get("/api/cfb/kalshi")
+def cfb_kalshi_prices(db: Session = Depends(get_db)):
+    """Live Kalshi prices for this week's CFB games, keyed by CFBD game_id: moneyline per side, spread rungs (team + strike),
+    game-total rungs and team-total rungs. See cfb_kalshi.py."""
+    import cfb_kalshi
+    return cfb_kalshi.get_service().payload(_cfb_games_for_kalshi(db))
+
+
+@app.get("/api/cfb/kalshi/debug")
+def cfb_kalshi_debug(db: Session = Depends(get_db)):
+    """What the Kalshi pull found: series, counts, sample market titles, games priced, anything that could not be matched."""
+    import cfb_kalshi
+    return cfb_kalshi.get_service().debug(_cfb_games_for_kalshi(db))
+
+
+@app.get("/api/admin/refresh-cfb-kalshi")
+def refresh_cfb_kalshi():
+    import cfb_kalshi
+    return cfb_kalshi.get_service().refresh()
 
 
 @app.get("/api/tennis/slate")
