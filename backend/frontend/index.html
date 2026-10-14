@@ -123,6 +123,8 @@
   .bybets-sortable { cursor: pointer; user-select: none; }
   .bybets-sortable:hover { color: var(--text); }
   .bybets-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .edges-row { grid-template-columns: 54px 100px 160px 150px 150px 56px 46px 38px 38px 52px 58px 36px 66px 54px 46px; }
+  #edges-content { overflow-x: auto; }
   .nfl-row {
     display: grid; grid-template-columns: 150px 140px 150px 60px 92px 46px 38px 38px 52px 58px 36px 66px 54px 46px;
     gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8rem;
@@ -190,6 +192,7 @@
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
     <span id="tab-btn-tennis" class="tab-btn" onclick="switchTab('tennis')">Tennis</span>
     <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+    <span id="tab-btn-edges" class="tab-btn" onclick="switchTab('edges')">Edges</span>
   </div>
 
   <div id="tab-content-mlb">
@@ -517,6 +520,11 @@
       <button class="tab-btn" onclick="loadShadowScorecard('tennis','shadow-scorecard-tennis',true)" style="margin-bottom:10px;">Refresh</button>
       <div id="shadow-scorecard-tennis"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
+  </div>
+
+  <div id="tab-content-edges" style="display:none;">
+    <div class="sub">Every bet with an edge (model probability minus market price, live Kalshi by default), highest edge first. Same Yes / No, Market, Kelly, Wager, Profit and Track controls as each sport's tab.</div>
+    <div id="edges-content"><div class="settings-hint">Loading...</div></div>
   </div>
 
   <div id="tab-content-bettracker" style="display:none;">
@@ -873,8 +881,11 @@
       hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
     return liveMarket(hitsBetState[gamePk][key], s => {
-      const nm = kMlbBatter(hitsDataCache, gamePk, side, batterId);
+      const nm = kMlbBatter(hitsDataCache, gamePk, side, batterId, "hits");
       return nm ? kPlayer("mlb", "hit", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    }, () => {
+      const nm = kMlbBatter(hitsDataCache, gamePk, side, batterId, "hit");
+      return nm ? { ns: kNs(kPlayerMkts("mlb", "hit", nm, kMlbDate(gamePk))), atLeast: kAtLeast, toThr: n => n } : null;
     });
   }
 
@@ -1447,8 +1458,11 @@
       hrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
     return liveMarket(hrBetState[gamePk][key], s => {
-      const nm = kMlbBatter(hrDataCache, gamePk, side, batterId);
+      const nm = kMlbBatter(hrDataCache, gamePk, side, batterId, "hr");
       return nm ? kPlayer("mlb", "hr", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    }, () => {
+      const nm = kMlbBatter(hrDataCache, gamePk, side, batterId, "hr");
+      return nm ? { ns: kNs(kPlayerMkts("mlb", "hr", nm, kMlbDate(gamePk))), atLeast: kAtLeast, toThr: n => n } : null;
     });
   }
 
@@ -2118,6 +2132,9 @@
     return liveMarket(kBetState[gamePk][side], s => {
       const nm = kMlbPitcher(gamePk, side);
       return nm ? kPlayer("mlb", "ks", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    }, () => {
+      const nm = kMlbPitcher(gamePk, side);
+      return nm ? { ns: kNs(kPlayerMkts("mlb", "ks", nm, kMlbDate(gamePk))), atLeast: kAtLeast, toThr: n => n } : null;
     });
   }
 
@@ -2262,6 +2279,9 @@
     return liveMarket(kpoBetState[gamePk][side], s => {
       const nm = kMlbPitcher(gamePk, side);
       return nm ? kPlayer("mlb", "ks", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    }, () => {
+      const nm = kMlbPitcher(gamePk, side);
+      return nm ? { ns: kNs(kPlayerMkts("mlb", "ks", nm, kMlbDate(gamePk))), atLeast: kAtLeast, toThr: n => n } : null;
     });
   }
   function rerenderKpo(gamePk) {
@@ -2437,8 +2457,11 @@
       hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 2 };
     }
     return liveMarket(hrrBetState[gamePk][key], s => {
-      const nm = kMlbBatter(hrrDataCache, gamePk, side, batterId);
+      const nm = kMlbBatter(hrrDataCache, gamePk, side, batterId, "hrr");
       return nm ? kPlayer("mlb", "hrr", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    }, () => {
+      const nm = kMlbBatter(hrrDataCache, gamePk, side, batterId, "hrr");
+      return nm ? { ns: kNs(kPlayerMkts("mlb", "hrr", nm, kMlbDate(gamePk))), atLeast: kAtLeast, toThr: n => n } : null;
     });
   }
 
@@ -2661,6 +2684,7 @@
     document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
     document.getElementById("tab-content-tennis").style.display = tab === "tennis" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
+    document.getElementById("tab-content-edges").style.display = tab === "edges" ? "block" : "none";
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-npb").classList.toggle("active", tab === "npb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
@@ -2670,7 +2694,10 @@
     document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
     document.getElementById("tab-btn-tennis").classList.toggle("active", tab === "tennis");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
-    if (tab === "bettracker") {
+    document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
+    if (tab === "edges") {
+      loadEdgesTab();
+    } else if (tab === "bettracker") {
       loadBetTrackerSettings();
       loadTrackedBets();
     } else if (tab === "npb") {
@@ -3408,10 +3435,9 @@
       </div>`;
   }
 
-  function renderByBetsTable() {
-    const container = document.getElementById("bybets-content");
-    if (!byBetsCache) return;
-    const rows = []; // { betType, player, indexVal, yesPct, noPct, html }
+  function collectByBetsRows() {
+    const rows = []; // { gamePk, state, betType, player, indexVal, yesPct, noPct, html }
+    if (!byBetsCache) return rows;
 
     for (const g of byBetsCache.games) {
       const gamePk = g.game_pk;
@@ -3436,7 +3462,7 @@
         // byBetsGenericCells - rebuild the track onchange now that we have them.
         cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleFirstInningTrack(${gamePk},this.checked,${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
         rows.push({
-          betType: "YRFI/NRFI", player: "1st Inning", team: `${g.away_team} @ ${g.home_team}`, opponent: "—", indexVal: null, yesPct, noPct,
+          gamePk, state, betType: "YRFI/NRFI", player: "1st Inning", team: `${g.away_team} @ ${g.home_team}`, opponent: "—", indexVal: null, yesPct, noPct,
           html: byBetsRowHtml("YRFI/NRFI", "1st Inning", `${g.away_team} @ ${g.home_team}`, "—", "—", `<span>—</span>`, yesPct, cells),
         });
       }
@@ -3469,7 +3495,7 @@
               const team = side === "home" ? g.home_team : g.away_team;
               const opponent = side === "home" ? g.away_team : g.home_team;
               rows.push({
-                betType: "Hits", player: b.batter_name, team, opponent, indexVal: b.hit_index, yesPct, noPct,
+                gamePk, state, betType: "Hits", player: b.batter_name, team, opponent, indexVal: b.hit_index, yesPct, noPct,
                 html: byBetsRowHtml("Hits", name, team, opponent, indexStr, ouHtml, yesPct, cells),
               });
             }
@@ -3504,7 +3530,7 @@
               const team = side === "home" ? g.home_team : g.away_team;
               const opponent = side === "home" ? g.away_team : g.home_team;
               rows.push({
-                betType: "HRR", player: b.batter_name, team, opponent, indexVal: b.hrr_index, yesPct, noPct,
+                gamePk, state, betType: "HRR", player: b.batter_name, team, opponent, indexVal: b.hrr_index, yesPct, noPct,
                 html: byBetsRowHtml("HRR", name, team, opponent, indexStr, ouHtml, yesPct, cells),
               });
             }
@@ -3539,7 +3565,7 @@
               const team = side === "home" ? g.home_team : g.away_team;
               const opponent = side === "home" ? g.away_team : g.home_team;
               rows.push({
-                betType: "HR", player: b.batter_name, team, opponent, indexVal: b.hr_index, yesPct, noPct,
+                gamePk, state, betType: "HR", player: b.batter_name, team, opponent, indexVal: b.hr_index, yesPct, noPct,
                 html: byBetsRowHtml("HR", name, team, opponent, indexStr, ouHtml, yesPct, cells),
               });
             }
@@ -3575,7 +3601,7 @@
           const team = side === "home" ? g.home_team : g.away_team;
           const opponent = side === "home" ? g.away_team : g.home_team;
           rows.push({
-            betType: "K's", player: pitcher.pitcher_name || "TBD", team, opponent, indexVal: pitcher.pitcher_k_index, yesPct, noPct,
+            gamePk, state, betType: "K's", player: pitcher.pitcher_name || "TBD", team, opponent, indexVal: pitcher.pitcher_k_index, yesPct, noPct,
             html: byBetsRowHtml("K's", name, team, opponent, `${kiStr}/${oppStr}`, ouHtml, yesPct, cells),
           });
         }
@@ -3609,13 +3635,20 @@
           const team = side === "home" ? g.home_team : g.away_team;
           const opponent = side === "home" ? g.away_team : g.home_team;
           rows.push({
-            betType: "Hits Allowed", player: pitcher.pitcher_name || "TBD", team, opponent, indexVal: pitcher.pitcher_hits_allowed_index, yesPct, noPct,
+            gamePk, state, betType: "Hits Allowed", player: pitcher.pitcher_name || "TBD", team, opponent, indexVal: pitcher.pitcher_hits_allowed_index, yesPct, noPct,
             html: byBetsRowHtml("Hits Allowed", name, team, opponent, `${piStr}/${oppStr}`, ouHtml, yesPct, cells),
           });
         }
       }
     }
 
+    return rows;
+  }
+
+  function renderByBetsTable() {
+    const container = document.getElementById("bybets-content");
+    if (!byBetsCache) return;
+    const rows = collectByBetsRows();
     rows.sort(compareByBetsRows);
 
     if (!rows.length) {
@@ -3641,7 +3674,13 @@
     if (!nflBetState[team]) {
       nflBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 250 };
     }
-    return nflBetState[team];
+    return liveMarket(nflBetState[team], s => {
+      const r = nflDataCache && (nflDataCache.games || []).find(x => x.team === team);
+      return r && r.qb_name ? kPlayer("nfl", "passyds", r.qb_name, r.gameday || r.date || null, Math.ceil(s.threshold), s.yn) : null;
+    }, () => {
+      const r = nflDataCache && (nflDataCache.games || []).find(x => x.team === team);
+      return r && r.qb_name ? { ns: kNs(kPlayerMkts("nfl", "passyds", r.qb_name, r.gameday || r.date || null)), atLeast: Math.ceil, toThr: n => n } : null;
+    });
   }
 
   function probNflOverAtLeast(mean, line) {
@@ -5077,20 +5116,22 @@
     return f ? kPct(side === "home" ? f.home : f.away, "yes") : null;
   }
 
-  // Over/under on a game total: Kalshi's "at least N" (strike N-0.5) market of the matching event.
-  function kTotal(sport, home, away, date, atLeastN, yn) {
-    const ms = kalshiMarkets(sport, "total");
-    const out = ms.filter(m => m.d && (!date || kDayDiff(m.d, date) <= 1) && (m.n === atLeastN || (m.s != null && Math.abs(m.s + 0.5 - atLeastN) < 0.01)));
-    for (const m of out) {
-      const text = kNorm((m.ti || "") + " " + (m.ys || ""));
-      if (kTeamTokens(sport, home).some(t => t.length >= 3 && text.includes(t)) && kTeamTokens(sport, away).some(t => t.length >= 3 && text.includes(t))) return kPct(m, yn);
-    }
-    return null;
-  }
+  // ---- line-aware lookups. *Mkts() = every market of that bet (all lines); the pickers choose the "at least N" one. ----
+  const kNOf = m => m.n != null ? m.n : (m.s != null ? Math.round(m.s + 0.5) : null);
+  const kNs = ms => [...new Set(ms.map(kNOf).filter(n => n != null))].sort((x, y) => x - y);
+  const kPick = (ms, n, yn) => { const hit = ms.find(m => kNOf(m) === n); return hit ? kPct(hit, yn) : null; };
 
-  // player props: the market of `kind` for this player (full name in the market text, or first initial + last name in the ticker)
-  function kPlayer(sport, kind, name, date, atLeastN, yn) {
-    if (!name) return null;
+  function kTotalMkts(sport, home, away, date) {
+    return kalshiMarkets(sport, "total").filter(m => {
+      if (date && m.d && kDayDiff(m.d, date) > 1) return false;
+      const text = kNorm((m.ti || "") + " " + (m.ys || ""));
+      return kTeamTokens(sport, home).some(t => t.length >= 3 && text.includes(t)) && kTeamTokens(sport, away).some(t => t.length >= 3 && text.includes(t));
+    });
+  }
+  const kTotal = (sport, home, away, date, n, yn) => kPick(kTotalMkts(sport, home, away, date), n, yn);
+
+  function kPlayerMkts(sport, kind, name, date) {
+    if (!name) return [];
     const words = String(name).replace(/\b(jr|sr|ii|iii|iv)\b\.?/gi, "").trim().split(/\s+/);
     const full = kNorm(words.join(" "));
     const last = kNorm(words.slice(1).join(" ")) || kNorm(words[0]);
@@ -5107,39 +5148,71 @@
       if (!score) continue;
       if (score > bestScore) { best = [m]; bestScore = score; } else if (score === bestScore) best.push(m);
     }
-    if (!best.length) return null;
-    const players = new Set(best.map(m => m.p || m.e + m.ys));
-    if (players.size > 1) return null;                    // two players fit this name: don't guess
-    const hit = best.find(m => m.n === atLeastN || (m.n == null && m.s != null && Math.abs(m.s + 0.5 - atLeastN) < 0.01));
-    return hit ? kPct(hit, yn) : null;
+    if (new Set(best.map(m => m.p || m.e + m.ys)).size > 1) return [];   // two players fit this name: don't guess
+    return best;
   }
+  const kPlayer = (sport, kind, name, date, n, yn) => kPick(kPlayerMkts(sport, kind, name, date), n, yn);
+
+  // Team total ("<team> scores at least N"): kind "teamtotal" market whose yes-side text names this team.
+  function kTeamMkts(sport, team, date) {
+    const toks = kTeamTokens(sport, team).filter(t => t.length >= 3);
+    if (!toks.length) return [];
+    return kalshiMarkets(sport, "teamtotal").filter(m => {
+      if (date && m.d && kDayDiff(m.d, date) > 1) return false;
+      const ys = kNorm(m.ys || "");
+      return toks.some(t => ys.includes(t));
+    });
+  }
+  const kTeamTotal = (sport, team, date, n, yn) => kPick(kTeamMkts(sport, team, date), n, yn);
 
   // Wrap state.market: manual value when typed, else resolver(state) (the live Kalshi price, or null).
-  function liveMarket(state, resolver) {
-    if (Object.getOwnPropertyDescriptor(state, "market") && Object.getOwnPropertyDescriptor(state, "market").get) return state;
-    let manual = state.market == null ? null : state.market;
-    Object.defineProperty(state, "market", {
-      enumerable: true, configurable: true,
-      get() {
-        if (manual != null) return manual;
-        try { const v = resolver(state); return v == null ? null : v; } catch (e) { return null; }
-      },
-      set(v) { manual = (v == null || isNaN(v)) ? null : v; },
-    });
+  let edgesSnapping = false;      // true while the Edges tab scans: untouched lines snap to the nearest line Kalshi lists
+  // finder(state) -> { ns: [available "at least N"], atLeast: threshold -> N, toThr: N -> threshold } | null
+  function liveMarket(state, resolver, finder) {
+    const d = Object.getOwnPropertyDescriptor(state, "market");
+    if (!(d && d.get)) {
+      let manual = state.market == null ? null : state.market;
+      Object.defineProperty(state, "liveFor", { enumerable: false, configurable: true, value: yn => { try { const t = Object.create(state); t.yn = yn; const v = resolver(t); return v == null ? null : v; } catch (e) { return null; } } });
+      Object.defineProperty(state, "isManual", { enumerable: false, configurable: true, get: () => manual != null });
+      Object.defineProperty(state, "market", {
+        enumerable: true, configurable: true,
+        get() {
+          if (manual != null) return manual;
+          try { const v = resolver(state); return v == null ? null : v; } catch (e) { return null; }
+        },
+        set(v) { manual = (v == null || isNaN(v)) ? null : v; },
+      });
+      let thr = state.threshold, touched = false;
+      if (finder && thr !== undefined) {
+        Object.defineProperty(state, "threshold", { enumerable: true, configurable: true, get() { return thr; }, set(v) { thr = v; touched = true; } });
+        Object.defineProperty(state, "snapTo", { enumerable: false, configurable: true, value: () => {
+          if (touched) return;
+          try {
+            const f = finder(state);
+            if (!f || !f.ns || !f.ns.length) return;
+            const cur = f.atLeast(thr);
+            if (f.ns.includes(cur)) return;
+            const nearest = f.ns.reduce((b, n) => Math.abs(n - cur) < Math.abs(b - cur) ? n : b, f.ns[0]);
+            thr = f.toThr(nearest);
+          } catch (e) { /* keep the line as is */ }
+        } });
+      }
+    }
+    if (edgesSnapping && typeof state.snapTo === "function") state.snapTo();
     return state;
   }
 
   // ---- context helpers (what game / player a state belongs to) ----
   function kMlbGame(gamePk) { return (lastFetchedGames || []).find(g => String(g.game_pk) === String(gamePk)) || null; }
   function kMlbDate(gamePk) { const g = kMlbGame(gamePk); return g ? (g.game_date || kEtDate(g.game_datetime_utc)) : null; }
-  function kMlbBatter(cache, gamePk, side, batterId) {
-    const d = cache[gamePk];
+  function kMlbBatter(cache, gamePk, side, batterId, key) {
+    const d = cache[gamePk] || (byBetsCache && byBetsCache.data[gamePk] && byBetsCache.data[gamePk][key]);
     const list = d ? d[side + "_batters"] : null;
     const b = list ? list.find(x => String(x.batter_id) === String(batterId)) : null;
     return b ? b.batter_name : null;
   }
   function kMlbPitcher(gamePk, side) {
-    const d = kDataCache[gamePk];
+    const d = kDataCache[gamePk] || (byBetsCache && byBetsCache.data[gamePk] && byBetsCache.data[gamePk].k);
     const p = d ? d[side + "_pitcher"] : null;
     return p ? p.pitcher_name : null;
   }
@@ -5148,7 +5221,7 @@
   function kalshiRerender() {
     const a = document.activeElement;
     const vis = id => { const el = document.getElementById(id); return el && el.style.display !== "none"; };
-    if (a && (a.tagName === "INPUT" || a.tagName === "SELECT") && a.closest && a.closest("#tab-content-mlb, #tab-content-nba, #tab-content-nhl, #tab-content-nfl")) return;
+    if (a && (a.tagName === "INPUT" || a.tagName === "SELECT") && a.closest && a.closest("#tab-content-mlb, #tab-content-nba, #tab-content-nhl, #tab-content-nfl, #tab-content-edges")) return;
     try {
       if (vis("tab-content-mlb")) {
         if (vis("subtab-content-mlb-bybets") && typeof renderByBetsTable === "function") renderByBetsTable();
@@ -5157,6 +5230,7 @@
       if (vis("tab-content-nba") && typeof rerenderNba === "function") rerenderNba();
       if (vis("tab-content-nhl") && typeof renderNhlGamesFromCache === "function") renderNhlGamesFromCache();
       if (vis("tab-content-nfl") && typeof renderNflPointsFromCache === "function") renderNflPointsFromCache();
+      if (vis("tab-content-edges") && typeof renderEdges === "function") renderEdges();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
 
@@ -5169,6 +5243,464 @@
   const K_NBA_KIND = { pts: "pts", reb: "reb", ast: "ast" };
 
   setInterval(() => { for (const sport of Object.keys(kalshiWanted)) kalshiLoad(sport); }, 60000);
+
+
+  // ======================================================================================================================
+  // EDGES TAB: every bet (MLB, NBA, NHL, NFL, Tennis) with a positive edge = model probability for the side being bet minus
+  // the market price (live Kalshi unless typed over), highest first. Rows are the same rows as the sport tabs (same states,
+  // same handlers), so Yes/No, Market, Kelly, Wager, Profit and Track behave identically and stay in sync with those tabs.
+  // When both sides of a bet have a live Kalshi price, the Y/N shown is the side with the better edge (bets already tracked or
+  // with a typed-in market keep their side).
+  // ======================================================================================================================
+  let edgesMinEdge = 0;
+  let edgesSportFilter = "all";
+  let edgesMlbLoadedAt = 0;
+  let edgesLoading = false;
+
+  function edgeNum(modelPct, marketPct) {
+    return (modelPct == null || marketPct == null) ? null : modelPct - marketPct;
+  }
+
+  // edges for both sides of a state (null where there is no price); `cur` is the edge on the side currently selected
+  function edgeSidesForState(state, yesPct, noPct) {
+    const out = { yes: null, no: null, cur: null };
+    if (yesPct == null || noPct == null) return out;
+    if (typeof state.liveFor === "function" && !state.isManual) {
+      out.yes = edgeNum(yesPct, state.liveFor("yes"));
+      out.no = edgeNum(noPct, state.liveFor("no"));
+    }
+    const m = state.market;
+    out.cur = edgeNum(state.yn === "no" ? noPct : yesPct, m);
+    return out;
+  }
+
+  function edgesYesNoState(state) { const v = Object.create(state); v.yn = "yes"; return v; }
+
+  function collectEdgeItems() {
+    edgesSnapping = true;
+    try { return collectEdgeItemsInner(); } finally { edgesSnapping = false; }
+  }
+
+  function collectEdgeItemsInner() {
+    const items = [];
+    const add = (sport, label, r) => items.push(Object.assign({ sport, label }, r));
+
+    // ---- MLB props (the same rows as the By Bets tab) ----
+    if (byBetsCache) {
+      for (const r of collectByBetsRows()) {
+        const g = kMlbGame(r.gamePk);
+        if (g && (g.status === "Final" || g.status === "Game Over")) continue;
+        add("MLB", r.betType, { state: r.state, yesPct: r.yesPct, noPct: r.noPct, html: r.html.replace(`<span>${r.betType}</span>`, `<span>MLB ${r.betType}</span>`), sides: edgeSidesForState(r.state, r.yesPct, r.noPct) });
+      }
+    }
+
+    // ---- MLB moneylines ----
+    for (const g of (lastFetchedGames || [])) {
+      if (g.status === "Final" || g.status === "Game Over") continue;
+      for (const side of ["home", "away"]) {
+        const prob = side === "home" ? g.home_moneyline_win_prob : g.away_moneyline_win_prob;
+        if (prob == null) continue;
+        const state = getMoneylineBetState(g.game_pk, side);
+        const yesPct = prob * 100, noPct = 100 - yesPct;
+        const team = side === "home" ? g.home_team : g.away_team;
+        const opp = side === "home" ? g.away_team : g.home_team;
+        const v = edgesYesNoState(state);
+        const cells = byBetsGenericCells(v, yesPct, noPct, "", `updateMoneylineBetField(${g.game_pk},'${side}','market',this.value)`,
+          `updateMoneylineBetField(${g.game_pk},'${side}','useKelly',this.checked)`, `updateMoneylineBetField(${g.game_pk},'${side}','manualWager',this.value)`, "");
+        cells.ynHtml = `<span>Yes</span>`;
+        cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleMoneylineTrack(${g.game_pk},'${side}',this.checked,'${team.replace(/'/g, "\\'")}',${prob},${state.market},${cells.wager},${cells.profit})" />`;
+        add("MLB", "Moneyline", { state, yesPct, noPct, forceYes: true, sides: { yes: edgeNum(yesPct, state.market), no: null, cur: edgeNum(yesPct, state.market) },
+          html: byBetsRowHtml("MLB Moneyline", `${team} to win`, team, opp, "—", `<span>—</span>`, yesPct, cells) });
+      }
+    }
+
+    // ---- NBA props ----
+    if (nbaDataCache && nbaDataCache.games) {
+      for (const g of nbaDataCache.games) {
+        if (g.started || g.completed) continue;
+        for (const p of (g.players || [])) {
+          for (const stat of Object.keys(p.props || {})) {
+            if (!NBA_STAT_LABELS[stat]) continue;
+            const c = nbaRowCalc(g.game_id, p.player_id, stat);
+            if (!c || c.yesPct == null) continue;
+            const { state, yesPct, noPct, line } = c;
+            const gid = g.game_id, pid = p.player_id;
+            const cells = byBetsGenericCells(state, yesPct, noPct,
+              `updateNbaBetField('${gid}','${pid}','${stat}','yn',this.value)`, `updateNbaBetField('${gid}','${pid}','${stat}','market',this.value)`,
+              `updateNbaBetField('${gid}','${pid}','${stat}','useKelly',this.checked)`, `updateNbaBetField('${gid}','${pid}','${stat}','manualWager',this.value)`, "");
+            cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNbaTrack('${gid}','${pid}','${stat}',this.checked)" />`;
+            const ou = `<input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />`;
+            add("NBA", NBA_STAT_LABELS[stat], { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+              html: byBetsRowHtml("NBA " + NBA_STAT_LABELS[stat], p.player, (p.team || "—"), `${g.away_team} @ ${g.home_team}`, c.blk.projection != null ? c.blk.projection.toFixed(1) : "—", ou, yesPct, cells) });
+          }
+        }
+      }
+    }
+
+    // ---- NHL: moneyline, game total, team goals, periods ----
+    if (nhlgData && nhlgData.games) {
+      for (const g of nhlgData.games) {
+        if (g.started) continue;
+        const gid = g.game_id;
+        const matchup = `${g.away} @ ${g.home}`;
+        for (const side of ["home", "away"]) {
+          const c = nhlgMlCalc(gid, side);
+          if (!c || c.modelProb == null) continue;
+          const mk = "ml_" + side;
+          const yesPct = c.modelProb * 100, noPct = 100 - yesPct;
+          const st = c.st, v = edgesYesNoState(st);
+          const cells = byBetsGenericCells(v, yesPct, noPct, "", `updateNhlgField('${gid}','${mk}','market',this.value)`,
+            `updateNhlgField('${gid}','${mk}','useKelly',this.checked)`, `updateNhlgField('${gid}','${mk}','manualWager',this.value)`, "");
+          cells.ynHtml = `<span>Yes</span>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleNhlgTrack('${gid}','${mk}',this.checked)" />`;
+          const team = side === "home" ? g.home : g.away, opp = side === "home" ? g.away : g.home;
+          add("NHL", "Moneyline", { state: st, yesPct, noPct, sides: { yes: edgeNum(yesPct, st.market), no: null, cur: edgeNum(yesPct, st.market) },
+            html: byBetsRowHtml("NHL Moneyline", `${team} to win`, team, opp, "—", `<span>—</span>`, yesPct, cells) });
+        }
+        for (const mk of ["total", "tg_home", "tg_away", "p1", "p2", "p3"]) {
+          const c = nhlgCalc(gid, mk);
+          if (!c) continue;
+          const st = c.st, den = c.over + c.under;
+          if (!(den > 0)) continue;
+          const yesPct = c.over / den * 100, noPct = 100 - yesPct;
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateNhlgField('${gid}','${mk}','yn',this.value)`, `updateNhlgField('${gid}','${mk}','market',this.value)`,
+            `updateNhlgField('${gid}','${mk}','useKelly',this.checked)`, `updateNhlgField('${gid}','${mk}','manualWager',this.value)`, "");
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleNhlgTrack('${gid}','${mk}',this.checked)" />`;
+          cells.ynHtml = `<select onchange="updateNhlgField('${gid}','${mk}','yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>Over</option><option value="no" ${st.yn === "no" ? "selected" : ""}>Under</option></select>`;
+          const label = mk === "tg_home" ? `${g.home} Goals` : mk === "tg_away" ? `${g.away} Goals` : NHLG_LABELS[mk];
+          const ou = `<input type="number" min="0" step="0.5" value="${c.line}" style="text-align:center;" onchange="updateNhlgLine('${gid}','${mk}',this.value)" />`;
+          add("NHL", label, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("NHL " + (mk === "total" ? "Total" : mk.startsWith("tg") ? "Team Goals" : "Period"), label, "—", matchup, "—", ou, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- NFL: game total + moneyline ----
+    if (nflPointsDataCache && nflPointsDataCache.games) {
+      const byGame = new Map();
+      for (const r of nflPointsDataCache.games) {
+        if (!byGame.has(r.game_id)) byGame.set(r.game_id, {});
+        byGame.get(r.game_id)[r.is_home ? "home" : "away"] = r;
+      }
+      for (const [gameId, pair] of byGame) {
+        const h = pair.home, a = pair.away;
+        if (!h || !a) continue;
+        const matchup = `${a.team} @ ${h.team}`;
+        if (h.predicted_mean != null && a.predicted_mean != null) {
+          const state = getNflTotalBetState(gameId);
+          const line = state.threshold;
+          const yesPct = probNflTotalAtLeast(h.predicted_mean + a.predicted_mean, line) * 100, noPct = 100 - yesPct;
+          const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+          const cells = byBetsGenericCells(state, yesPct, noPct, `updateNflTotalBetField('${gameId}','yn',this.value)`, `updateNflTotalBetField('${gameId}','market',this.value)`,
+            `updateNflTotalBetField('${gameId}','useKelly',this.checked)`, `updateNflTotalBetField('${gameId}','manualWager',this.value)`, "");
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTotalTrack('${gameId}',this.checked,'${(h.team || "").replace(/'/g, "\\'")}','${(a.team || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
+          const ou = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateNflTotalThreshold('${gameId}',this.value)" />`;
+          add("NFL", "Total", { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+            html: byBetsRowHtml("NFL Total", "Total Points", "—", matchup, "—", ou, yesPct, cells) });
+        }
+        for (const side of ["home", "away"]) {
+          const row = pair[side];
+          if (!(row.moneyline_trusted && row.moneyline_win_prob != null)) continue;
+          const state = getNflMoneylineBetState(gameId, side);
+          const prob = row.moneyline_win_prob, yesPct = prob * 100, noPct = 100 - yesPct;
+          const v = edgesYesNoState(state);
+          const cells = byBetsGenericCells(v, yesPct, noPct, "", `updateNflMoneylineBetField('${gameId}','${side}','market',this.value)`,
+            `updateNflMoneylineBetField('${gameId}','${side}','useKelly',this.checked)`, `updateNflMoneylineBetField('${gameId}','${side}','manualWager',this.value)`, "");
+          cells.ynHtml = `<span>Yes</span>`;
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflMoneylineTrack('${gameId}','${side}',this.checked,'${(row.team || "").replace(/'/g, "\\'")}',${prob},${state.market},${cells.wager},${cells.profit})" />`;
+          add("NFL", "Moneyline", { state, yesPct, noPct, sides: { yes: edgeNum(yesPct, state.market), no: null, cur: edgeNum(yesPct, state.market) },
+            html: byBetsRowHtml("NFL Moneyline", `${row.team} to win`, row.team, row.opponent, "—", `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- Tennis ----
+    for (const key of Object.keys(tennisRows || {})) {
+      const row = tennisRows[key];
+      const c = tennisCalc(key);
+      if (!c || row.modelYes == null) continue;
+      const st = c.st;
+      const yesPct = row.modelYes * 100, noPct = 100 - yesPct;
+      const sideEdge = yn => {
+        if (row.isMl && yn === "no") return null;
+        const m = tennisMarketPct(row, { manual: false, yn, market: null });
+        return edgeNum(yn === "yes" ? yesPct : noPct, m);
+      };
+      const k = JSON.stringify(key).replace(/"/g, "&quot;");
+      const wagerCell = st.useKelly ? `<span>$${c.wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateTennisField(${k},'manualWager',this.value)" />`;
+      const ynHtml = row.isMl ? `<span>Yes</span>` : `<select onchange="updateTennisField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>Over</option><option value="no" ${st.yn === "no" ? "selected" : ""}>Under</option></select>`;
+      const cells = {
+        noHtml: `<span class="prob-no">${Math.round(noPct)}%</span>`, ynHtml,
+        marketHtml: `<input type="number" step="0.1" min="0" max="100" value="${c.market != null ? c.market : ""}" placeholder="%" onchange="updateTennisField(${k},'market',this.value)" />`,
+        kellyHtml: `<input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateTennisField(${k},'useKelly',this.checked)" />`,
+        wagerHtml: wagerCell, profitHtml: `<span>${c.profit != null ? "$" + c.profit.toFixed(2) : "—"}</span>`,
+        trackHtml: `<input type="checkbox" ${st.tracked ? "checked" : ""} ${row.ticker ? "" : "disabled"} onchange="toggleTennisTrack(${k},this.checked)" />`,
+      };
+      const ou = row.isMl ? `<span>—</span>` : `<span>${row.line}</span>`;
+      add("Tennis", row.isMl ? "Moneyline" : (row.betType === "tennis_games" ? "Total Games" : "Total Sets"), {
+        state: st, yesPct, noPct, tennis: true, isMl: row.isMl, sides: { yes: sideEdge("yes"), no: sideEdge("no"), cur: c.market != null ? edgeNum(c.modelProb * 100, c.market) : null },
+        html: byBetsRowHtml("Tennis " + (row.isMl ? "ML" : row.betType === "tennis_games" ? "Games" : "Sets"), row.betName, "—", row.matchup, "—", ou, yesPct, cells) });
+    }
+
+    // ---- MLB K (PO): postseason strikeout prop (only games in the postseason) ----
+    if (byBetsCache) {
+      for (const g of byBetsCache.games) {
+        const gamePk = g.game_pk;
+        if (!playoffInfo[gamePk] || g.status === "Final" || g.status === "Game Over") continue;
+        const d = (byBetsCache.data[gamePk] || {}).k;
+        if (!d) continue;
+        for (const side of ["home", "away"]) {
+          const pitcher = d[`${side}_pitcher`];
+          if (!pitcher || pitcher.mean == null) continue;
+          const state = getKpoState(gamePk, side);
+          const line = state.threshold;
+          const postMean = pitcher.mean * playoffKFactor;
+          const yesPct = probKAtLeastPoisson(postMean, line) * 100, noPct = 100 - yesPct;
+          const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+          const cells = byBetsGenericCells(state, yesPct, noPct, `updateKpoField(${gamePk},'${side}','yn',this.value)`, `updateKpoField(${gamePk},'${side}','market',this.value)`,
+            `updateKpoField(${gamePk},'${side}','useKelly',this.checked)`, `updateKpoField(${gamePk},'${side}','manualWager',this.value)`, "");
+          const nm = (pitcher.pitcher_name || "").replace(/'/g, "\\'");
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleKpoTrack(${gamePk},'${side}',this.checked,${pitcher.pitcher_id},'${nm}',${line},${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
+          const ou = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateKpoThreshold(${gamePk},'${side}',this.value)" />`;
+          const team = side === "home" ? g.home_team : g.away_team, opp = side === "home" ? g.away_team : g.home_team;
+          add("MLB", "K (PO)", { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+            html: byBetsRowHtml("MLB K (PO)", pitcher.pitcher_name || "TBD", team, opp, `PO ${postMean.toFixed(1)}`, ou, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- NHL goalie saves ----
+    if (nhlGoalieDataCache && nhlGoalieDataCache.games) {
+      for (const row of nhlGoalieDataCache.games) {
+        if (row.predicted_mean == null || row.final_score != null) continue;
+        const state = getNhlGoalieBetState(row.team);
+        const line = state.threshold;
+        const yesPct = probNhlGoalieSavesAtLeast(row.predicted_mean, line) * 100, noPct = 100 - yesPct;
+        const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+        const T = row.team;
+        const cells = byBetsGenericCells(state, yesPct, noPct, `updateNhlGoalieBetField('${T}','yn',this.value)`, `updateNhlGoalieBetField('${T}','market',this.value)`,
+          `updateNhlGoalieBetField('${T}','useKelly',this.checked)`, `updateNhlGoalieBetField('${T}','manualWager',this.value)`, "");
+        cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNhlGoalieTrack('${T}',this.checked,'${(row.goalie_name || "").replace(/'/g, "\\'")}','${(row.opponent || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit},'${row.goalie_player_id}')" />`;
+        const ou = `<input type="number" min="0" step="${NHL_GOALIE_SAVES_THRESHOLD_STEP}" value="${line}" style="text-align:center;" onchange="updateNhlGoalieThreshold('${T}',this.value)" />`;
+        add("NHL", "Goalie Saves", { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+          html: byBetsRowHtml("NHL Saves", row.goalie_name || "TBD", T, row.opponent || "—", "—", ou, yesPct, cells) });
+      }
+    }
+
+    // ---- NFL team points + passing yards ----
+    if (nflPointsDataCache && nflPointsDataCache.games) {
+      for (const row of nflPointsDataCache.games) {
+        if (row.predicted_mean == null) continue;
+        const state = getNflPointsBetState(row.team);
+        const line = state.threshold;
+        const yesPct = probNflPointsAtLeast(row.predicted_mean, line) * 100, noPct = 100 - yesPct;
+        const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+        const T = row.team;
+        const cells = byBetsGenericCells(state, yesPct, noPct, `updateNflPointsBetField('${T}','yn',this.value)`, `updateNflPointsBetField('${T}','market',this.value)`,
+          `updateNflPointsBetField('${T}','useKelly',this.checked)`, `updateNflPointsBetField('${T}','manualWager',this.value)`, "");
+        cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflPointsTrack('${T}',this.checked,'${(row.opponent || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
+        const ou = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateNflPointsThreshold('${T}',this.value)" />`;
+        add("NFL", "Team Points", { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+          html: byBetsRowHtml("NFL Team Pts", `${T} Points`, T, row.opponent || "—", row.team_index != null ? row.team_index.toFixed(2) : "—", ou, yesPct, cells) });
+      }
+    }
+    if (nflDataCache && nflDataCache.games) {
+      for (const g of nflDataCache.games) {
+        if (g.predicted_mean == null) continue;
+        const state = getNflBetState(g.team);
+        const line = state.threshold;
+        const yesPct = probNflOverAtLeast(g.predicted_mean, line) * 100, noPct = 100 - yesPct;
+        const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+        const T = g.team;
+        const cells = byBetsGenericCells(state, yesPct, noPct, `updateNflBetField('${T}','yn',this.value)`, `updateNflBetField('${T}','market',this.value)`,
+          `updateNflBetField('${T}','useKelly',this.checked)`, `updateNflBetField('${T}','manualWager',this.value)`, "");
+        cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflTrack('${T}',this.checked,'${(g.qb_name || "").replace(/'/g, "\\'")}',${line},${modelProb},${state.market},${cells.wager},${cells.profit})" />`;
+        const ou = `<input type="number" min="1" step="10" value="${line}" style="text-align:center;" onchange="updateNflThreshold('${T}',this.value)" />`;
+        add("NFL", "Passing Yds", { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
+          html: byBetsRowHtml("NFL Pass Yds", g.qb_name || "TBD", T, g.opponent || "—", g.qb_index != null ? g.qb_index.toFixed(2) : "—", ou, yesPct, cells) });
+      }
+    }
+
+    // ---- CFB: moneyline, spread, team points, game total (Kalshi prices come from cfb_kalshi) ----
+    if (cfbDataCache && cfbDataCache.games) {
+      const view = (state, mkt, yn) => { const v = Object.create(state); Object.defineProperty(v, "market", { value: mkt }); if (yn) v.yn = yn; return v; };
+      const cg = new Map();
+      for (const r of cfbDataCache.games) {
+        if (!cg.has(r.game_id)) cg.set(r.game_id, {});
+        cg.get(r.game_id)[r.is_home ? "home" : "away"] = r;
+      }
+      for (const [gameId, pair] of cg) {
+        const h = pair.home, a = pair.away;
+        if (!h || !a || h.final_score != null || a.final_score != null) continue;
+        const matchup = `${a.team} @ ${h.team}`;
+        const q = t => (t || "").replace(/'/g, "\\'");
+        // moneyline
+        for (const side of ["home", "away"]) {
+          const row = pair[side];
+          if (!(row.moneyline_trusted && row.moneyline_win_prob != null)) continue;
+          const state = getCfbMoneylineBetState(gameId, side);
+          const mkt = state.market != null ? state.market : cfbKMoneyline(gameId, side);
+          const prob = row.moneyline_win_prob, yesPct = prob * 100, noPct = 100 - yesPct;
+          const v = view(state, mkt, "yes");
+          const cells = byBetsGenericCells(v, yesPct, noPct, "", `updateCfbMoneylineBetField(${gameId},'${side}','market',this.value)`,
+            `updateCfbMoneylineBetField(${gameId},'${side}','useKelly',this.checked)`, `updateCfbMoneylineBetField(${gameId},'${side}','manualWager',this.value)`, "");
+          cells.ynHtml = `<span>Yes</span>`;
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbMoneylineTrack(${gameId},'${side}',this.checked,'${q(row.team)}',${prob},${mkt},${cells.wager},${cells.profit})" />`;
+          add("CFB", "Moneyline", { state, yesPct, noPct, forceYes: true, sides: { yes: edgeNum(yesPct, mkt), no: null, cur: edgeNum(yesPct, mkt) },
+            html: byBetsRowHtml("CFB Moneyline", `${row.team} to win`, row.team, row.opponent || "—", "—", `<span>—</span>`, yesPct, cells) });
+        }
+        // spread (same effective-line logic as the Spread tab)
+        const hp = h.predicted_mean, ap = a.predicted_mean;
+        if (hp != null && ap != null && hp > 0 && ap > 0) {
+          const defaultHome = h.spread != null ? h.spread : (a.spread != null ? -a.spread : null);
+          let kHome = null;
+          const cands = cfbKSpreadCandidates(gameId);
+          if (cands.length) {
+            const key = c => defaultHome != null ? Math.abs(c.home - defaultHome) : (c.mid != null ? Math.abs(c.mid - 0.5) : Math.abs(c.home));
+            kHome = cands.reduce((b, c) => (b == null || key(c) < key(b)) ? c : b, null).home;
+          }
+          const ov = cfbSpreadOverride[gameId];
+          const eff = ov !== undefined && ov !== null ? ov : (kHome != null ? kHome : defaultHome);
+          if (eff != null) {
+            const homeCover = cfbSpreadCoverProbability(hp, ap, eff, !!(h.neutral_site || a.neutral_site));
+            for (const side of ["home", "away"]) {
+              const row = pair[side];
+              const spreadVal = side === "home" ? eff : -eff;
+              const prob = side === "home" ? homeCover : 1 - homeCover;
+              const state = getCfbSpreadBetState(gameId, side);
+              const mkt = state.market != null ? state.market : cfbKSpread(gameId, side, spreadVal);
+              const yesPct = prob * 100, noPct = 100 - yesPct;
+              const v = view(state, mkt, "yes");
+              const cells = byBetsGenericCells(v, yesPct, noPct, "", `updateCfbSpreadBetField(${gameId},'${side}','market',this.value)`,
+                `updateCfbSpreadBetField(${gameId},'${side}','useKelly',this.checked)`, `updateCfbSpreadBetField(${gameId},'${side}','manualWager',this.value)`, "");
+              cells.ynHtml = `<span>Yes</span>`;
+              cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbSpreadTrack(${gameId},'${side}',this.checked,'${q(row.team)}',${spreadVal},${prob},${mkt},${cells.wager},${cells.profit})" />`;
+              add("CFB", "Spread", { state, yesPct, noPct, forceYes: true, sides: { yes: edgeNum(yesPct, mkt), no: null, cur: edgeNum(yesPct, mkt) },
+                html: byBetsRowHtml("CFB Spread", `${row.team} ${spreadVal > 0 ? "+" : ""}${spreadVal}`, row.team, row.opponent || "—", "—", `<span>${spreadVal > 0 ? "+" : ""}${spreadVal}</span>`, yesPct, cells) });
+            }
+          }
+        }
+        // team points
+        for (const side of ["home", "away"]) {
+          const row = pair[side];
+          if (row.predicted_mean == null) continue;
+          const state = getCfbBetState(row.team, Math.max(1, Math.round(row.predicted_mean)));
+          { const _k = cfbK(gameId); cfbAutoLine(state, _k && _k.team_total ? _k.team_total[side].map(r => r.strike) : []); }
+          const line = state.threshold;
+          const yesPct = probCfbPointsAtLeast(row.predicted_mean, line) * 100, noPct = 100 - yesPct;
+          const kf = yn => cfbKTeamTotal(gameId, side, line, yn);
+          const manual = state.market != null;
+          const mkt = manual ? state.market : kf(state.yn);
+          const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+          const v = view(state, mkt);
+          const cells = byBetsGenericCells(v, yesPct, noPct, `updateCfbBetField('${q(row.team)}','yn',this.value)`, `updateCfbBetField('${q(row.team)}','market',this.value)`,
+            `updateCfbBetField('${q(row.team)}','useKelly',this.checked)`, `updateCfbBetField('${q(row.team)}','manualWager',this.value)`, "");
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTrack('${q(row.team)}',this.checked,'${q(row.opponent)}','${side}',${line},${modelProb},${mkt},${cells.wager},${cells.profit})" />`;
+          const ou = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbThreshold('${q(row.team)}',this.value)" />`;
+          add("CFB", "Team Points", { state, yesPct, noPct, manualMarket: manual,
+            sides: { yes: edgeNum(yesPct, manual ? mkt : kf("yes")), no: edgeNum(noPct, manual ? mkt : kf("no")), cur: edgeNum(state.yn === "yes" ? yesPct : noPct, mkt) },
+            html: byBetsRowHtml("CFB Team Pts", `${row.team} Points`, row.team, row.opponent || "—", row.team_index != null ? row.team_index.toFixed(2) : "—", ou, yesPct, cells) });
+        }
+        // game total
+        if (h.predicted_mean != null && a.predicted_mean != null) {
+          const totalMean = h.predicted_mean + a.predicted_mean;
+          const posted = h.posted_total != null ? h.posted_total : a.posted_total;
+          const state = getCfbTotalBetState(gameId, posted != null ? Math.floor(posted) + 1 : Math.max(1, Math.round(totalMean)));
+          { const _k = cfbK(gameId); cfbAutoLine(state, _k && _k.total ? _k.total.map(r => r.strike) : []); }
+          const line = state.threshold;
+          const yesPct = probCfbTotalAtLeast(totalMean, line) * 100, noPct = 100 - yesPct;
+          const kf = yn => cfbKTotal(gameId, line, yn);
+          const manual = state.market != null;
+          const mkt = manual ? state.market : kf(state.yn);
+          const modelProb = (state.yn === "yes" ? yesPct : noPct) / 100;
+          const v = view(state, mkt);
+          const cells = byBetsGenericCells(v, yesPct, noPct, `updateCfbTotalBetField(${gameId},'yn',this.value)`, `updateCfbTotalBetField(${gameId},'market',this.value)`,
+            `updateCfbTotalBetField(${gameId},'useKelly',this.checked)`, `updateCfbTotalBetField(${gameId},'manualWager',this.value)`, "");
+          cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleCfbTotalTrack(${gameId},this.checked,'${q(h.team)}','${q(a.team)}',${line},${modelProb},${mkt},${cells.wager},${cells.profit})" />`;
+          const ou = `<input type="number" min="1" step="1" value="${line}" style="text-align:center;" onchange="updateCfbTotalThreshold(${gameId},this.value)" />`;
+          add("CFB", "Total", { state, yesPct, noPct, manualMarket: manual,
+            sides: { yes: edgeNum(yesPct, manual ? mkt : kf("yes")), no: edgeNum(noPct, manual ? mkt : kf("no")), cur: edgeNum(state.yn === "yes" ? yesPct : noPct, mkt) },
+            html: byBetsRowHtml("CFB Total", "Total Points", "—", matchup, "—", ou, yesPct, cells) });
+        }
+      }
+    }
+    return items;
+  }
+
+  // the better-priced side becomes the Y/N shown, unless the bet is already tracked or its market was typed in by hand
+  function edgesApplyBestSides(items) {
+    let flipped = false;
+    for (const it of items) {
+      const st = it.state, s = it.sides;
+      if (!st || it.forceYes || it.manualMarket || st.tracked || st.manual || st.isManual || s.yes == null || s.no == null) continue;
+      const best = s.no > s.yes ? "no" : "yes";
+      if (st.yn !== best) { st.yn = best; flipped = true; }
+    }
+    return flipped;
+  }
+
+  function edgesSetMin(v) { const n = parseFloat(v); edgesMinEdge = isNaN(n) ? 0 : n; renderEdges(); }
+  function edgesSetSport(v) { edgesSportFilter = v; renderEdges(); }
+
+  function renderEdges() {
+    const container = document.getElementById("edges-content");
+    if (!container) return;
+    let items = collectEdgeItems();
+    if (edgesApplyBestSides(items)) items = collectEdgeItems();
+    for (const it of items) it.edge = it.sides.cur;
+    const priced = items.filter(it => it.edge != null);
+    const sports = [...new Set(items.map(it => it.sport))];
+    const shown = priced.filter(it => it.edge > edgesMinEdge && (edgesSportFilter === "all" || it.sport === edgesSportFilter)).sort((a, b) => b.edge - a.edge);
+    const bar = `
+      <div class="settings-row" style="gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <label class="settings-hint" style="margin:0;">Min edge (pts) <input type="number" step="0.5" value="${edgesMinEdge}" style="width:70px;" onchange="edgesSetMin(this.value)" /></label>
+        <label class="settings-hint" style="margin:0;">Sport
+          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","Tennis"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+        <span class="settings-hint" style="margin:0;">${shown.length} edge${shown.length === 1 ? "" : "s"} of ${priced.length} priced bets (${items.length} bets scanned${edgesLoading ? " - still loading..." : ""})</span>
+      </div>`;
+    if (!shown.length) {
+      container.innerHTML = bar + `<div class="settings-hint">${edgesLoading ? "Loading every sport..." : (priced.length ? "No bets above that edge right now." : "No priced bets yet - Kalshi prices fill in as they load, or type a market price on any bet.")}</div>`;
+      return;
+    }
+    const head = `
+      <div class="bybets-row bybets-row-header edges-row"><span>Edge</span><span>Bet Type</span><span>Player</span><span>Team</span><span>Opp</span><span>Index</span><span>O/U</span><span>Yes</span><span>No</span><span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+    container.innerHTML = bar + head + shown.map(it => {
+      const e = it.edge;
+      const cell = `<span class="edge-cell" style="font-weight:600;color:${e >= 0 ? "var(--green, #3ddc97)" : "var(--red, #ff6b6b)"};">${e >= 0 ? "+" : ""}${e.toFixed(1)}</span>`;
+      return it.html.replace('<div class="bybets-row">', '<div class="bybets-row edges-row">' + cell);
+    }).join("");
+  }
+
+  async function loadEdgesTab() {
+    edgesLoading = true;
+    renderEdges();
+    const jobs = [];
+    if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), ensurePlayoffInfo(datePicker.value || todayIso()));
+    // draw as soon as each sport arrives, not only when the slowest finishes
+    jobs.forEach(j => j.then(renderEdges, renderEdges));
+    await Promise.allSettled(jobs);
+    edgesLoading = false;
+    renderEdges();
+  }
+
+  // keep CFB and tennis prices fresh while the Edges tab is open (MLB/NBA/NHL/NFL refresh through the 60s Kalshi poll)
+  setInterval(() => {
+    const et = document.getElementById("tab-content-edges");
+    if (!et || et.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && et.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadCfbKalshi();
+    loadTennisTab(true).then(renderEdges, renderEdges);
+  }, 30000);
+
+  // any edit made inside the Edges tab: the sport tab's own handler has already run - redraw once it (and any track request) settles
+  document.addEventListener("change", ev => {
+    if (!ev.target.closest || !ev.target.closest("#edges-content") || ev.target.closest(".settings-row")) return;
+    setTimeout(renderEdges, 60);
+    setTimeout(renderEdges, 900);
+    setTimeout(renderEdges, 2500);
+  });
 
   let cfbDataCache = null;
 
@@ -5254,6 +5786,8 @@
           : `Kalshi: ${((cfbKalshi.warnings || [])[0]) || "unavailable"}`;
       }
       renderCfbFromCache();
+      const et = document.getElementById("tab-content-edges");
+      if (et && et.style.display !== "none" && typeof renderEdges === "function") renderEdges();
     } catch (e) { /* prices are optional - the manual Market boxes still work */ }
   }
 
@@ -5897,6 +6431,10 @@
       const f = kind ? nbaFind(gameId, playerId) : null;
       if (!f) return null;
       return kPlayer("nba", kind, f.player.player, kEtDate(f.game.tip_off), Math.floor(s.threshold) + 1, s.yn);
+    }, () => {
+      const kind = K_NBA_KIND[stat];
+      const f = kind ? nbaFind(gameId, playerId) : null;
+      return f ? { ns: kNs(kPlayerMkts("nba", kind, f.player.player, kEtDate(f.game.tip_off))), atLeast: t => Math.floor(t) + 1, toThr: n => n - 0.5 } : null;
     });
   }
 
@@ -6407,7 +6945,13 @@
     if (!nhlGoalieBetState[team]) {
       nhlGoalieBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: NHL_GOALIE_SAVES_DEFAULT_THRESHOLD };
     }
-    return nhlGoalieBetState[team];
+    return liveMarket(nhlGoalieBetState[team], s => {
+      const r = nhlGoalieDataCache && (nhlGoalieDataCache.games || []).find(x => x.team === team);
+      return r && r.goalie_name ? kPlayer("nhl", "saves", r.goalie_name, r.date, Math.floor(s.threshold) + 1, s.yn) : null;
+    }, () => {
+      const r = nhlGoalieDataCache && (nhlGoalieDataCache.games || []).find(x => x.team === team);
+      return r && r.goalie_name ? { ns: kNs(kPlayerMkts("nhl", "saves", r.goalie_name, r.date)), atLeast: t => Math.floor(t) + 1, toThr: n => n - 0.5 } : null;
+    });
   }
 
   function probNhlGoalieSavesAtLeast(mean, line) {
@@ -6633,7 +7177,14 @@
       const d = kEtDate(g.start_utc);
       if (mk === "ml_home" || mk === "ml_away") return kMoneyline("nhl", g.home, g.away, d, mk === "ml_home" ? "home" : "away", "yes");
       if (mk === "total") return kTotal("nhl", g.home, g.away, d, Math.floor(s.threshold) + 1, s.yn);
+      if (mk === "tg_home" || mk === "tg_away") return kTeamTotal("nhl", mk === "tg_home" ? g.home : g.away, d, Math.floor(s.threshold) + 1, s.yn);
       return null;
+    }, () => {
+      const g = nhlgGame(gid);
+      if (!g) return null;
+      const d = kEtDate(g.start_utc);
+      const ms = mk === "total" ? kTotalMkts("nhl", g.home, g.away, d) : (mk === "tg_home" || mk === "tg_away") ? kTeamMkts("nhl", mk === "tg_home" ? g.home : g.away, d) : null;
+      return ms ? { ns: kNs(ms), atLeast: t => Math.floor(t) + 1, toThr: n => n - 0.5 } : null;
     });
   }
 
@@ -7547,7 +8098,13 @@
     if (!nflPointsBetState[team]) {
       nflPointsBetState[team] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 21 };
     }
-    return nflPointsBetState[team];
+    return liveMarket(nflPointsBetState[team], s => {
+      const r = nflPointsDataCache && (nflPointsDataCache.games || []).find(x => x.team === team);
+      return r ? kTeamTotal("nfl", team, r.gameday || kEtDate(r.kickoff_utc), Math.ceil(s.threshold), s.yn) : null;
+    }, () => {
+      const r = nflPointsDataCache && (nflPointsDataCache.games || []).find(x => x.team === team);
+      return r ? { ns: kNs(kTeamMkts("nfl", team, r.gameday || kEtDate(r.kickoff_utc))), atLeast: Math.ceil, toThr: n => n } : null;
+    });
   }
 
   function getNflTotalBetState(gameId) {
@@ -7557,6 +8114,9 @@
     return liveMarket(nflTotalBetState[gameId], s => {
       const r = kNflRows(gameId);
       return r ? kTotal("nfl", r.home, r.away, r.date, Math.ceil(s.threshold), s.yn) : null;
+    }, () => {
+      const r = kNflRows(gameId);
+      return r ? { ns: kNs(kTotalMkts("nfl", r.home, r.away, r.date)), atLeast: Math.ceil, toThr: n => n } : null;
     });
   }
 
