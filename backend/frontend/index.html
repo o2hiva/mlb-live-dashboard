@@ -872,7 +872,10 @@
     if (!hitsBetState[gamePk][key]) {
       hitsBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
-    return hitsBetState[gamePk][key];
+    return liveMarket(hitsBetState[gamePk][key], s => {
+      const nm = kMlbBatter(hitsDataCache, gamePk, side, batterId);
+      return nm ? kPlayer("mlb", "hit", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    });
   }
 
   function updateHitsThreshold(gamePk, side, batterId, value) {
@@ -1015,7 +1018,10 @@
     if (!moneylineBetState[gamePk][side]) {
       moneylineBetState[gamePk][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
     }
-    return moneylineBetState[gamePk][side];
+    return liveMarket(moneylineBetState[gamePk][side], s => {
+      const g = kMlbGame(gamePk);
+      return g ? kMoneyline("mlb", g.home_team, g.away_team, kMlbDate(gamePk), side, "yes") : null;
+    });
   }
 
   function updateMoneylineBetField(gamePk, side, field, value) {
@@ -1440,7 +1446,10 @@
     if (!hrBetState[gamePk][key]) {
       hrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 1 };
     }
-    return hrBetState[gamePk][key];
+    return liveMarket(hrBetState[gamePk][key], s => {
+      const nm = kMlbBatter(hrDataCache, gamePk, side, batterId);
+      return nm ? kPlayer("mlb", "hr", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    });
   }
 
   function updateHrThreshold(gamePk, side, batterId, value) {
@@ -2106,7 +2115,10 @@
     if (!kBetState[gamePk][side]) {
       kBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 5 };
     }
-    return kBetState[gamePk][side];
+    return liveMarket(kBetState[gamePk][side], s => {
+      const nm = kMlbPitcher(gamePk, side);
+      return nm ? kPlayer("mlb", "ks", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    });
   }
 
   function updateKThreshold(gamePk, side, value) {
@@ -2247,7 +2259,10 @@
     if (!kpoBetState[gamePk][side]) {
       kpoBetState[gamePk][side] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 5 };
     }
-    return kpoBetState[gamePk][side];
+    return liveMarket(kpoBetState[gamePk][side], s => {
+      const nm = kMlbPitcher(gamePk, side);
+      return nm ? kPlayer("mlb", "ks", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    });
   }
   function rerenderKpo(gamePk) {
     if (activeLineupTab[gamePk] !== "kpo") return;
@@ -2421,7 +2436,10 @@
     if (!hrrBetState[gamePk][key]) {
       hrrBetState[gamePk][key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 2 };
     }
-    return hrrBetState[gamePk][key];
+    return liveMarket(hrrBetState[gamePk][key], s => {
+      const nm = kMlbBatter(hrrDataCache, gamePk, side, batterId);
+      return nm ? kPlayer("mlb", "hrr", nm, kMlbDate(gamePk), kAtLeast(s.threshold), s.yn) : null;
+    });
   }
 
   function updateHrrThreshold(gamePk, side, batterId, value) {
@@ -4934,6 +4952,224 @@
     renderCfbFromCache();
   }
 
+
+  // ======================================================================================================================
+  // LIVE KALSHI PRICES AS THE DEFAULT MARKET FOR EVERY BET (server: kalshi_live.py, /api/kalshi/live; CFB and tennis have their
+  // own services above/below). Every bet's `state.market` is wrapped by liveMarket(): while the Market box is empty it reads the
+  // live Kalshi ask for the side being bet (Yes = YES ask, No = NO ask); typing a price overrides it, clearing the box goes back
+  // to live. Kelly, Wager, Profit and Track all follow, because they read state.market. Bets Kalshi doesn't list (NPB, 1st-5
+  // runs, team points ...) simply stay manual.
+  // ======================================================================================================================
+  const kalshiStore = {};            // sport -> { v, markets: [...], at }
+  const kalshiWanted = {};           // sport -> Set(kinds)
+  const kalshiLoading = {};
+  let kalshiIndexCache = {};
+
+  function kNorm(s) {
+    return String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+  }
+
+  const K_NFL = { ARI: ["cardinals", "arizona"], ATL: ["falcons", "atlanta"], BAL: ["ravens", "baltimore"], BUF: ["bills", "buffalo"], CAR: ["panthers", "carolina"], CHI: ["bears", "chicago"],
+    CIN: ["bengals", "cincinnati"], CLE: ["browns", "cleveland"], DAL: ["cowboys", "dallas"], DEN: ["broncos", "denver"], DET: ["lions", "detroit"], GB: ["packers", "greenbay"],
+    HOU: ["texans", "houston"], IND: ["colts", "indianapolis"], JAX: ["jaguars", "jacksonville"], KC: ["chiefs", "kansascity"], LAC: ["chargers", "losangelesc"], LAR: ["rams", "losangelesr"],
+    LV: ["raiders", "lasvegas"], MIA: ["dolphins", "miami"], MIN: ["vikings", "minnesota"], NE: ["patriots", "newengland"], NO: ["saints", "neworleans"], NYG: ["giants", "newyorkg"],
+    NYJ: ["jets", "newyorkj"], PHI: ["eagles", "philadelphia"], PIT: ["steelers", "pittsburgh"], SEA: ["seahawks", "seattle"], SF: ["49ers", "sanfrancisco"], TB: ["buccaneers", "tampabay"],
+    TEN: ["titans", "tennessee"], WAS: ["commanders", "washington"] };
+  const K_NHL = { ANA: ["ducks", "anaheim"], BOS: ["bruins", "boston"], BUF: ["sabres", "buffalo"], CGY: ["flames", "calgary"], CAR: ["hurricanes", "carolina"], CHI: ["blackhawks", "chicago"],
+    COL: ["avalanche", "colorado"], CBJ: ["bluejackets", "columbus"], DAL: ["stars", "dallas"], DET: ["redwings", "detroit"], EDM: ["oilers", "edmonton"], FLA: ["panthers", "florida"],
+    LAK: ["kings", "losangeles"], MIN: ["wild", "minnesota"], MTL: ["canadiens", "montreal"], NSH: ["predators", "nashville"], NJD: ["devils", "newjersey"], NYI: ["islanders", "newyorki"],
+    NYR: ["rangers", "newyorkr"], OTT: ["senators", "ottawa"], PHI: ["flyers", "philadelphia"], PIT: ["penguins", "pittsburgh"], SJS: ["sharks", "sanjose"], SEA: ["kraken", "seattle"],
+    STL: ["blues", "stlouis"], TBL: ["lightning", "tampabay"], TOR: ["mapleleafs", "toronto"], UTA: ["utah"], VAN: ["canucks", "vancouver"], VGK: ["goldenknights", "vegas"],
+    WSH: ["capitals", "washington"], WPG: ["jets", "winnipeg"] };
+
+  function kTeamTokens(sport, name) {
+    const base = kNorm(name);
+    const map = sport === "nfl" ? K_NFL : sport === "nhl" ? K_NHL : null;
+    const extra = map && map[String(name || "").toUpperCase()] ? map[String(name).toUpperCase()] : [];
+    return [base, ...extra].filter(t => t && t.length >= 2);
+  }
+
+  function kTeamMatch(sport, kalshiName, ourName) {
+    const k = kNorm(kalshiName);
+    if (k.length < 2) return false;
+    return kTeamTokens(sport, ourName).some(t => t === k || (k.length >= 3 && (t.includes(k) || (t.length >= 3 && k.includes(t)))));
+  }
+
+  function kDayDiff(a, b) {
+    if (!a || !b) return 99;
+    return Math.abs((Date.parse(a + "T00:00:00Z") - Date.parse(String(b).slice(0, 10) + "T00:00:00Z")) / 86400000);
+  }
+
+  // the calendar date (America/New_York, which is what Kalshi's event codes use) of a UTC timestamp
+  function kEtDate(isoUtc) {
+    if (!isoUtc) return null;
+    const d = new Date(isoUtc);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  }
+
+  function kalshiNeed(sport, kind) {
+    if (!kalshiWanted[sport]) kalshiWanted[sport] = new Set();
+    const had = kalshiWanted[sport].has(kind);
+    kalshiWanted[sport].add(kind);
+    if (!kalshiStore[sport] && !kalshiLoading[sport]) kalshiLoad(sport);
+    else if (!had && !kalshiLoading[sport]) kalshiLoad(sport, true);
+  }
+
+  async function kalshiLoad(sport, force) {
+    if (kalshiLoading[sport]) return;
+    kalshiLoading[sport] = true;
+    try {
+      const kinds = [...(kalshiWanted[sport] || [])].join(",");
+      const since = !force && kalshiStore[sport] ? kalshiStore[sport].v : "";
+      const res = await fetch(`${API_BASE}/api/kalshi/live?sport=${sport}&kinds=${encodeURIComponent(kinds)}${since ? "&v=" + encodeURIComponent(since) : ""}`);
+      const d = await res.json();
+      if (d && d.status === "ok" && !d.unchanged) {
+        kalshiStore[sport] = { v: d.v, markets: d.markets || [], at: Date.now() };
+        kalshiIndexCache = {};
+        kalshiRerender();
+      }
+    } catch (e) { /* prices are optional - the manual Market boxes still work */ }
+    finally { kalshiLoading[sport] = false; }
+  }
+
+  function kalshiMarkets(sport, kind) {
+    kalshiNeed(sport, kind);
+    const st = kalshiStore[sport];
+    return st ? st.markets.filter(m => m.k === kind) : [];
+  }
+
+  function kPct(m, yn) {
+    if (!m) return null;
+    const p = yn === "no" ? m.na : m.ya;
+    if (p == null || p <= 0 || p >= 1) return null;
+    return Math.round(p * 1000) / 10;
+  }
+
+  // Game-level events (moneyline etc.): markets grouped by Kalshi's event code, each with the team names of its markets.
+  function kGameEvents(sport, kind) {
+    const key = sport + "|" + kind + "|" + (kalshiStore[sport] ? kalshiStore[sport].v : "");
+    if (kalshiIndexCache[key]) return kalshiIndexCache[key];
+    const ms = kalshiMarkets(sport, kind);
+    const ev = new Map();
+    for (const m of ms) {
+      if (!ev.has(m.e)) ev.set(m.e, { e: m.e, d: m.d, ms: [] });
+      ev.get(m.e).ms.push(m);
+    }
+    const arr = [...ev.values()];
+    kalshiIndexCache[key] = arr;
+    return arr;
+  }
+
+  // the event of `kind` whose team markets are exactly this game (both teams, date within a day)
+  function kFindGame(sport, kind, home, away, date) {
+    for (const ev of kGameEvents(sport, kind)) {
+      if (date && ev.d && kDayDiff(ev.d, date) > 1) continue;
+      const h = ev.ms.find(m => kTeamMatch(sport, m.ys, home));
+      const a = ev.ms.find(m => m !== h && kTeamMatch(sport, m.ys, away));
+      if (h && a) return { ev, home: h, away: a };
+    }
+    return null;
+  }
+
+  function kMoneyline(sport, home, away, date, side, yn) {
+    const f = kFindGame(sport, "game", home, away, date);
+    return f ? kPct(side === "home" ? f.home : f.away, "yes") : null;
+  }
+
+  // Over/under on a game total: Kalshi's "at least N" (strike N-0.5) market of the matching event.
+  function kTotal(sport, home, away, date, atLeastN, yn) {
+    const ms = kalshiMarkets(sport, "total");
+    const out = ms.filter(m => m.d && (!date || kDayDiff(m.d, date) <= 1) && (m.n === atLeastN || (m.s != null && Math.abs(m.s + 0.5 - atLeastN) < 0.01)));
+    for (const m of out) {
+      const text = kNorm((m.ti || "") + " " + (m.ys || ""));
+      if (kTeamTokens(sport, home).some(t => t.length >= 3 && text.includes(t)) && kTeamTokens(sport, away).some(t => t.length >= 3 && text.includes(t))) return kPct(m, yn);
+    }
+    return null;
+  }
+
+  // player props: the market of `kind` for this player (full name in the market text, or first initial + last name in the ticker)
+  function kPlayer(sport, kind, name, date, atLeastN, yn) {
+    if (!name) return null;
+    const words = String(name).replace(/\b(jr|sr|ii|iii|iv)\b\.?/gi, "").trim().split(/\s+/);
+    const full = kNorm(words.join(" "));
+    const last = kNorm(words.slice(1).join(" ")) || kNorm(words[0]);
+    const initLast = (kNorm(words[0]).slice(0, 1) || "") + last;
+    let best = [], bestScore = 0;
+    for (const m of kalshiMarkets(sport, kind)) {
+      if (date && m.d && kDayDiff(m.d, date) > 1) continue;
+      const text = kNorm((m.ys || "") + " " + (m.ti || ""));
+      const seg = kNorm(m.p || "");
+      let score = 0;
+      if (full.length >= 5 && text.includes(full)) score = 2;
+      else if (last.length >= 3 && (text.includes(last) || seg.includes(initLast)) && seg.includes(last)) score = 1;
+      else if (last.length >= 4 && text.includes(last) && text.includes(kNorm(words[0]).slice(0, 1))) score = 1;
+      if (!score) continue;
+      if (score > bestScore) { best = [m]; bestScore = score; } else if (score === bestScore) best.push(m);
+    }
+    if (!best.length) return null;
+    const players = new Set(best.map(m => m.p || m.e + m.ys));
+    if (players.size > 1) return null;                    // two players fit this name: don't guess
+    const hit = best.find(m => m.n === atLeastN || (m.n == null && m.s != null && Math.abs(m.s + 0.5 - atLeastN) < 0.01));
+    return hit ? kPct(hit, yn) : null;
+  }
+
+  // Wrap state.market: manual value when typed, else resolver(state) (the live Kalshi price, or null).
+  function liveMarket(state, resolver) {
+    if (Object.getOwnPropertyDescriptor(state, "market") && Object.getOwnPropertyDescriptor(state, "market").get) return state;
+    let manual = state.market == null ? null : state.market;
+    Object.defineProperty(state, "market", {
+      enumerable: true, configurable: true,
+      get() {
+        if (manual != null) return manual;
+        try { const v = resolver(state); return v == null ? null : v; } catch (e) { return null; }
+      },
+      set(v) { manual = (v == null || isNaN(v)) ? null : v; },
+    });
+    return state;
+  }
+
+  // ---- context helpers (what game / player a state belongs to) ----
+  function kMlbGame(gamePk) { return (lastFetchedGames || []).find(g => String(g.game_pk) === String(gamePk)) || null; }
+  function kMlbDate(gamePk) { const g = kMlbGame(gamePk); return g ? (g.game_date || kEtDate(g.game_datetime_utc)) : null; }
+  function kMlbBatter(cache, gamePk, side, batterId) {
+    const d = cache[gamePk];
+    const list = d ? d[side + "_batters"] : null;
+    const b = list ? list.find(x => String(x.batter_id) === String(batterId)) : null;
+    return b ? b.batter_name : null;
+  }
+  function kMlbPitcher(gamePk, side) {
+    const d = kDataCache[gamePk];
+    const p = d ? d[side + "_pitcher"] : null;
+    return p ? p.pitcher_name : null;
+  }
+  const kAtLeast = line => Math.ceil(line);
+
+  function kalshiRerender() {
+    const a = document.activeElement;
+    const vis = id => { const el = document.getElementById(id); return el && el.style.display !== "none"; };
+    if (a && (a.tagName === "INPUT" || a.tagName === "SELECT") && a.closest && a.closest("#tab-content-mlb, #tab-content-nba, #tab-content-nhl, #tab-content-nfl")) return;
+    try {
+      if (vis("tab-content-mlb")) {
+        if (vis("subtab-content-mlb-bybets") && typeof renderByBetsTable === "function") renderByBetsTable();
+        else if (typeof render === "function") { render(lastFetchedGames); reapplyExpandedLineups(); }
+      }
+      if (vis("tab-content-nba") && typeof rerenderNba === "function") rerenderNba();
+      if (vis("tab-content-nhl") && typeof renderNhlGamesFromCache === "function") renderNhlGamesFromCache();
+      if (vis("tab-content-nfl") && typeof renderNflPointsFromCache === "function") renderNflPointsFromCache();
+    } catch (e) { /* a re-render problem must never break the page */ }
+  }
+
+
+  function kNflRows(gameId) {
+    const rows = (nflPointsDataCache && nflPointsDataCache.games || []).filter(r => String(r.game_id) === String(gameId));
+    const h = rows.find(r => r.is_home), a = rows.find(r => !r.is_home);
+    return h && a ? { home: h.team, away: a.team, date: h.gameday || a.gameday || kEtDate(h.kickoff_utc) } : null;
+  }
+  const K_NBA_KIND = { pts: "pts", reb: "reb", ast: "ast" };
+
+  setInterval(() => { for (const sport of Object.keys(kalshiWanted)) kalshiLoad(sport); }, 60000);
+
   let cfbDataCache = null;
 
   // ---- Kalshi live prices for the CFB markets (server: cfb_kalshi.py, /api/cfb/kalshi). Every Market box that is left empty is
@@ -5656,7 +5892,12 @@
     if (!nbaBetState[k]) {
       nbaBetState[k] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: fairLine != null ? fairLine : 0.5 };
     }
-    return nbaBetState[k];
+    return liveMarket(nbaBetState[k], s => {
+      const kind = K_NBA_KIND[stat];
+      const f = kind ? nbaFind(gameId, playerId) : null;
+      if (!f) return null;
+      return kPlayer("nba", kind, f.player.player, kEtDate(f.game.tip_off), Math.floor(s.threshold) + 1, s.yn);
+    });
   }
 
   function nbaProbOver(sf, line) {
@@ -6386,7 +6627,14 @@
       nhlgState[k] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null,
                        threshold: fairLine != null ? fairLine : 0 };
     }
-    return nhlgState[k];
+    return liveMarket(nhlgState[k], s => {
+      const g = nhlgGame(gid);
+      if (!g) return null;
+      const d = kEtDate(g.start_utc);
+      if (mk === "ml_home" || mk === "ml_away") return kMoneyline("nhl", g.home, g.away, d, mk === "ml_home" ? "home" : "away", "yes");
+      if (mk === "total") return kTotal("nhl", g.home, g.away, d, Math.floor(s.threshold) + 1, s.yn);
+      return null;
+    });
   }
 
   function nhlgGame(gid) {
@@ -7306,7 +7554,10 @@
     if (!nflTotalBetState[gameId]) {
       nflTotalBetState[gameId] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: 44 };
     }
-    return nflTotalBetState[gameId];
+    return liveMarket(nflTotalBetState[gameId], s => {
+      const r = kNflRows(gameId);
+      return r ? kTotal("nfl", r.home, r.away, r.date, Math.ceil(s.threshold), s.yn) : null;
+    });
   }
 
   function probNflPointsAtLeast(mean, line) {
@@ -7501,7 +7752,10 @@
     if (!nflMoneylineBetState[gameId][side]) {
       nflMoneylineBetState[gameId][side] = { market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
     }
-    return nflMoneylineBetState[gameId][side];
+    return liveMarket(nflMoneylineBetState[gameId][side], s => {
+      const r = kNflRows(gameId);
+      return r ? kMoneyline("nfl", r.home, r.away, r.date, side, "yes") : null;
+    });
   }
 
   function updateNflMoneylineBetField(gameId, side, field, value) {

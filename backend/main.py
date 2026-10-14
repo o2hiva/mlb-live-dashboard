@@ -150,6 +150,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MLB Live Dashboard", lifespan=lifespan)
+from fastapi.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=2000)  # the Kalshi price lists are big, repetitive JSON
 
 # Personal, single-user dashboard - CORS wide open for simplicity.
 # Tighten this to your actual frontend origin once deployed.
@@ -1890,6 +1892,25 @@ def cfb_kalshi_debug(db: Session = Depends(get_db)):
 def refresh_cfb_kalshi():
     import cfb_kalshi
     return cfb_kalshi.get_service().refresh()
+
+
+@app.get("/api/kalshi/live")
+def kalshi_live(sport: str, kinds: str | None = None, v: str | None = None):
+    """Live Kalshi markets for one sport (mlb | nba | nhl | nfl), compact, for the browser to default each bet's Market box to the
+    live price. kinds = comma list (game,total,ks,hit,pts ...); v = the version from the last response (answers {unchanged:true}
+    when nothing new was pulled). See kalshi_live.py."""
+    import kalshi_live as kl
+    if sport not in kl.KNOWN:
+        raise HTTPException(status_code=400, detail="sport must be one of " + ", ".join(kl.KNOWN))
+    return kl.get_service().payload(sport, [k for k in (kinds or "").split(",") if k] or None, v)
+
+
+@app.get("/api/kalshi/debug")
+def kalshi_live_debug():
+    """What the Kalshi pull found for MLB / NBA / NHL / NFL: series, counts, sample market titles and tickers."""
+    import kalshi_live as kl
+    kl.get_service().touch()
+    return kl.get_service().debug()
 
 
 @app.get("/api/tennis/slate")
