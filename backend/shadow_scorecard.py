@@ -943,3 +943,84 @@ def make_tennis_adapter(get_events: Callable, get_result: Callable) -> Adapter:
                             "sets": "Total sets Over (Kalshi lines)"}, line_markets=set(),
                    notes={"team_pts": "ATP only. Every Kalshi line is logged before the scheduled start and graded from Kalshi's own settlement. "
                                       "Against Kalshi's prices the model has not shown an edge in backtests: this card is the live check. Retired / walkover matches are graded the way Kalshi settles them."})
+
+
+# ====================================================================== Bundesliga adapter
+BL_LINES = {"o15": 1.5, "o25": 2.5, "o35": 3.5, "o45": 4.5}
+BL_TEAM_LINES = {"05": 0.5, "15": 1.5, "25": 2.5}
+
+
+def bundesliga_collect_from_events(events: list) -> list:
+    """events = the Bundesliga slate's `events` list. One record per match that has not kicked off: home / draw / away, both
+    teams to score, total goals over 1.5-4.5 and each team's goals over 0.5-2.5 - every market the tab shows."""
+    out = []
+    for ev in events or []:
+        try:
+            if ev.get("state") not in (None, "pre") or not ev.get("kickoff"):
+                continue
+            pr, tot, team = ev["probabilities"], ev["total_over"], ev["team_over"]
+            seg = (ev.get("lineup") or {}).get("source") or "previous XI"
+            items = [{"m": "h", "p": round(float(pr["home"]), 5), "seg": seg}, {"m": "d", "p": round(float(pr["draw"]), 5), "seg": seg},
+                     {"m": "a", "p": round(float(pr["away"]), 5), "seg": seg}, {"m": "btts", "p": round(float(pr["btts"]), 5), "seg": seg}]
+            for k, ln in BL_LINES.items():
+                if str(ln) in tot:
+                    items.append({"m": k, "p": round(float(tot[str(ln)]), 5), "line": ln, "seg": seg})
+            for side, pre in (("home", "th"), ("away", "ta")):
+                for k, ln in BL_TEAM_LINES.items():
+                    if str(ln) in team.get(side, {}):
+                        items.append({"m": pre + k, "p": round(float(team[side][str(ln)]), 5), "line": ln, "seg": seg})
+            ko = str(ev["kickoff"]).replace("Z", "")
+            start = (ko[:16] + ":00") if len(ko) <= 16 else ko[:19]
+            out.append({"id": str(ev["id"]), "start": start, "shard": start[:7], "label": f"{ev['home']} vs {ev['away']}", "ctx": {}, "items": items})
+        except Exception:
+            continue
+    return out
+
+
+def make_bundesliga_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """get_events(db) -> slate events; get_score(match_id) -> (home goals, away goals) | None."""
+    def collect(db):
+        return bundesliga_collect_from_events(get_events(db))
+
+    def settle(db, recs):
+        out = {}
+        now = datetime.utcnow()
+        for r in recs:
+            start = _parse_utc(r.get("start")) or now
+            age = now - start
+            if age.total_seconds() < 100 * 60:
+                continue                                    # a match cannot be over yet
+            try:
+                sc = get_score(r["id"])
+            except Exception:
+                sc = None
+            if sc is not None:
+                out[r["id"]] = {"hg": int(sc[0]), "ag": int(sc[1])}
+            elif age.days > 4:
+                out[r["id"]] = {"void": True}                # never settled: postponed / abandoned
+        return out
+
+    def grade(item, result, rec):
+        hg, ag, m = result["hg"], result["ag"], item["m"]
+        if m == "h":
+            return int(hg > ag)
+        if m == "d":
+            return int(hg == ag)
+        if m == "a":
+            return int(hg < ag)
+        if m == "btts":
+            return int(hg > 0 and ag > 0)
+        if m in BL_LINES:
+            return int(hg + ag > BL_LINES[m])
+        if m[:2] in ("th", "ta") and m[2:] in BL_TEAM_LINES:
+            return int((hg if m[1] == "h" else ag) > BL_TEAM_LINES[m[2:]])
+        return None
+
+    markets = {"h": "Home win", "d": "Draw", "a": "Away win", "btts": "Both teams to score"}
+    markets.update({k: f"Total goals Over {ln}" for k, ln in BL_LINES.items()})
+    markets.update({f"th{k}": f"Home goals Over {ln}" for k, ln in BL_TEAM_LINES.items()})
+    markets.update({f"ta{k}": f"Away goals Over {ln}" for k, ln in BL_TEAM_LINES.items()})
+    return Adapter(sport="bundesliga", label="Bundesliga", collect=collect, settle=settle, grade=grade, markets=markets, line_markets=set(),
+                   notes={"benchmark": "Research model: in its own backtest (351 matches) it beats the league average, ties a tuned team-level model, and does NOT beat the closing market. "
+                                       "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.",
+                          "team_pts": "Lines are fixed (total 1.5-4.5, team 0.5-2.5), not posted lines."})

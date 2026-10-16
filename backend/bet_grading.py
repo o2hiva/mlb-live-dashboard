@@ -212,8 +212,10 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nba_pts", "nba_reb", "nba_ast", "nba_pra",
                           "nhl_ml_home", "nhl_ml_away", "nhl_tg_home", "nhl_tg_away",
                           "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3",
-                          "tennis_ml", "tennis_games", "tennis_sets"}
+                          "tennis_ml", "tennis_games", "tennis_sets",
+                          "bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
 
+BL_BET_TYPES = {"bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
 TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
 
 
@@ -230,6 +232,34 @@ def _grade_tennis_bet(bet: TrackedBet):
     if res == "void":
         return 0.0, "push"
     return (1.0 if res == "yes" else 0.0), ("win" if res == bet.yn else "loss")
+
+
+def _grade_bl_bet(bet: TrackedBet):
+    """Bundesliga bets from the Soccer tab. The bet stores the ESPN match id in external_player_id; yn == "yes" wins when the
+    outcome happens (home / draw / away win, both teams score, total or team goals OVER the line) and "no" when it does not.
+    Graded on the 90-minute score ESPN reports. Returns None until the match is final, else (actual, result)."""
+    import bundesliga_service
+    if not bet.external_player_id:
+        return None
+    sc = bundesliga_service.get_service().final_score(bet.external_player_id)
+    if sc is None:
+        return None
+    hg, ag = sc
+    t = bet.bet_type
+    if t == "bl_h":
+        happened, actual = hg > ag, float(hg - ag)
+    elif t == "bl_d":
+        happened, actual = hg == ag, float(hg - ag)
+    elif t == "bl_a":
+        happened, actual = hg < ag, float(hg - ag)
+    elif t == "bl_btts":
+        happened, actual = (hg > 0 and ag > 0), float(min(hg, ag))
+    else:
+        if bet.line is None:
+            return None
+        goals = {"bl_total": hg + ag, "bl_th": hg, "bl_ta": ag}[t]
+        happened, actual = goals > bet.line, float(goals)
+    return actual, ("win" if happened == (bet.yn == "yes") else "loss")
 
 
 NBA_BET_STATS = {"nba_pts": "pts", "nba_reb": "reb", "nba_ast": "ast", "nba_pra": "pra"}
@@ -826,12 +856,14 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES:
                 try:
                     if bet.bet_type in NBA_BET_STATS:
                         graded_nba = _grade_nba_prop(bet)
                     elif bet.bet_type in TENNIS_BET_TYPES:
                         graded_nba = _grade_tennis_bet(bet)
+                    elif bet.bet_type in BL_BET_TYPES:
+                        graded_nba = _grade_bl_bet(bet)
                     else:
                         graded_nba = _grade_nhl_goal_bet(bet)
                 except Exception:

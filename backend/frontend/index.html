@@ -191,8 +191,9 @@
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
     <span id="tab-btn-tennis" class="tab-btn" onclick="switchTab('tennis')">Tennis</span>
-    <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
+    <span id="tab-btn-soccer" class="tab-btn" onclick="switchTab('soccer')">Soccer</span>
     <span id="tab-btn-edges" class="tab-btn" onclick="switchTab('edges')">Edges</span>
+    <span id="tab-btn-bettracker" class="tab-btn" onclick="switchTab('bettracker')">Bet Tracker</span>
   </div>
 
   <div id="tab-content-mlb">
@@ -519,6 +520,36 @@
       <div class="sub">Tennis Shadow Scorecard - the model's moneyline (favourite wins), total-games and total-sets probabilities are saved automatically before each match starts, for every Kalshi line, and graded from Kalshi's own settlement. No bets are placed. Judge it after 100+ graded markets.</div>
       <button class="tab-btn" onclick="loadShadowScorecard('tennis','shadow-scorecard-tennis',true)" style="margin-bottom:10px;">Refresh</button>
       <div id="shadow-scorecard-tennis"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
+  <div id="tab-content-soccer" style="display:none;">
+    <div class="tabs">
+      <span id="soccer-sub-btn-bundesliga" class="tab-btn active" onclick="switchSoccerSub('bundesliga')">Bundesliga</span>
+    </div>
+    <div id="soccer-sub-bundesliga">
+      <div class="tabs">
+        <span id="bundesliga-view-btn-games" class="tab-btn active" onclick="switchSportView('bundesliga','games')">Matches</span>
+        <span id="bundesliga-view-btn-scorecard" class="tab-btn" onclick="switchSportView('bundesliga','scorecard')">Scorecard</span>
+      </div>
+      <div id="bundesliga-games-wrap">
+        <div class="sub">Bundesliga - the player plus-minus goals model for every upcoming match: home / draw / away, both teams to score, total goals and each team's goals, with Market pre-filled from Kalshi's live ask for the side you bet when Kalshi lists it (type a price to override). <b>Research model:</b> in its own backtest it beat the league average and tied a team-level model but did <b>not</b> beat the closing market, so treat an "edge" here with suspicion and judge it on the Scorecard.</div>
+        <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
+          <div>
+            <label for="bl-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+            <select id="bl-date-select" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="setBlDate(this.value)"></select>
+          </div>
+          <span class="hits-toggle" onclick="loadBlTab()" style="padding:6px 14px;">Refresh</span>
+        </div>
+        <div id="bl-status" class="settings-hint"></div>
+        <div id="bl-content">Loading...</div>
+      </div>
+      <div id="bundesliga-scorecard-wrap" style="display:none;">
+        <div class="sub">Bundesliga Shadow Scorecard - the model's home / draw / away, both-teams-to-score, total-goals (1.5-4.5) and team-goals (0.5-2.5) probabilities are saved automatically before every kickoff and graded on the final score. No bets are placed. Judge each market after 30+ graded matches.</div>
+        <button class="tab-btn" onclick="loadShadowScorecard('bundesliga','shadow-scorecard-bundesliga',true); loadBlPlatformScorecard()" style="margin-bottom:10px;">Refresh</button>
+        <div id="shadow-scorecard-bundesliga"><div class="settings-hint">Open this tab to load.</div></div>
+        <div id="bl-platform-scorecard"></div>
+      </div>
     </div>
   </div>
 
@@ -2685,6 +2716,7 @@
     document.getElementById("tab-content-tennis").style.display = tab === "tennis" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-content-edges").style.display = tab === "edges" ? "block" : "none";
+    document.getElementById("tab-content-soccer").style.display = tab === "soccer" ? "block" : "none";
     document.getElementById("tab-btn-mlb").classList.toggle("active", tab === "mlb");
     document.getElementById("tab-btn-npb").classList.toggle("active", tab === "npb");
     document.getElementById("tab-btn-nfl").classList.toggle("active", tab === "nfl");
@@ -2695,7 +2727,10 @@
     document.getElementById("tab-btn-tennis").classList.toggle("active", tab === "tennis");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
-    if (tab === "edges") {
+    document.getElementById("tab-btn-soccer").classList.toggle("active", tab === "soccer");
+    if (tab === "soccer") {
+      loadBlTab();
+    } else if (tab === "edges") {
       loadEdgesTab();
     } else if (tab === "bettracker") {
       loadBetTrackerSettings();
@@ -2820,6 +2855,7 @@
     document.getElementById(sport + "-view-btn-games").classList.toggle("active", view === "games");
     document.getElementById(sport + "-view-btn-scorecard").classList.toggle("active", view === "scorecard");
     if (view === "scorecard") loadShadowScorecard(sport, "shadow-scorecard-" + sport, false);
+    if (sport === "bundesliga" && view === "scorecard") loadBlPlatformScorecard();
   }
 
   // ---- Generic shadow scorecard (any sport registered on the backend: /api/scorecard/{sport}) ----
@@ -2910,6 +2946,10 @@
     { label: "Tennis Moneyline", filter: b => b.bet_type === "tennis_ml" },
     { label: "Tennis Total Games", filter: b => b.bet_type === "tennis_games" },
     { label: "Tennis Total Sets", filter: b => b.bet_type === "tennis_sets" },
+    { label: "Bundesliga Result (1X2)", filter: b => ["bl_h", "bl_d", "bl_a"].includes(b.bet_type) },
+    { label: "Bundesliga BTTS", filter: b => b.bet_type === "bl_btts" },
+    { label: "Bundesliga Total Goals", filter: b => b.bet_type === "bl_total" },
+    { label: "Bundesliga Team Goals", filter: b => b.bet_type === "bl_th" || b.bet_type === "bl_ta" },
     { label: "NPB YRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "yes" },
     { label: "NPB NRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "no" },
   ];
@@ -2972,6 +3012,7 @@
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
+    { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") },
   ];
 
   // Top "Hit Rates" group: Overall first, then MLB/NFL/CFB.
@@ -3196,7 +3237,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5021,10 +5062,17 @@
     STL: ["blues", "stlouis"], TBL: ["lightning", "tampabay"], TOR: ["mapleleafs", "toronto"], UTA: ["utah"], VAN: ["canucks", "vancouver"], VGK: ["goldenknights", "vegas"],
     WSH: ["capitals", "washington"], WPG: ["jets", "winnipeg"] };
 
+  // Bundesliga club names as ESPN writes them vs the short forms Kalshi uses
+  const K_BL = [["munich", ["bayern"]], ["cologne", ["koln", "koeln"]], ["koln", ["cologne"]], ["monchengladbach", ["gladbach", "mgladbach"]], ["unionberlin", ["union"]],
+    ["stpauli", ["pauli"]], ["frankfurt", ["frankfurt", "eintracht"]], ["bremen", ["bremen", "werder"]], ["leverkusen", ["leverkusen"]], ["leipzig", ["leipzig"]],
+    ["hoffenheim", ["hoffenheim"]], ["mainz", ["mainz"]], ["heidenheim", ["heidenheim"]], ["wolfsburg", ["wolfsburg"]], ["freiburg", ["freiburg"]], ["augsburg", ["augsburg"]],
+    ["stuttgart", ["stuttgart"]], ["dortmund", ["dortmund"]], ["hamburg", ["hamburg"]], ["bochum", ["bochum"]], ["kiel", ["kiel"]]];
+
   function kTeamTokens(sport, name) {
     const base = kNorm(name);
     const map = sport === "nfl" ? K_NFL : sport === "nhl" ? K_NHL : null;
-    const extra = map && map[String(name || "").toUpperCase()] ? map[String(name).toUpperCase()] : [];
+    let extra = map && map[String(name || "").toUpperCase()] ? map[String(name).toUpperCase()] : [];
+    if (sport === "bl") extra = K_BL.filter(([k]) => base.includes(k)).flatMap(([, t]) => t);
     return [base, ...extra].filter(t => t && t.length >= 2);
   }
 
@@ -5221,7 +5269,7 @@
   function kalshiRerender() {
     const a = document.activeElement;
     const vis = id => { const el = document.getElementById(id); return el && el.style.display !== "none"; };
-    if (a && (a.tagName === "INPUT" || a.tagName === "SELECT") && a.closest && a.closest("#tab-content-mlb, #tab-content-nba, #tab-content-nhl, #tab-content-nfl, #tab-content-edges")) return;
+    if (a && (a.tagName === "INPUT" || a.tagName === "SELECT") && a.closest && a.closest("#tab-content-mlb, #tab-content-nba, #tab-content-nhl, #tab-content-nfl, #tab-content-edges, #tab-content-soccer")) return;
     try {
       if (vis("tab-content-mlb")) {
         if (vis("subtab-content-mlb-bybets") && typeof renderByBetsTable === "function") renderByBetsTable();
@@ -5231,6 +5279,7 @@
       if (vis("tab-content-nhl") && typeof renderNhlGamesFromCache === "function") renderNhlGamesFromCache();
       if (vis("tab-content-nfl") && typeof renderNflPointsFromCache === "function") renderNflPointsFromCache();
       if (vis("tab-content-edges") && typeof renderEdges === "function") renderEdges();
+      if (vis("tab-content-soccer") && typeof renderBl === "function") renderBl();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
 
@@ -5410,6 +5459,27 @@
           cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNflMoneylineTrack('${gameId}','${side}',this.checked,'${(row.team || "").replace(/'/g, "\\'")}',${prob},${state.market},${cells.wager},${cells.profit})" />`;
           add("NFL", "Moneyline", { state, yesPct, noPct, sides: { yes: edgeNum(yesPct, state.market), no: null, cur: edgeNum(yesPct, state.market) },
             html: byBetsRowHtml("NFL Moneyline", `${row.team} to win`, row.team, row.opponent, "—", `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- Soccer: Bundesliga (the model's own backtest says it does not beat the closing market - judge these on the Scorecard) ----
+    if (blData && blData.events) {
+      for (const ev of blData.events) {
+        if (ev.state === "in") continue;
+        for (const b of blBetList(ev)) {
+          const key = blKey(ev, b);
+          blRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+          const c = blCalc(key);
+          const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
+          const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateBlField(${k},'yn',this.value)`, `updateBlField(${k},'market',this.value)`,
+            `updateBlField(${k},'useKelly',this.checked)`, `updateBlField(${k},'manualWager',this.value)`, "");
+          cells.ynHtml = `<select onchange="updateBlField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${isLine ? "Over" : "Yes"}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${isLine ? "Under" : "No"}</option></select>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleBlTrack(${k},this.checked)" />`;
+          const group = (b.kind === "btts" ? "BTTS" : isLine ? (b.kind === "total" ? "Total Goals" : "Team Goals") : "Result");
+          add("Soccer", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("BL " + group, blBetName(blRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
         }
       }
     }
@@ -5655,7 +5725,7 @@
       <div class="settings-row" style="gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
         <label class="settings-hint" style="margin:0;">Min edge (pts) <input type="number" step="0.5" value="${edgesMinEdge}" style="width:70px;" onchange="edgesSetMin(this.value)" /></label>
         <label class="settings-hint" style="margin:0;">Sport
-          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","Tennis"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","Tennis","Soccer"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <span class="settings-hint" style="margin:0;">${shown.length} edge${shown.length === 1 ? "" : "s"} of ${priced.length} priced bets (${items.length} bets scanned${edgesLoading ? " - still loading..." : ""})</span>
       </div>`;
     if (!shown.length) {
@@ -5676,7 +5746,7 @@
     renderEdges();
     const jobs = [];
     if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
-    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), ensurePlayoffInfo(datePicker.value || todayIso()));
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
     // draw as soon as each sport arrives, not only when the slowest finishes
     jobs.forEach(j => j.then(renderEdges, renderEdges));
     await Promise.allSettled(jobs);
@@ -6924,6 +6994,313 @@
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadTennisTab(true);
   }, 30000);
+
+  // ======================================================================================================================
+  // SOCCER > BUNDESLIGA: the player plus-minus goals model (bundesliga_platform.py). Per upcoming match: 1X2, both teams to score,
+  // total goals over 1.5-4.5 and each team's goals over 0.5-3.5, all with Market (live Kalshi ask by default), Edge, Kelly, Wager,
+  // Profit and Track. Tracked bets are graded on the final score (bet types bl_h / bl_d / bl_a / bl_btts / bl_total / bl_th / bl_ta).
+  // The model's own backtest says it does NOT beat the closing market - the tab says so; the Scorecard is the live check.
+  // ======================================================================================================================
+  let blData = null;
+  let blRows = {};
+  let blDateChoice = null;
+  const blState = {};
+  const blTeamOpen = new Set();
+  const BL_COLS = "minmax(120px, 1.4fr) 40px 38px 38px 56px 64px 52px 46px 30px 58px 54px 40px";
+  const BL_TOTAL_LINES = ["1.5", "2.5", "3.5", "4.5"];
+  const BL_TEAM_LINES = ["0.5", "1.5", "2.5", "3.5"];
+
+  function blKickoffDate(ev) { return kEtDate(ev.kickoff); }
+
+  // the Kalshi market object for one bet row, or null
+  function blKalshiMkt(row, yn) {
+    const ev = row.ev, d = blKickoffDate(ev);
+    if (row.kind === "h" || row.kind === "a") {
+      const f = kFindGame("bl", "game", ev.home, ev.away, d);
+      return f ? (row.kind === "h" ? f.home : f.away) : null;
+    }
+    if (row.kind === "d") {
+      const f = kFindGame("bl", "game", ev.home, ev.away, d);
+      return f ? (f.ev.ms.find(m => /^(tie|draw)/i.test(String(m.ys || "").trim())) || null) : null;
+    }
+    if (row.kind === "btts") {
+      const th = kTeamTokens("bl", ev.home).filter(t => t.length >= 3), ta = kTeamTokens("bl", ev.away).filter(t => t.length >= 3);
+      const hit = kalshiMarkets("bl", "btts").filter(m => {
+        if (d && m.d && kDayDiff(m.d, d) > 1) return false;
+        const text = kNorm((m.ti || "") + " " + (m.ys || ""));
+        return th.some(t => text.includes(t)) && ta.some(t => text.includes(t));
+      });
+      return hit.length === 1 ? hit[0] : (hit.find(m => /^yes/i.test(String(m.ys || "").trim())) || null);
+    }
+    const n = Math.floor(parseFloat(row.line)) + 1;
+    if (row.kind === "total") return kTotalMkts("bl", ev.home, ev.away, d).find(m => kNOf(m) === n) || null;
+    if (row.kind === "th" || row.kind === "ta") {
+      const hits = kTeamMkts("bl", row.kind === "th" ? ev.home : ev.away, d).filter(m => kNOf(m) === n);
+      return hits.length === 1 ? hits[0] : null;
+    }
+    return null;
+  }
+
+  function getBlState(key) {
+    if (!blState[key]) blState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return liveMarket(blState[key], s => { const row = blRows[key]; return row ? kPct(blKalshiMkt(row, s.yn), s.yn) : null; });
+  }
+
+  function blBetList(ev) {
+    const pr = ev.probabilities || {}, out = [];
+    const nm = ev.home;
+    out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
+    out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
+    out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
+    BL_TOTAL_LINES.forEach(l => { if (ev.total_over && ev.total_over[l] != null) out.push({ kind: "total", line: l, label: "Total goals", p: ev.total_over[l], group: "Total" }); });
+    for (const side of ["home", "away"]) {
+      BL_TEAM_LINES.forEach(l => {
+        const v = ev.team_over && ev.team_over[side] ? ev.team_over[side][l] : null;
+        if (v != null) out.push({ kind: side === "home" ? "th" : "ta", line: l, label: `${side === "home" ? ev.home : ev.away} goals`, p: v, group: "Team" });
+      });
+    }
+    return out.filter(b => b.p != null);
+  }
+
+  function blKey(ev, b) { return `${ev.id}|${b.kind}|${b.line}`; }
+
+  function blCalc(key) {
+    const row = blRows[key];
+    if (!row) return null;
+    const st = getBlState(key);
+    const modelProb = st.yn === "yes" ? row.p : 1 - row.p;
+    const market = st.market;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function blBetType(kind) { return { h: "bl_h", d: "bl_d", a: "bl_a", btts: "bl_btts", total: "bl_total", th: "bl_th", ta: "bl_ta" }[kind]; }
+  function blBetName(row) {
+    const ev = row.ev;
+    if (row.kind === "h") return `${ev.home} to win`;
+    if (row.kind === "a") return `${ev.away} to win`;
+    if (row.kind === "d") return "Draw";
+    if (row.kind === "btts") return "Both teams to score";
+    if (row.kind === "total") return `Total goals Over ${row.line}`;
+    return `${row.kind === "th" ? ev.home : ev.away} goals Over ${row.line}`;
+  }
+
+  function updateBlField(key, field, value) {
+    const st = getBlState(key);
+    if (field === "market") st.market = (value === "" || isNaN(parseFloat(value))) ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderBl();
+  }
+
+  async function toggleBlTrack(key, checked) {
+    const c = blCalc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: blBetType(row.kind), external_player_id: String(row.ev.id), batter_name: blBetName(row),
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: st.yn,
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; } else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderBl();
+  }
+
+  function blQuoteCell(row, st) {
+    const m = blKalshiMkt(row, st.yn);
+    if (!m) return `<span class="hits-index" title="No Kalshi market found for this bet">–</span>`;
+    const ask = st.yn === "yes" ? m.ya : m.na;
+    const bid = st.yn === "yes" ? m.yb : m.nb;
+    const c = x => x == null ? "–" : Math.round(x * 100) + "¢";
+    return `<span class="hits-index" title="Kalshi ${st.yn === "yes" ? "YES" : "NO"}: bid ${c(bid)} / ask ${c(ask)}${m.v != null ? " · vol " + Math.round(m.v) : ""}">${c(bid)}/${c(ask)}</span>`;
+  }
+
+  function blRowHtml(ev, b) {
+    const key = blKey(ev, b);
+    blRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+    const c = blCalc(key);
+    const { st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const isLine = b.line !== "";
+    const yesPct = b.p * 100, noPct = 100 - yesPct;
+    const live = !st.isManual && market != null;
+    const wagerCell = st.useKelly ? `<span>$${wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateBlField(${k},'manualWager',this.value)" />`;
+    const yes = isLine ? "Over" : "Yes", no = isLine ? "Under" : "No";
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${BL_COLS};">
+        <span style="font-size:0.8rem;">${b.label}</span>
+        <span style="text-align:center;">${isLine ? b.line : "—"}</span>
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="updateBlField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
+        ${blQuoteCell(blRows[key], st)}
+        <input type="number" step="0.1" min="0" max="100" value="${market != null ? market : ""}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Live Kalshi price - type to override, clear to go back to live" : "No Kalshi price found - type your market price"}" onchange="updateBlField(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateBlField(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleBlTrack(${k},this.checked)" />
+      </div>`;
+  }
+
+  function blHeaderHtml() {
+    return `<div class="hits-batter hits-batter-header" style="grid-template-columns: ${BL_COLS};"><span>Bet</span><span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Kalshi</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function blFmtKickoff(ev) {
+    if (!ev.kickoff) return "Kickoff TBD";
+    const dt = new Date(ev.kickoff);
+    if (isNaN(dt.getTime())) return "Kickoff TBD";
+    return dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }) + " PT";
+  }
+
+  function toggleBlTeam(id) { if (blTeamOpen.has(id)) blTeamOpen.delete(id); else blTeamOpen.add(id); renderBl(); }
+
+  function blEventCardHtml(ev) {
+    const bets = blBetList(ev);
+    const pc = x => x == null ? "–" : Math.round(x * 100) + "%";
+    const mk = ev.market;
+    const fd = mk && mk.H != null ? `football-data: H ${pc(mk.H)} · D ${pc(mk.D)} · A ${pc(mk.A)}${mk.o25 != null ? " · O2.5 " + pc(mk.o25) : ""}` : "";
+    const ix = ev.indices || {};
+    const idx = ix.home_attack != null ? `attack/defence idx: ${ev.home} ${ix.home_attack.toFixed(2)}/${ix.home_defence.toFixed(2)} · ${ev.away} ${ix.away_attack.toFixed(2)}/${ix.away_defence.toFixed(2)}` : "";
+    const lu = (ev.lineup && ev.lineup.source) === "confirmed" ? "confirmed lineups" : "previous XIs";
+    const xg = ev.expected_goals || {};
+    const scores = (ev.likeliest_scores || []).slice(0, 4).map(s => `${s.score} (${Math.round(s.p * 100)}%)`).join(" · ");
+    const main = bets.filter(b => b.group !== "Team"), team = bets.filter(b => b.group === "Team");
+    const open = blTeamOpen.has(ev.id);
+    return `
+      <div class="card">
+        <div class="meta">${blFmtKickoff(ev)}${ev.state === "in" ? " · <b>in play</b> (pre-match numbers)" : ""} · ${lu}</div>
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${xg.home != null ? xg.home.toFixed(2) + " - " + xg.away.toFixed(2) : ""}</span></div>
+        <div class="meta">expected goals · ${scores ? "likeliest: " + scores : ""}</div>
+        <div class="meta">${[fd, idx].filter(Boolean).join(" · ")}</div>
+        ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
+        ${blHeaderHtml()}
+        ${main.map(b => blRowHtml(ev, b)).join("")}
+        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleBlTeam('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => blRowHtml(ev, b)).join("") : ""}` : ""}
+      </div>`;
+  }
+
+  function setBlDate(v) { blDateChoice = v; renderBl(); }
+
+  function renderBl() {
+    const container = document.getElementById("bl-content");
+    if (!container || !blData) return;
+    const statusEl = document.getElementById("bl-status");
+    const d = blData;
+    if (d.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || ["Bundesliga data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    if (!all.length) {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || []).join(" ") || "No upcoming Bundesliga matches right now."}${d.needs_bootstrap ? " The first start downloads about three seasons of ESPN data (roughly 15 minutes) - this page fills in by itself." : ""}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const dateKey = ev => (ev.kickoff ? kEtDate(ev.kickoff) : "") || "";
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (blDateChoice === null) blDateChoice = "";
+    const sel = document.getElementById("bl-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All upcoming matches (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === blDateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      sel.value = blDateChoice;
+    }
+    const shown = blDateChoice ? all.filter(e => dateKey(e) === blDateChoice) : all;
+    blRows = {};
+    if (statusEl) {
+      const age = d.fixtures_age_minutes != null ? `fixtures ${Math.round(d.fixtures_age_minutes)} min old` : "";
+      const through = d.data_through ? `results through ${d.data_through}` : "";
+      const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
+      statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
+    }
+    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(blEventCardHtml).join("")}</div>`;
+  }
+
+  async function loadBlTab(silent) {
+    const container = document.getElementById("bl-content");
+    if (!silent && !blData && container) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/bl/slate`);
+      blData = await res.json();
+      renderBl();
+    } catch (e) {
+      if (!silent && container) container.innerHTML = `<div class="settings-hint">Couldn't load the Bundesliga matches.</div>`;
+    }
+  }
+
+  function switchSoccerSub(sub) {
+    document.getElementById("soccer-sub-bundesliga").style.display = sub === "bundesliga" ? "block" : "none";
+    document.getElementById("soccer-sub-btn-bundesliga").classList.toggle("active", sub === "bundesliga");
+    if (sub === "bundesliga") loadBlTab();
+  }
+
+  // the platform's own record (live, logged before kickoff; and walk-forward season-to-date vs the closing market) under the shadow card
+  async function loadBlPlatformScorecard() {
+    const el = document.getElementById("bl-platform-scorecard");
+    if (!el) return;
+    el.innerHTML = `<div class="settings-hint">Loading the platform record...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/bl/scorecard`);
+      const d = await res.json();
+      if (d.status !== "ok") { el.innerHTML = `<div class="settings-hint">Platform record unavailable: ${(d.warnings || ["error"])[0]}</div>`; return; }
+      const f3 = x => x == null ? "–" : Number(x).toFixed(3), f2 = x => x == null ? "–" : Number(x).toFixed(2), pc = x => x == null ? "–" : (x * 100).toFixed(1) + "%";
+      const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;", td = "text-align:right; padding:3px 8px;";
+      const block = (title, r) => {
+        if (!r || !r.n) return `<h3 style="margin:14px 0 4px;">${title}</h3><div class="settings-hint">No settled matches yet.</div>`;
+        const x = r.x12, g = r.goals, o = r.total_over && r.total_over["2.5"];
+        let h = `<h3 style="margin:14px 0 4px;">${title} <span class="settings-hint">(${r.n} matches)</span></h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><th style="${th}"></th><th style="${th}">Model</th><th style="${th}">League avg</th></tr>
+            <tr><td style="${td}">1X2 log loss (lower is better)</td><td style="${td}">${f3(x.logloss)}</td><td style="${td}">${f3(x.logloss_league_avg)}</td></tr>
+            <tr><td style="${td}">1X2 Brier</td><td style="${td}">${f3(x.brier)}</td><td style="${td}">${f3(x.brier_league_avg)}</td></tr>
+            <tr><td style="${td}">Total goals error (MAE)</td><td style="${td}">${f2(g.mae_total)}</td><td style="${td}">${f2(g.mae_total_league_avg)}</td></tr>
+            ${o ? `<tr><td style="${td}">Over 2.5 Brier</td><td style="${td}">${f3(o.brier)}</td><td style="${td}">${f3(o.brier_league_avg)}</td></tr>` : ""}
+            <tr><td style="${td}">Home win: said / happened</td><td style="${td}">${pc(x.home_pred)}</td><td style="${td}">${pc(x.home_rate)}</td></tr>
+            <tr><td style="${td}">Draw: said / happened</td><td style="${td}">${pc(x.draw_pred)}</td><td style="${td}">${pc(x.draw_rate)}</td></tr>
+          </table>`;
+        const vm = r.vs_market_1x2, vo = r.vs_market_ou25;
+        if (vm) h += `<div class="settings-hint" style="margin-top:6px;">vs closing 1X2 market (${vm.n} matches): Brier model ${f3(vm.brier_model)} vs market ${f3(vm.brier_market)} (model minus market ${f3(vm.model_minus_market_brier)} ± ${f3(vm.se)}; negative = model better, only trust beyond 2 se).</div>`;
+        if (vo) h += `<div class="settings-hint">vs closing over/under 2.5 (${vo.n} matches): Brier model ${f3(vo.brier_model)} vs market ${f3(vo.brier_market)} (difference ${f3(vo.model_minus_market_brier)} ± ${f3(vo.se)}).</div>`;
+        return h;
+      };
+      const recent = (d.live_recent || []).map(r => `<tr><td style="${td}">${r.date}</td><td style="text-align:left; padding:3px 8px;">${r.match}</td><td style="${td}">${pc(r.p_home)}</td><td style="${td}">${pc(r.p_draw)}</td><td style="${td}">${pc(r.p_away)}</td><td style="${td}">${pc(r.p_over_2_5)}</td><td style="${td}">${r.result}</td></tr>`).join("");
+      el.innerHTML = `<h2 style="margin-top:22px;">Platform record</h2>
+        <div class="settings-hint">${(d.warnings || []).join(" ")}</div>
+        <div class="settings-hint">${d.logged_predictions || 0} pre-match predictions logged.</div>
+        ${block("Live (logged before kickoff)", d.live)}
+        ${block("Walk-forward season-to-date" + (d.retrospective && d.retrospective.label ? "" : ""), d.retrospective)}
+        ${recent ? `<h3 style="margin:14px 0 4px;">Recent settled matches</h3><table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Date</th><th style="${th}; text-align:left;">Match</th><th style="${th}">Home</th><th style="${th}">Draw</th><th style="${th}">Away</th><th style="${th}">O2.5</th><th style="${th}">Result</th></tr>${recent}</table>` : ""}`;
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the platform record.</div>`;
+    }
+  }
+
+  // re-read the slate every 60 s while the Bundesliga tab is open (skipped while the viewer is typing); Kalshi prices ride the 60 s Kalshi poll
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-soccer");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadBlTab(true);
+  }, 60000);
 
   // ---- NHL Goalie Saves - ported from core_nhl_goalie_saves.py, same
   // log5-style index-multiplication pattern as CFB/NFL Team Points, plus

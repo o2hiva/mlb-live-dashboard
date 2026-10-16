@@ -125,6 +125,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("Tennis service failed to start")
     try:
+        import bundesliga_service
+        bundesliga_service.start_background()
+    except Exception:
+        # Bundesliga is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("Bundesliga service failed to start")
+    try:
         import nfl_fantasy_service
         nfl_fantasy_service.start_background()
     except Exception:
@@ -139,6 +146,7 @@ async def lifespan(app: FastAPI):
         shadow_scorecard.register(shadow_scorecard.make_npb_adapter(_npb_shadow_rows))
         shadow_scorecard.register(shadow_scorecard.make_nba_adapter(_nba_shadow_payloads))
         shadow_scorecard.register(shadow_scorecard.make_tennis_adapter(_tennis_shadow_events, _tennis_shadow_result))
+        shadow_scorecard.register(shadow_scorecard.make_bundesliga_adapter(_bl_shadow_events, _bl_shadow_score))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -735,6 +743,17 @@ def _tennis_shadow_events(db):
 def _tennis_shadow_result(ticker):
     import tennis_service
     return tennis_service.get_service().final_market_result(ticker)
+
+
+def _bl_shadow_events(db):
+    """Upcoming Bundesliga matches with the model's probabilities (the same slate the Soccer tab shows)."""
+    import bundesliga_service
+    return (bundesliga_service.get_service().slate() or {}).get("events") or []
+
+
+def _bl_shadow_score(match_id):
+    import bundesliga_service
+    return bundesliga_service.get_service().final_score(match_id)
 
 
 def _nba_shadow_payloads(db):
@@ -1896,7 +1915,7 @@ def refresh_cfb_kalshi():
 
 @app.get("/api/kalshi/live")
 def kalshi_live(sport: str, kinds: str | None = None, v: str | None = None):
-    """Live Kalshi markets for one sport (mlb | nba | nhl | nfl), compact, for the browser to default each bet's Market box to the
+    """Live Kalshi markets for one sport (mlb | nba | nhl | nfl | bl), compact, for the browser to default each bet's Market box to the
     live price. kinds = comma list (game,total,ks,hit,pts ...); v = the version from the last response (answers {unchanged:true}
     when nothing new was pulled). See kalshi_live.py."""
     import kalshi_live as kl
@@ -1907,7 +1926,7 @@ def kalshi_live(sport: str, kinds: str | None = None, v: str | None = None):
 
 @app.get("/api/kalshi/debug")
 def kalshi_live_debug():
-    """What the Kalshi pull found for MLB / NBA / NHL / NFL: series, counts, sample market titles and tickers."""
+    """What the Kalshi pull found for MLB / NBA / NHL / NFL / Bundesliga: series, counts, sample market titles and tickers."""
     import kalshi_live as kl
     kl.get_service().touch()
     return kl.get_service().debug()
@@ -1954,6 +1973,55 @@ def refresh_tennis(what: str = "kalshi"):
     if what == "results":
         return svc.refresh_results()
     return svc.refresh_kalshi()
+
+
+@app.get("/api/bl/slate")
+def bl_slate():
+    """Upcoming Bundesliga matches: expected goals, 1X2, BTTS, total and team goals, lineup used, football-data odds. See
+    bundesliga_service.py / bundesliga_platform.py."""
+    import bundesliga_service
+    return bundesliga_service.get_service().slate()
+
+
+@app.get("/api/bl/health")
+def bl_health():
+    import bundesliga_service
+    return bundesliga_service.get_service().health()
+
+
+@app.get("/api/bl/scorecard")
+def bl_scorecard():
+    """The platform's own record: live (logged before kickoff) and walk-forward season-to-date, vs the league average and the closing market."""
+    import bundesliga_service
+    return bundesliga_service.get_service().get_scorecard()
+
+
+@app.get("/api/bl/results")
+def bl_results(n: int = 40):
+    import bundesliga_service
+    return bundesliga_service.get_service().get_results(n)
+
+
+@app.get("/api/bl/predict")
+def bl_predict(home: str, away: str):
+    import bundesliga_service
+    return bundesliga_service.get_service().predict(home, away)
+
+
+@app.get("/api/admin/refresh-bl")
+def refresh_bl(what: str = "fixtures"):
+    """Manual trigger: what = data | fixtures | odds | results | bootstrap."""
+    import bundesliga_service
+    svc = bundesliga_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "odds":
+        return svc.refresh_odds()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_fixtures()
 
 
 @app.get("/api/nba/health")
@@ -2251,7 +2319,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,
