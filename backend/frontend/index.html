@@ -7006,9 +7006,32 @@
   let blDateChoice = null;
   const blState = {};
   const blTeamOpen = new Set();
-  const BL_COLS = "minmax(120px, 1.4fr) 40px 38px 38px 56px 64px 52px 46px 30px 58px 54px 40px";
+  const BL_COLS = "minmax(120px, 1.4fr) 56px 38px 38px 56px 64px 52px 46px 30px 58px 54px 40px";
   const BL_TOTAL_LINES = ["1.5", "2.5", "3.5", "4.5"];
   const BL_TEAM_LINES = ["0.5", "1.5", "2.5", "3.5"];
+
+  const blTotalLine = {};
+  function blPoissonOver(mu, line) {
+    const n = Math.floor(parseFloat(line));
+    let term = Math.exp(-mu), cdf = term;
+    for (let i = 1; i <= n; i++) { term *= mu / i; cdf += term; }
+    return Math.max(0, Math.min(1, 1 - cdf));
+  }
+  // probability total goals go over `line`: the model's own number for 1.5-4.5, Poisson on the expected total for any other line
+  function blTotalOverProb(ev, line) {
+    const m = ev.total_over && ev.total_over[String(line)];
+    if (m != null) return m;
+    const xg = ev.expected_goals || {};
+    const mu = xg.total != null ? xg.total : (xg.home != null ? xg.home + xg.away : null);
+    return mu == null ? null : blPoissonOver(mu, line);
+  }
+  function setBlTotalLine(id, v) {
+    let x = parseFloat(v);
+    if (isNaN(x)) return;
+    x = Math.max(0.5, Math.min(8.5, Math.floor(x) + 0.5));
+    blTotalLine[id] = x.toFixed(1);
+    renderBl();
+  }
 
   function blKickoffDate(ev) { return kEtDate(ev.kickoff); }
 
@@ -7046,14 +7069,17 @@
     return liveMarket(blState[key], s => { const row = blRows[key]; return row ? kPct(blKalshiMkt(row, s.yn), s.yn) : null; });
   }
 
-  function blBetList(ev) {
+  function blBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
     out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
-    BL_TOTAL_LINES.forEach(l => { if (ev.total_over && ev.total_over[l] != null) out.push({ kind: "total", line: l, label: "Total goals", p: ev.total_over[l], group: "Total" }); });
+    if (forCard) {
+      const l = blTotalLine[ev.id] || "2.5";
+      out.push({ kind: "total", line: l, label: "Total goals", p: blTotalOverProb(ev, l), group: "Total", adjustable: true });
+    } else BL_TOTAL_LINES.forEach(l => { if (ev.total_over && ev.total_over[l] != null) out.push({ kind: "total", line: l, label: "Total goals", p: ev.total_over[l], group: "Total" }); });
     for (const side of ["home", "away"]) {
       BL_TEAM_LINES.forEach(l => {
         const v = ev.team_over && ev.team_over[side] ? ev.team_over[side][l] : null;
@@ -7144,7 +7170,7 @@
     return `
       <div class="hits-batter" style="grid-template-columns: ${BL_COLS};">
         <span style="font-size:0.8rem;">${b.label}</span>
-        <span style="text-align:center;">${isLine ? b.line : "—"}</span>
+        ${b.adjustable ? `<input type="number" step="1" min="0.5" max="8.5" value="${b.line}" title="Type or step the total goals line (x.5)" onchange="setBlTotalLine('${ev.id}',this.value)" />` : `<span style="text-align:center;">${isLine ? b.line : "—"}</span>`}
         <span class="prob-yes">${Math.round(yesPct)}%</span>
         <span class="prob-no">${Math.round(noPct)}%</span>
         <select onchange="updateBlField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
@@ -7173,7 +7199,7 @@
   function toggleBlTeam(id) { if (blTeamOpen.has(id)) blTeamOpen.delete(id); else blTeamOpen.add(id); renderBl(); }
 
   function blEventCardHtml(ev) {
-    const bets = blBetList(ev);
+    const bets = blBetList(ev, true);
     const pc = x => x == null ? "–" : Math.round(x * 100) + "%";
     const mk = ev.market;
     const fd = mk && mk.H != null ? `football-data: H ${pc(mk.H)} · D ${pc(mk.D)} · A ${pc(mk.A)}${mk.o25 != null ? " · O2.5 " + pc(mk.o25) : ""}` : "";
