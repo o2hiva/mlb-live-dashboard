@@ -7188,7 +7188,7 @@
       <div class="card">
         <div class="meta">${blFmtKickoff(ev)}${ev.state === "in" ? " · <b>in play</b> (pre-match numbers)" : ""} · ${lu}</div>
         <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${xg.home != null ? Math.round(xg.home) + " - " + Math.round(xg.away) : ""}</span></div>
-        <div class="meta">predicted score (expected goals ${xg.home != null ? xg.home.toFixed(2) + " - " + xg.away.toFixed(2) : ""}) · ${scores ? "likeliest: " + scores : ""}</div>
+        <div class="meta">predicted score · ${scores ? "likeliest: " + scores : ""}</div>
         <div class="meta">${[fd, idx].filter(Boolean).join(" · ")}</div>
         ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
         ${blHeaderHtml()}
