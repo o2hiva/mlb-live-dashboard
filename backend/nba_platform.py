@@ -8,6 +8,8 @@ Contains (embedded, unchanged and individually tested):
   core_nba_moneyline        team ratings -> win probability
   core_nba_spread           margin / spread-cover probability with lineup (injury) adjustment   [SHADOW MODE]
   backtest_nba_player_props, core_nba_player_props          PTS / REB / AST / PRA player props  [SHADOW MODE]
+  nba_minutes_context, backtest_nba_minutes_context          minutes adjustment: teammates out, back-to-backs, blowout risk, late-season
+                                                             tanking/rest (walk-forward; only groups that validate are applied)
   nba_track_lineup_results, nba_track_prop_results          scorecards for the two shadow logs
   nba_service               website-facing game layer
 plus the platform layer below: ONE class, NBAPlatform, with the read/write paths a website needs.
@@ -39,6 +41,7 @@ our data). Out-of-sample calibration is validated; market edge is not. The logs 
     python nba_platform.py run <module> [args...]                   any embedded tool, e.g.
         run nba_collect_games --seasons 2027      run nba_collect_boxscores --seasons 2027 --upgrade
         run backtest_nba_player_props --seasons 2022,2023,2024,2025,2026 --tune-seasons 2023,2024 --validate-seasons 2025,2026 --out nba_prop_params.json
+        run backtest_nba_minutes_context --seasons 2022,2023,2024,2025,2026 --tune-seasons 2023,2024 --validate-seasons 2025,2026 --params nba_prop_params.json --final-fit-all --out nba_prop_params.json
     python nba_platform.py unpack OUTDIR                            write the embedded modules out as .py files
 
 FILES (all in --dir): nba_games_*.json, nba_boxscores_*.json (schema 2), nba_prop_params.json (from the props backtest),
@@ -60,7 +63,7 @@ import threading
 import time
 
 # ===================================================================== embedded modules
-_ORDER = ['nba_io', 'nba_collect_games', 'nba_collect_boxscores', 'backtest_nba_win_pct', 'backtest_nba_spread_probability', 'backtest_nba_lineup_adjustment', 'core_nba_moneyline', 'core_nba_spread', 'backtest_nba_player_props', 'core_nba_player_props', 'nba_track_lineup_results', 'nba_track_prop_results', 'nba_service']
+_ORDER = ['nba_io', 'nba_collect_games', 'nba_collect_boxscores', 'backtest_nba_win_pct', 'backtest_nba_spread_probability', 'backtest_nba_lineup_adjustment', 'core_nba_moneyline', 'core_nba_spread', 'backtest_nba_player_props', 'nba_minutes_context', 'backtest_nba_minutes_context', 'core_nba_player_props', 'nba_track_lineup_results', 'nba_track_prop_results', 'nba_service']
 _SRC = {}
 # ======================================================================
 # embedded module: nba_io.py (96 lines)
@@ -2225,7 +2228,7 @@ if __name__ == "__main__":
     main()
 '''
 # ======================================================================
-# embedded module: backtest_nba_player_props.py (698 lines)
+# embedded module: backtest_nba_player_props.py (704 lines)
 # ======================================================================
 _SRC["backtest_nba_player_props"] = r'''"""
 backtest_nba_player_props.py
@@ -2538,13 +2541,19 @@ def nb_over(line_floor, mu, r):
 
 def var_of(disp, mu):
     """Variance of the count given its mean. A plain number = classic NB size r (var = mu + mu^2/r);
-    {'kind':'nb2','r'}; or {'kind':'pow','phi','q1'}: var = phi * mu * (mu/10)^q1 (variance-to-mean phi at mean 10)."""
+    {'kind':'nb2','r'}; or {'kind':'pow','phi','q1'}: var = phi * mu * (mu/10)^q1 (variance-to-mean phi at mean 10).
+    Optional 'k' (scalar or per-row array) in a dict scales the OVERDISPERSION: var = mu + k * (var - mu)  (situation-dependent spread)."""
     mu = np.maximum(mu, 0.05)
     if not isinstance(disp, dict):
         return mu + mu * mu / float(disp)
     if disp["kind"] == "nb2":
-        return mu + mu * mu / float(disp["r"])
-    return np.maximum(disp["phi"] * mu * (mu / 10.0) ** disp["q1"], 1.02 * mu)
+        v = mu + mu * mu / float(disp["r"])
+    else:
+        v = np.maximum(disp["phi"] * mu * (mu / 10.0) ** disp["q1"], 1.02 * mu)
+    kk = disp.get("k")
+    if kk is not None:
+        v = np.maximum(mu + kk * (v - mu), 1.02 * mu)
+    return v
 
 
 def r_of(disp, mu):
@@ -2927,7 +2936,777 @@ if __name__ == "__main__":
     main()
 '''
 # ======================================================================
-# embedded module: core_nba_player_props.py (412 lines)
+# embedded module: nba_minutes_context.py (331 lines)
+# ======================================================================
+_SRC["nba_minutes_context"] = r'''"""
+nba_minutes_context.py
+
+CONTEXT ADJUSTMENT FOR PROJECTED MINUTES (and a usage bump) -- shared by the backtest and the live props module.
+
+Why: the base minutes projection is a recency-weighted average of a player's own recent minutes. It cannot know that tonight
+  * rotation teammates are OUT (their minutes go to the others),
+  * the team is on a back-to-back / three games in four nights,
+  * the game is likely a blowout (starters sit the fourth quarter, the bench plays),
+  * it is late in the season and the team is out of it (tanking) or comfortably seeded (resting stars).
+
+Everything here is computed WALK-FORWARD from the cached games + boxscores (nothing from the future):
+  * team rating: margin-based, updated after each game (strictly earlier games only), with a home-court constant;
+    expected blowout size = |rating gap + home court|.
+  * rotation: players who appeared in >= 4 of the team's last 10 games averaging >= 12 min. "Absent" = rotation member not
+    playing tonight (the backtest uses who actually did not play; live use takes the injury feed's Out list).
+  * rest: days since the team's previous game; games in the last 4 nights.
+  * late season: share of the 82 games played, record (shrunk toward .500), low/high-record flags.
+The adjustment is a ridge regression of (actual minutes - projected minutes) on these features, each also interacted with the
+player's projected-minutes tier (stars lose/gain differently from bench players). Fitted on the tune seasons only and validated
+on later seasons by backtest_nba_minutes_context.py, which keeps only the feature groups that help out of sample.
+
+Honest limits: late scratches and unannounced rest days are not known in advance; the live "absent" set is only the Out list.
+The late-season/tanking signal is a record-based proxy (no standings/seed math).
+"""
+
+import json
+import math
+import os
+from collections import deque
+
+import numpy as np
+
+VERSION = 1
+HCA = 2.5                 # home-court points in the margin rating
+K_RATING = 0.04
+CARRY = 0.6               # rating carry-over between seasons
+WIN = 10                  # team games in the rotation window
+ROT_MIN_APPS = 4
+ROT_MIN_AVG = 12.0
+STARTER_AVG = 28.0
+SEASON_GAMES = 82
+TIER_CENTER, TIER_SCALE = 24.0, 10.0
+DELTA_CLIP = 12.0
+MIN_FLOOR = 4.0
+
+BASE = ["absent_now", "absent_recent", "absent_starters", "b2b", "three_in_four", "blowout", "blowout_hinge", "fav",
+        "fav_blowout", "late", "late_low", "late_high", "late_blowout"]
+GROUPS = {"teammates_out": ["absent_now", "absent_recent", "absent_starters"],
+          "rest": ["b2b", "three_in_four"],
+          "blowout": ["blowout", "blowout_hinge", "fav", "fav_blowout"],
+          "late_season": ["late", "late_low", "late_high", "late_blowout"]}
+LABELS = {"teammates_out": "teammates out", "rest": "back-to-back / schedule", "blowout": "blowout risk", "late_season": "late-season status"}
+K = len(BASE)
+
+
+def _clip(x, lo, hi):
+    return lo if x < lo else (hi if x > hi else x)
+
+
+class TeamState:
+    __slots__ = ("games", "dates", "w", "g", "abs_hist")
+
+    def __init__(self):
+        self.games = deque(maxlen=WIN)        # {pid: minutes} per game
+        self.dates = deque(maxlen=3)          # date ordinals of the last games
+        self.w = 0
+        self.g = 0
+        self.abs_hist = deque(maxlen=5)       # absent_now (in 10-minute units) at each of the last games
+
+
+class Book:
+    """Walk-forward team state. features() reads it; update_game() advances it (call once per game AFTER the date's features)."""
+
+    def __init__(self, hca=HCA, k=K_RATING, carry=CARRY):
+        self.rating = {}
+        self.t = {}
+        self.season = None
+        self.hca, self.k, self.carry = hca, k, carry
+
+    def rollover(self, season):
+        if self.season is not None and season != self.season:
+            for k in self.rating:
+                self.rating[k] *= self.carry
+            self.t = {}
+        self.season = season
+
+    def _ts(self, tid):
+        ts = self.t.get(tid)
+        if ts is None:
+            ts = self.t[tid] = TeamState()
+        return ts
+
+    def rotation(self, tid):
+        """-> ({pid: average minutes in the window}, defined?)"""
+        ts = self._ts(tid)
+        if len(ts.games) < 5:
+            return {}, False
+        cnt, tot = {}, {}
+        for gm in ts.games:
+            for pid, m in gm.items():
+                cnt[pid] = cnt.get(pid, 0) + 1
+                tot[pid] = tot.get(pid, 0.0) + m
+        return {p: tot[p] / cnt[p] for p in cnt if cnt[p] >= ROT_MIN_APPS and tot[p] / cnt[p] >= ROT_MIN_AVG}, True
+
+    def features(self, tid, oid, date_ord, home, played=None, out=None):
+        """-> (vector over BASE, info). `played`: set/dict of pids who played (backtest); or `out`: set of pids ruled out (live)."""
+        rot, ok = self.rotation(tid)
+        if not ok:
+            absent = []
+        elif played is not None:
+            absent = [p for p in rot if p not in played]
+        else:
+            absent = [p for p in rot if p in (out or ())]
+        ts = self._ts(tid)
+        a_now = sum(rot[p] for p in absent) / 10.0
+        a_str = float(sum(1 for p in absent if rot[p] >= STARTER_AVG))
+        a_rec = (sum(ts.abs_hist) / len(ts.abs_hist)) if ts.abs_hist else 0.0
+        b2b = 1.0 if (ts.dates and date_ord - ts.dates[-1] == 1) else 0.0
+        t34 = 1.0 if (len(ts.dates) >= 2 and date_ord - ts.dates[-2] <= 3) else 0.0
+        diff = self.rating.get(tid, 0.0) - self.rating.get(oid, 0.0) + (self.hca if home else -self.hca)
+        e = abs(diff)
+        blow = e / 10.0
+        hinge = max(e - 8.0, 0.0) / 5.0
+        fav = 1.0 if diff > 0 else 0.0
+        prog = min(ts.g / SEASON_GAMES, 1.0)
+        late = _clip((prog - 0.7) / 0.3, 0.0, 1.0)
+        wp = (ts.w + 5.0) / (ts.g + 10.0)
+        low = _clip((0.42 - wp) / 0.15, 0.0, 1.0)
+        high = _clip((wp - 0.60) / 0.15, 0.0, 1.0)
+        vec = np.array([a_now, a_rec, a_str, b2b, t34, blow, hinge, fav, fav * blow, late, late * low, late * high, late * blow])
+        n20 = sum(1 for p in rot if rot[p] >= 20.0)
+        n20_abs = sum(1 for p in absent if rot[p] >= 20.0)
+        info = {"absent": [(p, rot[p]) for p in absent], "diff": diff, "exp_margin_abs": e, "wp": wp, "games": ts.g, "late": late,
+                "b2b": b2b, "rotation_known": ok, "n20": n20, "n20_absent": n20_abs, "fav": bool(fav)}
+        return vec, info
+
+    def update_game(self, date_ord, home_id, away_id, home_score, away_score, played_home, played_away):
+        for tid, played, won in ((home_id, played_home, None if home_score is None or away_score is None else home_score > away_score),
+                                 (away_id, played_away, None if home_score is None or away_score is None else away_score > home_score)):
+            ts = self._ts(tid)
+            rot, ok = self.rotation(tid)
+            if ok:
+                ts.abs_hist.append(sum(rot[p] for p in rot if p not in played) / 10.0)
+            ts.games.append(dict(played))
+            ts.dates.append(date_ord)
+            ts.g += 1
+            if won:
+                ts.w += 1
+        if home_score is not None and away_score is not None:
+            margin = home_score - away_score
+            rh, ra = self.rating.get(home_id, 0.0), self.rating.get(away_id, 0.0)
+            err = margin - (rh - ra + self.hca)
+            self.rating[home_id] = rh + self.k * err
+            self.rating[away_id] = ra - self.k * err
+
+
+def sit_bucket(info):
+    """Bucket for the rotation-player DNP-rate table: late-season level | record status | back-to-back."""
+    lv = 0 if info["late"] <= 0 else (1 if info["late"] <= 0.5 else 2)
+    wp = info["wp"]
+    st = "low" if wp < 0.42 else ("high" if wp > 0.62 else "mid")
+    return f"{lv}|{st}|{int(info['b2b'])}"
+
+
+# ------------------------------------------------------------------ data
+def load_games(directory, seasons):
+    """gid -> {date, season, home_id, away_id, home_score, away_score, season_type} from nba_games_{season}.json."""
+    out = {}
+    for s in seasons:
+        p = os.path.join(directory, f"nba_games_{s}.json")
+        if not os.path.exists(p):
+            continue
+        with open(p) as f:
+            for gid, g in json.load(f)["games"].items():
+                out[str(gid)] = {"date": str(g.get("date"))[:10], "season": s, "home_id": str(g["home_id"]), "away_id": str(g["away_id"]),
+                                 "home_score": g.get("home_score"), "away_score": g.get("away_score"), "season_type": g.get("season_type")}
+    return out
+
+
+def _ord(date_str):
+    import datetime
+    return datetime.date.fromisoformat(date_str[:10]).toordinal()
+
+
+def replay(days, games):
+    """Walk every date of `days` (bp.load_rows output). For each row, the pre-game feature vector. Returns (book, X (n x K, NaN for
+    non-regular-season rows), sit {bucket: [rotation(20+ min) player-games, absent]}, infos aligned with rows)."""
+    book = Book()
+    n = sum(len(rows) for _, rows in days)
+    X = np.full((n, K), np.nan)
+    infos = [None] * n
+    sit = {}
+    i0 = 0
+    for date, rows in days:
+        d = _ord(date)
+        book.rollover(rows[0][1])
+        per, meta = {}, {}
+        for r in rows:
+            per.setdefault(r[2], {}).setdefault(r[4], {})[r[3]] = r[7]
+            meta.setdefault(r[2], {})[r[4]] = (r[5], r[9])
+        feats = {}
+        for gid, teams in per.items():
+            g = games.get(gid)
+            if g is not None and g.get("season_type") not in (None, 2):
+                continue
+            for tid, played in teams.items():
+                oid, home = meta[gid][tid]
+                vec, info = book.features(tid, oid, d, bool(home), played=played)
+                feats[(gid, tid)] = (vec, info)
+                if info["rotation_known"] and info["n20"]:
+                    b = sit.setdefault(sit_bucket(info), [0, 0])
+                    b[0] += info["n20"]
+                    b[1] += info["n20_absent"]
+        for j, r in enumerate(rows):
+            f = feats.get((r[2], r[4]))
+            if f is not None:
+                X[i0 + j] = f[0]
+                infos[i0 + j] = f[1]
+        for gid, teams in per.items():
+            g = games.get(gid)
+            if g is not None and g.get("season_type") not in (None, 2):
+                continue
+            hid = next((t for t, (o, h) in meta[gid].items() if h), None)
+            aid = next((t for t, (o, h) in meta[gid].items() if not h), None)
+            if hid is None or aid is None:
+                continue
+            book.update_game(d, hid, aid, (g or {}).get("home_score"), (g or {}).get("away_score"), per[gid].get(hid, {}), per[gid].get(aid, {}))
+        i0 += len(rows)
+    return book, X, sit, infos
+
+
+# ------------------------------------------------------------------ the regression
+def design(X, emin):
+    t = (emin - TIER_CENTER) / TIER_SCALE
+    return np.column_stack([np.ones(len(X)), t, X, X * t[:, None]])
+
+
+def col_names():
+    return ["intercept", "tier"] + BASE + [b + " x tier" for b in BASE]
+
+
+def col_mask(groups_on):
+    keep = np.zeros(2 + 2 * K, dtype=bool)
+    keep[:2] = True
+    on = {f for g in groups_on for f in GROUPS[g]}
+    for i, f in enumerate(BASE):
+        if f in on:
+            keep[2 + i] = True
+            keep[2 + K + i] = True
+    return keep
+
+
+def fit_ridge(Z, y, keep, lam_scale=1e-3):
+    """Ridge on the kept columns. -> (weights over all columns, robust (HC0) standard errors over all columns)."""
+    n = len(y)
+    Zk = Z[:, keep]
+    A = Zk.T @ Zk + lam_scale * n * np.eye(Zk.shape[1])
+    Ainv = np.linalg.inv(A)
+    wk = Ainv @ (Zk.T @ y)
+    res = y - Zk @ wk
+    meat = (Zk * (res ** 2)[:, None]).T @ Zk
+    cov = Ainv @ meat @ Ainv
+    w = np.zeros(Z.shape[1])
+    se = np.zeros(Z.shape[1])
+    w[keep] = wk
+    se[keep] = np.sqrt(np.maximum(np.diag(cov), 0.0))
+    return w, se
+
+
+def delta_minutes(w, X, emin, clip=DELTA_CLIP):
+    d = design(X, emin) @ np.asarray(w)
+    d = np.clip(d, -clip, clip)
+    return np.maximum(emin + d, MIN_FLOOR) - emin
+
+
+def contributions(w, vec, emin):
+    """Per-group minutes contributions for one player (live explanation). -> {group: minutes}"""
+    t = (emin - TIER_CENTER) / TIER_SCALE
+    w = np.asarray(w)
+    out = {}
+    for g, feats in GROUPS.items():
+        s = 0.0
+        for f in feats:
+            i = BASE.index(f)
+            s += w[2 + i] * vec[i] + w[2 + K + i] * vec[i] * t
+        out[g] = float(s)
+    out["base"] = float(w[0] + w[1] * t)
+    return out
+
+
+# ------------------------------------------------------------------ situation-dependent spread (uncertainty)
+SPREAD_FEATS = ["blowout", "fav_blowout", "late_low", "late_high", "b2b", "absent_now"]
+SPREAD_LO, SPREAD_HI = -0.7, 1.2          # log of the overdispersion multiplier k: k in [0.50, 3.32]
+
+
+def spread_design(X, emin):
+    t = (emin - TIER_CENTER) / TIER_SCALE
+    cols = [np.ones(len(X)), t]
+    for f in SPREAD_FEATS:
+        i = BASE.index(f)
+        cols.append(X[:, i])
+        cols.append(X[:, i] * t)
+    return np.column_stack(cols)
+
+
+def spread_k(w, X, emin):
+    """Multiplier on the count overdispersion (var = mu + k x (var_base - mu)); 1.0 = the usual spread."""
+    return np.exp(np.clip(spread_design(X, emin) @ np.asarray(w), SPREAD_LO, SPREAD_HI))
+
+
+def spread_k_one(w, vec, emin):
+    return float(spread_k(w, np.asarray(vec)[None, :], np.array([float(emin)]))[0])
+
+
+def model_dict(w, groups_on, usage=None, sit=None, fit_info=None, spread=None):
+    return {"version": VERSION, "features": BASE, "weights": [float(x) for x in w], "groups_on": list(groups_on),
+            "tier_center": TIER_CENTER, "tier_scale": TIER_SCALE, "clip": DELTA_CLIP, "usage": usage or {},
+            "sit_rates": {k: {"n": v[0], "absent": v[1], "rate": (v[1] / v[0] if v[0] else None)} for k, v in (sit or {}).items()},
+            "hca": HCA, "k_rating": K_RATING, "carry": CARRY, "fit": fit_info or {}, "spread": spread or {}}
+
+
+def usage_delta(vec):
+    """Change in teammate availability vs the player's recent games (the base per-minute rate already reflects the recent environment)."""
+    return float(vec[BASE.index("absent_now")] - vec[BASE.index("absent_recent")])
+
+
+def usage_factor(model, stat, vec):
+    """Per-minute production bump when more rotation teammates than usual are out: exp(c_stat x change in absent minutes/10)."""
+    c = (model.get("usage") or {}).get(stat, 0.0)
+    return math.exp(c * usage_delta(vec)) if c else 1.0
+'''
+# ======================================================================
+# embedded module: backtest_nba_minutes_context.py (431 lines)
+# ======================================================================
+_SRC["backtest_nba_minutes_context"] = r'''"""
+backtest_nba_minutes_context.py
+
+Does knowing the CONTEXT improve projected minutes -- and the prop projections built on them?  Walk-forward, no leakage.
+
+Context = teammates out (rotation players absent), back-to-back / schedule, blowout risk (from a walk-forward team rating),
+late-season status (record-based tank / locked-seed proxy).  See nba_minutes_context.py.
+
+Procedure
+  1. Baseline minutes = the existing walk-forward projection (backtest_nba_player_props, minutes parameters from nba_prop_params.json,
+     or tuned here if you pass no params file).
+  2. Context features for every player-game from team state BEFORE that game's date.
+  3. Ridge regression of (actual - projected minutes) on the features (+ projected-minutes-tier interactions), fitted on the TUNE
+     seasons only.  Feature GROUPS are kept only if dropping them hurts out-of-sample error in a season-split inside the tune seasons.
+  4. VALIDATE seasons: minutes MAE/RMSE/bias before vs after, overall and in the situations you were burned in (late season, low-record
+     teams, back-to-backs, teammates out, big expected margins), then the effect on each prop's log-likelihood (with a fitted usage bump).
+  5. Optionally refit on tune+validate seasons for production (--final-fit-all) and write the result into the params file.
+
+NOTE on "teammates out": the backtest uses who ACTUALLY did not play (perfect injury knowledge, including players ruled out on the
+day). Live, only the injury feed's Out list is known, so the real-world gain is somewhat smaller.
+
+Usage:
+    python backtest_nba_minutes_context.py --dir . --seasons 2022,2023,2024,2025,2026 --tune-seasons 2023,2024 ^
+        --validate-seasons 2025,2026 --params nba_prop_params.json --final-fit-all --out nba_prop_params.json
+"""
+
+import argparse
+import json
+import math
+import os
+import sys
+
+import numpy as np
+
+import backtest_nba_player_props as bp
+import nba_minutes_context as mc
+
+MIN_PRIOR = bp.MIN_PRIOR
+FIT_MIN = 12.0
+
+
+def _mask(meta, seasons, emin_floor):
+    return np.isin(meta["season"], seasons) & (meta["nprior"] >= MIN_PRIOR) & (meta["emin"] >= emin_floor) & ~np.isnan(meta["X"][:, 0])
+
+
+def _err_stats(emin, mn):
+    e = mn - emin
+    return {"mae": float(np.abs(e).mean()), "rmse": float(np.sqrt((e ** 2).mean())), "bias": float(e.mean())}
+
+
+def paired(a, b):
+    d = a - b
+    return float(d.mean()), float(d.std(ddof=1) / math.sqrt(len(d))) if len(d) > 1 else float("nan")
+
+
+def prepare(directory, seasons, minutes_params):
+    days, rep = bp.load_rows(directory, seasons)
+    games = mc.load_games(directory, seasons)
+    P = dict(bp.DEFAULTS)
+    P.update(minutes_params)
+    wf = bp.walk_forward(days, "pts", P, minutes_only=True)
+    book, X, sit, infos = mc.replay(days, games)
+    meta = {"season": wf["season"], "emin": wf["emin"], "min": wf["min"], "nprior": wf["nprior"], "date": wf["date"],
+            "starter": wf["starter"], "pid": wf["pid"], "X": X}
+    return days, games, P, wf, meta, sit, infos
+
+
+def select_groups(meta, tune_seasons, verbose=True):
+    """Season-split inside the tune seasons: keep a feature group only if leaving it out raises out-of-fold error."""
+    ts = list(tune_seasons)
+    if len(ts) < 2:
+        if verbose:
+            print("  (only one tune season: no inner split possible, keeping all groups; judge them on the validation seasons)")
+        return list(mc.GROUPS)
+    folds = [(ts[:i] + ts[i + 1:], [ts[i]]) for i in range(len(ts))]
+
+    def cv(groups_on):
+        keep = mc.col_mask(groups_on)
+        tot, n = 0.0, 0
+        for fit_s, test_s in folds:
+            mf, mt = _mask(meta, fit_s, FIT_MIN), _mask(meta, test_s, bp.MIN_GATE)
+            w, _ = mc.fit_ridge(mc.design(meta["X"][mf], meta["emin"][mf]), meta["min"][mf] - meta["emin"][mf], keep)
+            d = mc.delta_minutes(w, meta["X"][mt], meta["emin"][mt])
+            tot += float(((meta["min"][mt] - meta["emin"][mt] - d) ** 2).sum())
+            n += int(mt.sum())
+        return tot / n
+    full = cv(list(mc.GROUPS))
+    base = cv([])
+    if verbose:
+        print(f"  inner season-split MSE: no context {base:.4f}  all groups {full:.4f}")
+    keep = []
+    for g in mc.GROUPS:
+        without = cv([x for x in mc.GROUPS if x != g])
+        useful = without > full + 1e-4
+        if verbose:
+            print(f"    {mc.LABELS[g]:<26} leave out -> MSE {without:.4f} ({without - full:+.4f})  {'KEEP' if useful else 'drop'}")
+        if useful:
+            keep.append(g)
+    return keep
+
+
+def coef_table(w, se, keep_groups):
+    names = mc.col_names()
+    print(f"\n  {'term':<28}{'minutes':>9}{'robust se':>11}{'z':>7}")
+    for i, nm in enumerate(names):
+        if w[i] == 0 and se[i] == 0:
+            continue
+        z = w[i] / se[i] if se[i] > 0 else 0.0
+        mark = " *" if abs(z) > 2 else ""
+        print(f"  {nm:<28}{w[i]:>+9.3f}{se[i]:>11.3f}{z:>+7.1f}{mark}")
+    print("  (feature units: absent_now = 10-minute units of rotation minutes missing; blowout = expected |margin|/10; tier = (projected min - 24)/10;"
+          "\n   'x tier' terms: how the effect changes per 10 projected minutes, i.e. starters vs bench)")
+
+
+def situation_list(X, em):
+    ix = {f: mc.BASE.index(f) for f in mc.BASE}
+    E = X[:, ix["blowout"]] * 10.0
+    fav = X[:, ix["fav"]] == 1
+    st = em >= 28
+    sit = [("all trusted player-games", np.ones(len(em), bool)),
+           ("starters (>= 28 projected min)", st),
+           ("bench (15-22 projected min)", (em >= 15) & (em < 22)),
+           ("teammate(s) out (rotation minutes missing >= 15)", X[:, ix["absent_now"]] * 10 >= 15),
+           ("a starter-level teammate out", X[:, ix["absent_starters"]] >= 1),
+           ("back-to-back", X[:, ix["b2b"]] == 1),
+           ("late season (last 30%)", X[:, ix["late"]] > 0.5),
+           ("late season + low-record team (tank)", X[:, ix["late_low"]] > 0.5),
+           ("late season + low-record, starters", (X[:, ix["late_low"]] > 0.5) & st),
+           ("late season + high-record team", X[:, ix["late_high"]] > 0.5),
+           ("late season + high-record, starters", (X[:, ix["late_high"]] > 0.5) & st)]
+    for lo, hi in ((0, 4), (4, 8), (8, 12), (12, 99)):
+        rng = f"{lo}-{hi}" if hi < 99 else f"{lo}+"
+        sit.append((f"starters, FAVOURITE, expected margin {rng}", st & fav & (E >= lo) & (E < hi)))
+    for lo, hi in ((0, 4), (4, 8), (8, 12), (12, 99)):
+        rng = f"{lo}-{hi}" if hi < 99 else f"{lo}+"
+        sit.append((f"starters, UNDERDOG, expected margin {rng}", st & ~fav & (E >= lo) & (E < hi)))
+    sit.append(("bench, expected margin 10+", (em >= 15) & (em < 22) & (E >= 10)))
+    return sit
+
+
+def situation_table(meta, d, mask, groups_on):
+    """Bias and MAE before/after in the situations that matter."""
+    X, em, mn = meta["X"], meta["emin"], meta["min"]
+    adj = em + d
+    print(f"\n  {'situation':<50}{'n':>7}{'bias before':>13}{'bias after':>12}{'MAE before':>12}{'MAE after':>11}{'RMSE after':>11}{'gain +/- se':>16}")
+    for name, s_ in situation_list(X, em):
+        m = mask & s_
+        if m.sum() < 40:
+            continue
+        b, a = _err_stats(em[m], mn[m]), _err_stats(adj[m], mn[m])
+        g, se = paired(np.abs(mn[m] - em[m]), np.abs(mn[m] - adj[m]))
+        print(f"  {name:<50}{int(m.sum()):>7}{b['bias']:>+13.2f}{a['bias']:>+12.2f}{b['mae']:>12.2f}{a['mae']:>11.2f}{a['rmse']:>11.2f}{g:>+10.3f} +/-{se:.3f}")
+
+
+# ===================================================================== spread (uncertainty) model
+def _dd(d):
+    return dict(d) if isinstance(d, dict) else {"kind": "nb2", "r": float(d)}
+
+
+def fit_spread(y, mu, disp, X, emin, lam=0.002, base_only=False):
+    """Fit log k = design @ w by minimum NLL. base_only: only the intercept and the minutes-tier term (a plain recalibration of the spread)."""
+    from scipy.optimize import minimize
+    Z = mc.spread_design(X, emin)
+    d0 = _dd(disp)
+    cols = [0, 1] if base_only else list(range(Z.shape[1]))
+    Zs = Z[:, cols]
+
+    def obj(v):
+        k = np.exp(np.clip(Zs @ v, mc.SPREAD_LO, mc.SPREAD_HI))
+        pen = 0.0 if base_only else lam * float((v[2:] ** 2).sum())
+        return float(bp.nll_with(y, mu, dict(d0, k=k)).mean()) + pen
+    r = minimize(obj, np.zeros(len(cols)), method="L-BFGS-B", options={"maxiter": 60})
+    w = np.zeros(Z.shape[1])
+    w[cols] = r.x
+    return w
+
+
+def z2(y, mu, disp):
+    """Standardised squared residual under the model's own variance: mean 1.0 = spread is right, > 1 = too narrow."""
+    return (y - mu) ** 2 / bp.var_of(_dd(disp), mu)
+
+
+def spread_diag(meta, mv, d_all, inputs):
+    """Where is the model's spread too narrow? Per situation: minutes drop frequency and the variance ratio for PTS and PRA."""
+    X, em, mn = meta["X"], meta["emin"], meta["min"]
+    adj = em + d_all
+    print(f"\n  {'situation':<50}{'n':>7}{'min bias':>9}{'min SD':>8}{'P(min drop>=8)':>16}{'PTS act/proj':>13}{'PTS var ratio':>14}{'PRA var ratio':>14}")
+    ypts, mpts, dpts = inputs["pts"]
+    ypra, mpra, dpra = inputs.get("pra", (None, None, None))
+    zp = z2(ypts, mpts, dpts)
+    zr = z2(ypra, mpra, dpra) if ypra is not None else None
+    for name, s_ in situation_list(X, em):
+        m = mv & s_
+        if m.sum() < 60:
+            continue
+        r = mn[m] - adj[m]
+        print(f"  {name:<50}{int(m.sum()):>7}{r.mean():>+9.2f}{r.std():>8.2f}{(r <= -8).mean() * 100:>15.1f}%{ypts[m].mean() / mpts[m].mean():>13.3f}{zp[m].mean():>14.3f}"
+              + (f"{zr[m].mean():>14.3f}" if zr is not None else ""))
+    print("  (var ratio = mean squared residual / the model's variance; 1.0 = spread right, > 1 = the model is overconfident there)")
+
+
+def spread_models(meta, tune, val, mt, mv, inputs, final_mask):
+    """Fit k(situation) per prop on the tune rows; keep it only if it helps in every inner season fold. -> {stat: {...}}"""
+    X, em, seas = meta["X"], meta["emin"], meta["season"]
+    out = {}
+    print("\n" + "=" * 78 + "\nSPREAD MODEL: how much wider/narrower than usual the prop range should be, by situation\n" + "=" * 78)
+    for stat, (y, mu, disp) in inputs.items():
+        d0 = _dd(disp)
+        folds = []
+        if len(tune) >= 2:
+            for hold in tune:
+                fit_m = mt & (seas != hold)
+                test_m = mt & (seas == hold) & (em >= bp.MIN_GATE)
+                w = fit_spread(y[fit_m], mu[fit_m], d0, X[fit_m], em[fit_m])
+                w0 = fit_spread(y[fit_m], mu[fit_m], d0, X[fit_m], em[fit_m], base_only=True)
+                k = mc.spread_k(w, X[test_m], em[test_m])
+                k0 = mc.spread_k(w0, X[test_m], em[test_m])
+                gain = float((bp.nll_with(y[test_m], mu[test_m], dict(d0, k=k0)) - bp.nll_with(y[test_m], mu[test_m], dict(d0, k=k))).mean())
+                folds.append(gain)
+        w_tune = fit_spread(y[mt], mu[mt], d0, X[mt], em[mt])
+        w_base = fit_spread(y[mt], mu[mt], d0, X[mt], em[mt], base_only=True)
+        ok = ~np.isnan(X[:, 0])
+        k_all = np.ones(len(y))
+        k_all[ok] = mc.spread_k(w_tune, X[ok], em[ok])
+        k_base = np.ones(len(y))
+        k_base[ok] = mc.spread_k(w_base, X[ok], em[ok])
+        l0, l1 = bp.nll_with(y[mv], mu[mv], d0), bp.nll_with(y[mv], mu[mv], dict(d0, k=k_all[mv]))
+        lb = bp.nll_with(y[mv], mu[mv], dict(d0, k=k_base[mv]))
+        g, se = paired(l0, l1)
+        gs, ses = paired(lb, l1)
+        adopt = bool(folds) and all(f > 0 for f in folds) and float(np.mean(folds)) > 0.0003
+        print(f"\n  {stat.upper()}: inner season folds (situation model vs a plain recalibration of the spread, fitted on the other tune season) "
+              + (", ".join(f"{f:+.5f}" for f in folds) or "n/a (one tune season)")
+              + f"\n        validation: vs usual spread {g:+.5f} +/- {se:.5f};  vs plain recalibration {gs:+.5f} +/- {ses:.5f}   -> {'ADOPT' if adopt else 'not adopted'}")
+        for name, s_ in situation_list(X, em):
+            if not name.startswith(("starters, FAV", "starters, UNDER", "late season + low-record, starters", "late season + high-record, starters", "a starter-level", "back-to-back", "bench, expected")):
+                continue
+            m = mv & s_
+            if m.sum() < 150:
+                continue
+            gg, ss = paired(bp.nll_with(y[m], mu[m], dict(d0, k=k_base[m])), bp.nll_with(y[m], mu[m], dict(d0, k=k_all[m])))
+            print(f"      {name:<50} n={int(m.sum()):>6}  mean k {k_all[m].mean():.2f}  NLL gain vs recalibrated {gg:+.5f} +/- {ss:.5f}")
+        wf = w_tune
+        if adopt and final_mask is not None:
+            wf = fit_spread(y[final_mask], mu[final_mask], d0, X[final_mask], em[final_mask])
+        out[stat] = {"adopted": adopt, "w": [float(x) for x in (wf if adopt else np.zeros_like(w_tune))], "inner_folds": folds, "val_gain": g, "val_se": se, "val_gain_vs_recal": gs, "val_se_vs_recal": ses}
+    # the k table for a typical starter (32 projected min), other features at their neutral values
+    print("\n  Implied spread multiplier k for a 32-minute starter (fitted on tune seasons; 1.00 = usual):")
+    print(f"  {'':<34}" + "".join(f"{st.upper():>8}" for st in out))
+    base = np.zeros(mc.K)
+    rows = [("neutral (margin 0)", {}),
+            ("FAVOURITE, expected margin 6", {"blowout": 0.6, "fav": 1.0, "fav_blowout": 0.6}),
+            ("FAVOURITE, expected margin 12", {"blowout": 1.2, "fav": 1.0, "fav_blowout": 1.2}),
+            ("UNDERDOG, expected margin 12", {"blowout": 1.2}),
+            ("late season, low-record team", {"late": 1.0, "late_low": 1.0}),
+            ("late season, high-record team", {"late": 1.0, "late_high": 1.0}),
+            ("back-to-back", {"b2b": 1.0}),
+            ("two rotation teammates out (40 min)", {"absent_now": 4.0})]
+    for label, f in rows:
+        v = base.copy()
+        for kf, val in f.items():
+            v[mc.BASE.index(kf)] = val
+        print(f"  {label:<34}" + "".join(f"{(mc.spread_k_one(out[st]['w'], v, 32.0) if out[st]['adopted'] else float('nan')):>8.2f}" for st in out))
+    print("  (k multiplies the over-dispersion: var = mean + k x (usual var - mean). Only 'adopted' props are shown/used; blank = nan = not adopted.)")
+    return out
+
+
+def tune_usage(wfs, meta, mask, vec_absent, adj_ratio, disps):
+    """Per prop: per-minute production bump exp(c x absent_now) fitted on the tune rows (grid on log-likelihood)."""
+    out = {}
+    for stat, preds in wfs.items():
+        y, mu = preds["y"][mask], preds["mu"][mask] * adj_ratio[mask]
+        best = None
+        for c in (0.0, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06):
+            v = float(bp.nll_with(y, mu * np.exp(c * vec_absent[mask]), disps[stat]).mean())
+            if best is None or v < best[0] - 1e-9:
+                best = (v, c)
+        out[stat] = best[1]
+    return out
+
+
+def run(directory, seasons, tune, val, params_path=None, final_all=False, out_path=None, quiet=False):
+    mp = {}
+    props = None
+    if params_path and os.path.exists(params_path):
+        with open(params_path) as f:
+            props = json.load(f)
+        mp = props.get("minutes", {})
+    days_tmp, _ = bp.load_rows(directory, seasons)
+    if not days_tmp:
+        sys.exit("no usable data")
+    if not mp:
+        print("no minutes parameters supplied: tuning the base minutes model on the tune seasons first")
+        mp, _ = bp.tune_minutes(days_tmp, tune, bp.DEFAULTS, {"decay_m": [0.7, 0.9], "k_m": [0.5, 2], "cap0": [99, 34], "capc": [0.5]}, quiet=True)
+    days, games, P, wf, meta, sit, infos = prepare(directory, seasons, mp)
+    print("=" * 78 + f"\nMINUTES CONTEXT: tune {tune}  validate {val}\n" + "=" * 78)
+    nreg = int((~np.isnan(meta["X"][:, 0])).sum())
+    print(f"{len(meta['min'])} player-games, {nreg} in regular-season games with context features")
+    print("\nFeature-group selection (inside the tune seasons):")
+    groups_on = select_groups(meta, tune)
+    print(f"  keeping: {[mc.LABELS[g] for g in groups_on] or 'nothing (context does not help)'}")
+    keep = mc.col_mask(groups_on)
+    mt, mv = _mask(meta, tune, FIT_MIN), _mask(meta, val, bp.MIN_GATE)
+    w, se = mc.fit_ridge(mc.design(meta["X"][mt], meta["emin"][mt]), meta["min"][mt] - meta["emin"][mt], keep)
+    if not groups_on:
+        w, se = np.zeros_like(w), np.zeros_like(se)      # nothing helped: no adjustment at all (not even the intercept/tier recalibration)
+    print(f"\nCoefficients (fit on tune seasons, n={int(mt.sum())}):")
+    coef_table(w, se, groups_on)
+    d_all = np.zeros(len(meta["emin"]))
+    ok = ~np.isnan(meta["X"][:, 0])
+    d_all[ok] = mc.delta_minutes(w, meta["X"][ok], meta["emin"][ok])
+    b, a = _err_stats(meta["emin"][mv], meta["min"][mv]), _err_stats(meta["emin"][mv] + d_all[mv], meta["min"][mv])
+    g, gse = paired(np.abs(meta["min"][mv] - meta["emin"][mv]), np.abs(meta["min"][mv] - meta["emin"][mv] - d_all[mv]))
+    r2, r2se = paired((meta["min"][mv] - meta["emin"][mv]) ** 2, (meta["min"][mv] - meta["emin"][mv] - d_all[mv]) ** 2)
+    print(f"\nVALIDATION minutes (n={int(mv.sum())}, trusted players projected >= {bp.MIN_GATE:.0f} min):")
+    print(f"  baseline  MAE {b['mae']:.3f}  RMSE {b['rmse']:.3f}  bias {b['bias']:+.3f}")
+    print(f"  + context MAE {a['mae']:.3f}  RMSE {a['rmse']:.3f}  bias {a['bias']:+.3f}")
+    print(f"  MAE gain {g:+.4f} +/- {gse:.4f}  ({'real' if g > 2 * gse else 'not clearly better'});  squared-error gain {r2:+.3f} +/- {r2se:.3f}")
+    situation_table(meta, d_all, mv, groups_on)
+    # ablation on validation
+    print("\nVALIDATION: what each group is worth (MAE when that group alone is removed from the fitted model)")
+    for gname in groups_on:
+        keep2 = mc.col_mask([x for x in groups_on if x != gname])
+        w2, _ = mc.fit_ridge(mc.design(meta["X"][mt], meta["emin"][mt]), meta["min"][mt] - meta["emin"][mt], keep2)
+        d2 = np.zeros(len(meta["emin"]))
+        d2[ok] = mc.delta_minutes(w2, meta["X"][ok], meta["emin"][ok])
+        gg, ss = paired(np.abs(meta["min"][mv] - meta["emin"][mv] - d2[mv]), np.abs(meta["min"][mv] - meta["emin"][mv] - d_all[mv]))
+        print(f"  without {mc.LABELS[gname]:<26} MAE {np.abs(meta['min'][mv] - meta['emin'][mv] - d2[mv]).mean():.3f}  (group is worth {gg:+.4f} +/- {ss:.4f})")
+    # props
+    usage, prop_report, spread = {}, {}, {}
+    if props and "props" in props:
+        print("\n" + "=" * 78 + "\nPROP LOG-LIKELIHOOD with adjusted minutes (and a usage bump when more teammates than usual are out)\n" + "=" * 78)
+        wfs, disps = {}, {}
+        for stat in ("pts", "reb", "ast"):
+            Pst = dict(bp.DEFAULTS)
+            Pst.update(props["props"][stat]["params"])
+            Pst.update(mp)
+            wfs[stat] = bp.walk_forward(days, stat, Pst)
+            disps[stat] = props["props"][stat]["disp"]
+        ratio = np.ones(len(meta["emin"]))
+        ratio[ok] = (meta["emin"][ok] + d_all[ok]) / meta["emin"][ok]
+        absent = np.nan_to_num(meta["X"][:, mc.BASE.index("absent_now")] - meta["X"][:, mc.BASE.index("absent_recent")])
+        absent_now = np.nan_to_num(meta["X"][:, mc.BASE.index("absent_now")])
+        usage = tune_usage(wfs, meta, mt, absent, ratio, disps)
+        print("  usage bump (per extra 10 rotation minutes out vs recent games, fitted on tune): " + ", ".join(f"{k} x{math.exp(v):.3f}" for k, v in usage.items()))
+        mus = {}
+        for stat in ("pts", "reb", "ast"):
+            y = wfs[stat]["y"]
+            base_mu = wfs[stat]["mu"]
+            adj_mu = base_mu * ratio * np.exp(usage[stat] * absent)
+            min_mu = base_mu * ratio
+            mus[stat] = (base_mu, adj_mu)
+            for label, mask in (("all validation", mv), ("late season", mv & (np.nan_to_num(meta["X"][:, mc.BASE.index("late")]) > 0.5)),
+                                ("teammates out", mv & (absent_now * 10 >= 15))):
+                if mask.sum() < 60:
+                    continue
+                l0 = bp.nll_with(y[mask], base_mu[mask], disps[stat])
+                l1 = bp.nll_with(y[mask], adj_mu[mask], disps[stat])
+                lm = bp.nll_with(y[mask], min_mu[mask], disps[stat])
+                gain, gse2 = paired(l0, l1)
+                gm, gmse = paired(l0, lm)
+                print(f"  {stat.upper():<4}{label:<16} n={int(mask.sum()):>6}  NLL base {l0.mean():.4f}  with minutes {lm.mean():.4f} ({gm:+.4f} +/- {gmse:.4f})"
+                      f"  with minutes+usage {l1.mean():.4f} ({gain:+.4f} +/- {gse2:.4f})")
+                if label == "all validation":
+                    prop_report[stat] = {"nll_base": float(l0.mean()), "nll_adj": float(l1.mean()), "gain": gain, "se": gse2}
+            mb = mv & (wfs[stat]["emin"] >= 15)
+            print(f"      {stat.upper()} bias (actual - mean) all validation: base {np.mean(y[mb] - base_mu[mb]):+.3f}  adjusted {np.mean(y[mb] - adj_mu[mb]):+.3f}")
+        if "pts" in mus and "reb" in mus and "ast" in mus:
+            y = wfs["pts"]["y"] + wfs["reb"]["y"] + wfs["ast"]["y"]
+            b0 = mus["pts"][0] + mus["reb"][0] + mus["ast"][0]
+            b1 = mus["pts"][1] + mus["reb"][1] + mus["ast"][1]
+            dsum = props.get("pra_sum_disp") or props["props"]["pra"]["disp"]
+            l0, l1 = bp.nll_with(y[mv], b0[mv], dsum), bp.nll_with(y[mv], b1[mv], dsum)
+            gain, gse2 = paired(l0, l1)
+            print(f"  PRA (sum of parts) all validation  NLL base {l0.mean():.4f}  adjusted {l1.mean():.4f}  gain {gain:+.4f} +/- {gse2:.4f}")
+            prop_report["pra"] = {"nll_base": float(l0.mean()), "nll_adj": float(l1.mean()), "gain": gain, "se": gse2}
+        # ---- spread (uncertainty) by situation
+        inputs = {st_: (wfs[st_]["y"], mus[st_][1], disps[st_]) for st_ in ("pts", "reb", "ast")}
+        if "pts" in mus and "reb" in mus and "ast" in mus:
+            inputs["pra"] = (wfs["pts"]["y"] + wfs["reb"]["y"] + wfs["ast"]["y"], mus["pts"][1] + mus["reb"][1] + mus["ast"][1], dsum)
+        print("\n" + "=" * 78 + "\nSITUATIONS: minutes drops and whether the model's spread is right (validation seasons, after the minutes/usage adjustment)\n" + "=" * 78)
+        spread_diag(meta, mv, d_all, inputs)
+        all_m = _mask(meta, list(dict.fromkeys(tune + val)), FIT_MIN)
+        spread = spread_models(meta, tune, val, mt, mv, inputs, all_m if final_all else None)
+    # sit-rate table
+    print("\nROTATION-PLAYER DNP RATES (players averaging 20+ min over the last 10 games who did not play), by late-season level | record | back-to-back")
+    tot = sum(v[0] for v in sit.values())
+    base_rate = sum(v[1] for v in sit.values()) / tot if tot else float("nan")
+    print(f"  overall {base_rate * 100:.1f}% of {tot} rotation player-games   (level 0 = before game 57, 1 = games 57-69, 2 = last ~13 games; record low <.42 / high >.62)")
+    for k in sorted(sit):
+        n, a_ = sit[k]
+        if n >= 100:
+            print(f"    {k:<10} n={n:>6}  DNP {a_ / n * 100:5.1f}%")
+    # final fit
+    final_w, final_info = w, {"fit_seasons": tune, "validated_on": val}
+    if final_all and groups_on:
+        allm = _mask(meta, list(dict.fromkeys(tune + val)), FIT_MIN)
+        final_w, _ = mc.fit_ridge(mc.design(meta["X"][allm], meta["emin"][allm]), meta["min"][allm] - meta["emin"][allm], keep)
+        final_info = {"fit_seasons": sorted(set(tune + val)), "validated_on": val, "note": "weights refit on tune+validate seasons after validation"}
+        print(f"\nFinal weights refit on seasons {sorted(set(tune + val))} (n={int(allm.sum())}) for production.")
+    final_info.update({"val_minutes_mae_base": b["mae"], "val_minutes_mae_ctx": a["mae"], "val_mae_gain": g, "val_mae_gain_se": gse,
+                       "props": prop_report})
+    model = mc.model_dict(final_w, groups_on, usage, sit, final_info, spread={k: v for k, v in spread.items() if v['adopted']})
+    if out_path:
+        res = {}
+        if os.path.exists(out_path):
+            with open(out_path) as f:
+                res = json.load(f)
+        res["minutes_context"] = model
+        with open(out_path, "w") as f:
+            json.dump(res, f, indent=2)
+        print(f"\nWrote minutes_context into {out_path}" + ("" if groups_on else "  (no groups kept: production applies no adjustment)"))
+    return model, {"mae_base": b["mae"], "mae_ctx": a["mae"], "gain": g, "se": gse, "groups": groups_on}
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Backtest of context adjustments to NBA projected minutes")
+    ap.add_argument("--dir", default=".")
+    ap.add_argument("--seasons", required=True)
+    ap.add_argument("--tune-seasons", required=True)
+    ap.add_argument("--validate-seasons", required=True)
+    ap.add_argument("--params", default=None, help="nba_prop_params.json from backtest_nba_player_props.py (minutes + prop params)")
+    ap.add_argument("--final-fit-all", action="store_true")
+    ap.add_argument("--out", default=None, help="write the result into this params json under 'minutes_context'")
+    a = ap.parse_args()
+    run(a.dir, [int(x) for x in a.seasons.split(",")], [int(x) for x in a.tune_seasons.split(",")],
+        [int(x) for x in a.validate_seasons.split(",")], a.params, a.final_fit_all, a.out)
+
+
+if __name__ == "__main__":
+    main()
+'''
+# ======================================================================
+# embedded module: core_nba_player_props.py (494 lines)
 # ======================================================================
 _SRC["core_nba_player_props"] = r'''"""
 core_nba_player_props.py
@@ -2954,10 +3733,18 @@ WHO IS PREDICTED  Players whose latest team is playing, who appeared in >= RECEN
   RECENT_WINDOW games, have >= 10 prior games and project >= 15 minutes. Injury feed: 'Out' players are
   skipped; Day-To-Day players ARE predicted but flagged (the mean is conditional on playing).
 
+MINUTES CONTEXT (nba_minutes_context.py; only when nba_prop_params.json has a 'minutes_context' block, written by
+  backtest_nba_minutes_context.py --out nba_prop_params.json; otherwise the base projection is used unchanged)
+  Projected minutes are adjusted for: rotation teammates OUT (injury feed Out list; use --out-players for what-ifs), back-to-back /
+  three games in four nights, blowout risk (walk-forward team rating -> expected margin), late-season status (record-based
+  tank / locked-seed proxy). A small per-minute usage bump applies when more teammates than usual are out. The row shows base
+  minutes, adjusted minutes, what drove the change and situation flags (incl. historical DNP rate of rotation players in that spot).
+  Only the feature groups that helped out of sample in the backtest are applied.
+
 LIMITS, shipped as-is
-  * The mean is conditional on the player playing his usual role. NOT modeled: teammates being out (usage
-    goes UP for the others -- the model under-predicts then), rest/back-to-backs, home/away, blowout risk,
-    minutes restrictions after injury, lineup/starter news after the injury feed.
+  * The mean is conditional on the player playing. NOT modeled: home/away, minutes restrictions after injury, lineup/starter news
+    after the injury feed, late scratches (only the feed's Out list counts as 'out'), true playoff-seed math (late-season is record-based).
+  * Without a 'minutes_context' block, teammates-out / rest / blowout effects are NOT modeled.
   * No market comparison yet. Line + odds you supply are logged so the tracker can answer that.
   * Integer lines: P(push) is reported; over/under probabilities exclude it.
 
@@ -2982,6 +3769,7 @@ import backtest_nba_player_props as bp
 import core_nba_moneyline as mon
 import core_nba_spread as cs
 import nba_collect_boxscores as bx
+import nba_minutes_context as mc
 from nba_io import atomic_json_dump
 
 PARAMS_FILE = "nba_prop_params.json"
@@ -2991,6 +3779,7 @@ RECENT_WINDOW = 10           # team games looked at to decide who is on the rost
 RECENT_MIN = 3               # appearances within that window
 MAX_LINE = 90
 STATS = bp.STATS
+LABELS_SHORT = {"teammates_out": "teammates out", "rest": "rest", "blowout": "blowout risk", "late_season": "late season"}
 
 
 # ------------------------------------------------------------------ parameters
@@ -3116,6 +3905,13 @@ def build_context(directory=".", season=None, params=None, game_date=None, pra_d
                     for p in rec.get(side) or []:
                         if p.get("name"):
                             names[str(p["id"])] = p["name"]
+    games = mc.load_games(directory, seasons)
+    book, _x, _sit, _info = mc.replay(days, games)
+    if book.season is not None and season > book.season:
+        book.rollover(season)
+    cm = params.get("minutes_context")
+    ctx_model = cm if (cm and (cm.get("groups_on") or cm.get("spread")) and cm.get("version") == mc.VERSION
+                       and len(cm.get("weights", [])) == 2 + 2 * mc.K) else None
     states = {}
     for stat in STATS:
         if stat == "pra":
@@ -3124,7 +3920,7 @@ def build_context(directory=".", season=None, params=None, game_date=None, pra_d
     if pra_direct:
         states["pra"] = build_state(days, "pra", stat_params(params, "pra"), season)
     return {"season": season, "params": params, "states": states, "names": names, "last_tid": last_tid,
-            "last_pos": last_pos, "recent": recent, "last_date": days[-1][0],
+            "last_pos": last_pos, "recent": recent, "last_date": days[-1][0], "book": book, "ctx_model": ctx_model,
             "name_to_id": {n: p for p, n in names.items()}}
 
 
@@ -3150,13 +3946,48 @@ def player_lines(lines, name, pid):
     return out
 
 
-def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum"):
+def _with_k(disp, k):
+    """Count distribution with the over-dispersion scaled by k (situation-dependent spread)."""
+    d = dict(disp) if isinstance(disp, dict) else {"kind": "nb2", "r": float(disp)}
+    d["k"] = round(float(k), 4)
+    return d
+
+
+def context_flags(info, model):
+    """Plain-language situation flags for one team-game (from nba_minutes_context features)."""
+    fl = []
+    if info["b2b"]:
+        fl.append("back-to-back")
+    if info["exp_margin_abs"] >= 10.0:
+        fl.append(f"blowout risk: {'favourite' if info['fav'] else 'underdog'}, expected margin ~{info['exp_margin_abs']:.0f}")
+    if info["late"] > 0.5:
+        if info["wp"] < 0.42:
+            fl.append("late season, low-record team: tanking / sitting risk")
+        elif info["wp"] > 0.62:
+            fl.append("late season, strong record: rest risk")
+    rates = model.get("sit_rates") or {}
+    row = rates.get(mc.sit_bucket(info))
+    tot_n = sum(v.get("n", 0) for v in rates.values())
+    overall = (sum(v.get("absent", 0) for v in rates.values()) / tot_n) if tot_n else None
+    if row and overall and row.get("n", 0) >= 100 and row.get("rate") is not None and row["rate"] >= max(0.18, 1.35 * overall):
+        fl.append(f"rotation players in this spot sat out {row['rate'] * 100:.0f}% of games historically (vs {overall * 100:.0f}% overall)")
+    return fl
+
+
+def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum", extra_out=None):
     """Pure prediction step. -> (rows, meta). One row per (player, prop). No file or network access."""
     lines = lines or {}
     inj_ok = injury_data is not None
     injuries, unmatched = (cs.parse_injuries(injury_data, ctx["name_to_id"]) if inj_ok else ({}, 0))
+    for key in (extra_out or []):                              # what-if: treat these players as Out
+        pid = ctx["name_to_id"].get(key) or (key if key in ctx["names"] else None)
+        if pid:
+            injuries[pid] = (0.0, "Out (scenario)")
     rows_out, skipped_out = [], []
     d_stats = [s for s in STATS if s != "pra"]
+    model = ctx.get("ctx_model")
+    book = ctx.get("book")
+    wts = np.array(model["weights"]) if model else None
     for ev in events:
         g = mon.collector.parse_event(ev)
         if g is None or g["completed"] or g["season_type"] != mon.REGULAR_SEASON_TYPE:
@@ -3165,6 +3996,11 @@ def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum"):
         for side, tid, oid, home, tname, oname in (("home", g["home_id"], g["away_id"], 1, g["home_name"], g["away_name"]),
                                                    ("away", g["away_id"], g["home_id"], 0, g["away_name"], g["home_name"])):
             cnt = ctx["recent"].get(tid, {})
+            vec = info = None
+            if model is not None and book is not None:
+                out_pids = {pid for pid, v in injuries.items() if v[0] <= 0.0 and ctx["last_tid"].get(pid) == tid}
+                vec, info = book.features(tid, oid, datetime.date.fromisoformat(gdate).toordinal(), bool(home), out=out_pids)
+                flags = context_flags(info, model)
             team_out = []
             for pid, n in cnt.items():
                 if n < RECENT_MIN or ctx["last_tid"].get(pid) != tid:
@@ -3182,23 +4018,38 @@ def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum"):
                 ref = pr[d_stats[0]]
                 if ref["nprior"] < bp.MIN_PRIOR or ref["emin"] < bp.MIN_GATE:
                     continue
-                mus = {s: pr[s]["mu"] for s in d_stats}
+                emin_base = ref["emin"]
+                emin_adj, ratio, cinfo = emin_base, 1.0, None
+                if vec is not None:
+                    delta = float(mc.delta_minutes(wts, vec[None, :], np.array([emin_base]))[0])
+                    emin_adj = emin_base + delta
+                    ratio = emin_adj / emin_base
+                    drivers = {k: round(v, 2) for k, v in mc.contributions(wts, vec, emin_base).items()}
+                    cinfo = {"delta_min": round(delta, 2), "drivers": drivers, "flags": flags,
+                             "rotation_out": [{"id": p, "name": ctx["names"].get(p, p), "avg_min": round(m, 1)} for p, m in info["absent"]],
+                             "expected_margin": round(info["diff"], 1), "team_win_pct": round(info["wp"], 3)}
+                mus = {s: pr[s]["mu"] * ratio * (mc.usage_factor(model, s, vec) if vec is not None else 1.0) for s in d_stats}
                 if pra_mode == "direct" and "pra" in pr:
-                    mus["pra"] = pr["pra"]["mu"]
+                    mus["pra"] = pr["pra"]["mu"] * ratio
                 else:
                     mus["pra"] = mus["pts"] + mus["reb"] + mus["ast"]
                 name = ctx["names"].get(pid, pid)
                 pl = player_lines(lines, name, pid)
                 for stat in STATS:
                     mu, disp = mus[stat], _disp(ctx, stat, pra_mode)
+                    sk = None
+                    sw = ((model or {}).get("spread") or {}).get(stat)
+                    if vec is not None and sw and (stat != "pra" or pra_mode == "sum"):
+                        sk = mc.spread_k_one(sw["w"], vec, emin_base)
+                        disp = _with_k(disp, sk)
                     t10 = (sum(pr[s]["t10"] for s in d_stats) if stat == "pra" and stat not in pr else pr[stat]["t10"])
                     rec = {"game_id": g["game_id"], "date": g["date"], "season": ctx["season"], "player_id": pid, "player": name,
                            "team_id": tid, "team": tname, "opp_id": oid, "opp": oname, "home": home, "stat": stat,
-                           "mu": round(mu, 3), "emin": round(ref["emin"], 2), "last10": None if t10 != t10 else round(t10, 2),
+                           "mu": round(mu, 3), "emin": round(emin_adj, 2), "emin_base": round(emin_base, 2), "ctx": cinfo, "last10": None if t10 != t10 else round(t10, 2),
                            "opp_index": round(pr[stat]["opp_idx"], 3) if stat in pr else None,
                            "group": ref["g"], "n_prior": int(ref["nprior"]), "fair_line": fair_line(mu, disp), "disp": disp,
                            "status": inj[1] if inj else None, "teammates_out": [o for o in team_out if o["id"] != pid],
-                           "pra_mode": pra_mode if stat == "pra" else None}
+                           "pra_mode": pra_mode if stat == "pra" else None, "spread_k": None if sk is None else round(sk, 3)}
                     if stat in pl:
                         line, oo, uo = pl[stat]
                         po, pu, pp = over_under(line, mu, disp)
@@ -3214,7 +4065,7 @@ def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum"):
 
 
 def predict_props_slate(game_date, directory=".", refresh=True, lines=None, fetch_day=None, fetch_injuries_fn=None,
-                        fetch_summary=None, collect=None, params=None, pra_mode="sum"):
+                        fetch_summary=None, collect=None, params=None, pra_mode="sum", extra_out=None):
     if isinstance(game_date, str):
         game_date = datetime.datetime.strptime(game_date, "%Y%m%d").date()
     season = mon.season_for_date(game_date)
@@ -3229,7 +4080,7 @@ def predict_props_slate(game_date, directory=".", refresh=True, lines=None, fetc
     except Exception as e:
         print(f"[WARN] injuries feed unavailable ({e}); players flagged Out may appear in the output.")
         inj = None
-    rows, meta = predict_from_context(ctx, fetch_day(game_date).get("events") or [], inj, lines, pra_mode)
+    rows, meta = predict_from_context(ctx, fetch_day(game_date).get("events") or [], inj, lines, pra_mode, extra_out)
     if ctx["last_date"] >= game_date.isoformat():
         meta["warning"] = f"cached data run through {ctx['last_date']}, which is not before {game_date}; predictions may include games already played"
     return rows, meta
@@ -3299,8 +4150,16 @@ def print_table(rows, meta, min_edge=None):
             note = []
             if r["status"]:
                 note.append(f"{r['status']} (conditional on playing)")
+            c = r.get("ctx")
             if r["teammates_out"] and r["stat"] == "pts":
-                note.append("teammates out: " + ", ".join(o["name"] for o in r["teammates_out"][:3]) + " (usage up, NOT modeled)")
+                note.append("teammates out: " + ", ".join(o["name"] for o in r["teammates_out"][:3]) + ("" if c else " (usage up, NOT modeled)"))
+            if r.get("spread_k") and r["spread_k"] >= 1.25 and r["stat"] in ("pts", "pra"):
+                note.append(f"wider range than usual (x{r['spread_k']:.2f}): minutes risk")
+            if c and r["stat"] == "pts":
+                parts = [f"{LABELS_SHORT.get(k, k)} {v:+.1f}" for k, v in c["drivers"].items() if k != "base" and abs(v) >= 0.4]
+                if abs(c["delta_min"]) >= 0.4 or c["flags"]:
+                    note.append(f"min {r['emin_base']:.0f}->{r['emin']:.0f}" + (f" ({', '.join(parts)})" if parts else "")
+                                + ("; " + "; ".join(c["flags"]) if c["flags"] else ""))
             print(f"{r['player'][:23]:<24}{str(r['team'])[:13]:<14}{r['stat']:<5}{r['mu']:>6.1f}{r['emin']:>5.0f}{f('last10', '{:.1f}'):>7}{r['fair_line']:>6.1f}  "
                   f"{f('line', '{:.1f}'):>6}{pct(r.get('p_over')):>7}{pct(r.get('p_under')):>7}{f('ev_over', '{:+.3f}'):>7}{f('ev_under', '{:+.3f}'):>7}  {'; '.join(note)}")
     print("\nproj = expected stat given he plays his usual role; fair = half-point line with P(over)~50%. SHADOW MODE: track before betting.")
@@ -3325,10 +4184,12 @@ def main():
     ap.add_argument("--no-log", action="store_true")
     ap.add_argument("--pra", choices=["sum", "direct"], default="sum")
     ap.add_argument("--only", default=None, help="show only players whose name contains this text")
+    ap.add_argument("--out-players", default=None, help="what-if: semicolon-separated player names to treat as Out, e.g. \"Jayson Tatum;Jaylen Brown\"")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     date_str = args.date or datetime.date.today().strftime("%Y%m%d")
-    rows, meta = predict_props_slate(date_str, args.dir, refresh=not args.no_refresh, lines=load_lines(args.lines_file), pra_mode=args.pra)
+    rows, meta = predict_props_slate(date_str, args.dir, refresh=not args.no_refresh, lines=load_lines(args.lines_file), pra_mode=args.pra,
+                                  extra_out=[x.strip() for x in args.out_players.split(";") if x.strip()] if args.out_players else None)
     out = args.out or os.path.join(args.dir, f"nba_prop_predictions_{date_str}.json")
     atomic_json_dump(out, rows)
     shown = [r for r in rows if not args.only or args.only.lower() in r["player"].lower()]
@@ -3546,7 +4407,7 @@ if __name__ == "__main__":
     main()
 '''
 # ======================================================================
-# embedded module: nba_track_prop_results.py (195 lines)
+# embedded module: nba_track_prop_results.py (200 lines)
 # ======================================================================
 _SRC["nba_track_prop_results"] = r'''"""
 nba_track_prop_results.py
@@ -3673,6 +4534,11 @@ def report(rows, voided, pending, min_ev=0.03):
         print(f"\n##### {stat.upper()}  n={len(rs)}")
         print(f"  mean actual {y.mean():.2f} vs projected {mu.mean():.2f}   bias {y.mean() - mu.mean():+.3f}   MAE {np.abs(y - mu).mean():.3f}"
               f"   minutes: projected {emin.mean():.1f} actual {mins.mean():.1f} (MAE {np.abs(mins - emin).mean():.2f})")
+        if all(r.get("emin_base") is not None for r, a in rs):
+            eb = np.array([r["emin_base"] for r, a in rs])
+            if np.abs(eb - emin).max() > 1e-6:
+                print(f"  minutes with context adjustment: MAE {np.abs(mins - emin).mean():.2f} vs base projection {np.abs(mins - eb).mean():.2f}"
+                      f"   (adjusted - base: mean {np.mean(emin - eb):+.2f} min)")
         ok = ~np.isnan(t10)
         if ok.sum() > 30:
             print(f"  vs last-10 avg on {int(ok.sum())} rows: MAE model {np.abs(y - mu)[ok].mean():.3f} / last-10 {np.abs(y - t10)[ok].mean():.3f}")
@@ -4191,6 +5057,7 @@ def _install():
 
 _install()
 import backtest_nba_player_props as bp          # noqa: E402
+import backtest_nba_minutes_context as bmc      # noqa: E402,F401  (the minutes-context backtest; run via 'run backtest_nba_minutes_context')
 import core_nba_moneyline as mon                # noqa: E402
 import core_nba_player_props as cp              # noqa: E402
 import core_nba_spread as cs                    # noqa: E402
@@ -4289,7 +5156,8 @@ class NBAPlatform(svc_mod.NBAService):
         """One entry per player (games grouped), each with pts/reb/ast/pra blocks. Never raises."""
         base = {"schema_version": SCHEMA_VERSION, "generated_at": self._now().isoformat(timespec="seconds"),
                 "model": {"shadow_mode": True, "pra_mode": self.pra_mode,
-                          "note": "projection assumes the player plays his usual role; teammate-out usage boosts are NOT modeled"}}
+                          "note": "projection assumes the player plays; minutes are adjusted for teammates out / back-to-back / blowout risk / "
+                                  "late-season status only when nba_prop_params.json has a validated 'minutes_context' block (see each player's 'context')"}}
         try:
             rows, meta, warnings, status = self.props_rows(date, lines)
         except Exception as e:
@@ -4314,7 +5182,8 @@ class NBAPlatform(svc_mod.NBAService):
                 p = players[k] = {"game_id": r["game_id"], "tip_off": r["tip_off"], "started": r["started"], "player_id": r["player_id"],
                                   "player": r["player"], "team": r["team"], "team_id": r["team_id"], "opp": r["opp"], "opp_id": r["opp_id"],
                                   "home": bool(r["home"]), "position_group": r["group"], "projected_minutes": r["emin"],
-                                  "games_of_history": r["n_prior"], "status": r["status"], "teammates_out": r["teammates_out"], "props": {}}
+                                  "games_of_history": r["n_prior"], "status": r["status"], "teammates_out": r["teammates_out"],
+                                  "projected_minutes_base": r.get("emin_base"), "context": r.get("ctx"), "props": {}}
             blk = {k2: r.get(k2) for k2 in ("mu", "last10", "fair_line", "opp_index", "line", "p_over", "p_under", "p_push",
                                             "over_odds", "under_odds", "ev_over", "ev_under")}
             blk["projection"] = blk.pop("mu")

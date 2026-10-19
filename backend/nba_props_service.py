@@ -13,6 +13,13 @@ needs on top:
     exactly like every other prop in the dashboard.
   * Final-box-score lookup used by bet_grading for tracked NBA prop bets.
 
+  * DATA GATE ("collect first, predict later"): the current season is collected from ESPN every 30 minutes. A game's player
+    predictions are only released once BOTH teams have played NBA_MIN_TEAM_GAMES (default 10, 0 = off) completed regular-season
+    games this season; until then the game is listed as "collecting data" with each team's game count. (Players also need >= 10 games
+    of history, and the minutes-context features need ~5 team games, so very early-season numbers would lean on last year.)
+  * Minutes context from nba_platform.py (teammates out / blowout risk / back-to-back / late season) is applied automatically when
+    nba_prop_params.json has a validated "minutes_context" block; each player row then carries base vs adjusted minutes and flags.
+
 Data lives in NBA_DATA_DIR (default: backend/nba_data). That folder is seeded from git with the box scores for the
 last seasons and nba_prop_params.json; the current season is collected on the server.
 
@@ -43,17 +50,59 @@ LINEUP_TTL_CONFIRMED = 600.0                         # seconds between re-checks
 PAYLOAD_TTL = 20.0
 STATS = ("pts", "reb", "ast", "pra")
 MAX_SF = 100
+MIN_TEAM_GAMES = int(os.environ.get("NBA_MIN_TEAM_GAMES", "10"))     # completed regular-season games each team needs before its games get predictions
+DAY_SETTLE_DAYS = 2          # a scoreboard day counts as fully collected only once it is this many (UTC) days old - late West-Coast games
+
+
+def collect_games_safe(season, sleep=0.15, directory=".", quiet=False):
+    """Same job as nba_collect_games.collect_season, with one fix for a server running in UTC: the original marked a day
+    "done" as soon as the UTC date rolled over (8 pm US Eastern), so games still in progress that evening - the late
+    tip-offs - were never collected. Here a day is marked done only DAY_SETTLE_DAYS later; until then it is simply re-fetched
+    (a couple of cheap requests per refresh)."""
+    cg = mon.collector
+    say = (lambda *a, **k: None) if quiet else print
+    path = os.path.join(directory, cg.progress_file_for(season))
+    progress = cg.load_progress(path)
+    done = set(progress["completed_days"])
+    start, end = cg.season_window(season)
+    today = datetime.date.today()
+    settled_before = today - datetime.timedelta(days=DAY_SETTLE_DAYS - 1)
+    days = [d for d in cg.daterange(start, end) if d.isoformat() not in done]
+    say(f"{season}: {len(done)} day(s) already collected, {len(days)} to check ({start} .. {end}).")
+    for i, d in enumerate(days):
+        if d > today:
+            break
+        try:
+            data = cg.get_day(d)
+        except Exception as e:                    # network trouble: this day is retried on the next refresh
+            say(f"  {d}: error, will retry next run: {e}")
+            continue
+        for ev in data.get("events") or []:
+            g = cg.parse_event(ev)
+            if g is None or not g["completed"] or g["home_score"] is None or g["away_score"] is None:
+                continue
+            progress["games"][g["game_id"]] = g
+        if d < settled_before:
+            progress["completed_days"].append(d.isoformat())
+        if (i + 1) % 30 == 0:
+            cg.save_progress(progress, path)
+        time.sleep(sleep)
+    cg.save_progress(progress, path)
+    say(f"{season}: {len(progress['games'])} completed game(s) cached -> {path}")
 
 
 class NBAProps(npf.NBAPlatform):
     def __init__(self, directory=DATA_DIR, **kw):
         os.makedirs(directory, exist_ok=True)
         kw.setdefault("log_predictions", False)     # shadow-mode log files are not used by the dashboard
+        kw.setdefault("collect_games", collect_games_safe)
         super().__init__(directory, **kw)
         self._lineups = {}                          # game_id -> (fetched_epoch, info)
         self._lineup_lock = threading.Lock()
         self._payloads = {}                         # date -> (epoch, payload)
         self._warm_thread = None
+        self._gate_lock = threading.Lock()
+        self._gate_cache = {}                       # season -> ((mtime, size), {team_id: games played})
 
     # ---------------------------------------------------------------- refresh (props only)
     def refresh_data(self, season=None, refit=False):
@@ -140,6 +189,62 @@ class NBAProps(npf.NBAPlatform):
             self._lineups[game_id] = (epoch, info)
         return info
 
+    # ---------------------------------------------------------------- data gate
+    def team_game_counts(self, season):
+        """-> {team_id: completed regular-season games this season}, from the collected games file."""
+        path = os.path.join(self.dir, f"nba_games_{season}.json")
+        try:
+            st = os.stat(path)
+        except OSError:
+            return {}
+        key = (st.st_mtime_ns, st.st_size)
+        with self._gate_lock:
+            hit = self._gate_cache.get(season)
+            if hit and hit[0] == key:
+                return hit[1]
+        data = npf.load_json_retry(path, {}) or {}
+        counts = {}
+        for g in (data.get("games") or {}).values():
+            if g.get("season_type") != mon.REGULAR_SEASON_TYPE or not g.get("completed"):
+                continue
+            for tid in (str(g.get("home_id")), str(g.get("away_id"))):
+                counts[tid] = counts.get(tid, 0) + 1
+        with self._gate_lock:
+            self._gate_cache[season] = (key, counts)
+        return counts
+
+    def gate_info(self, season):
+        """League-wide progress toward the gate (for the banner and /api/nba/health)."""
+        counts = self.team_game_counts(season)
+        league = set()
+        try:                                        # the 30 real teams = those with a full-ish schedule last season
+            prev = npf.load_json_retry(os.path.join(self.dir, f"nba_games_{season - 1}.json"), {}) or {}
+            n = {}
+            for g in (prev.get("games") or {}).values():
+                if g.get("season_type") == mon.REGULAR_SEASON_TYPE:
+                    for tid in (str(g.get("home_id")), str(g.get("away_id"))):
+                        n[tid] = n.get(tid, 0) + 1
+            league = {t for t, c in n.items() if c >= 40}
+        except Exception:
+            pass
+        league = league or set(counts)
+        played = [counts.get(t, 0) for t in league] or [0]
+        need = MIN_TEAM_GAMES
+        return {"min_team_games": need, "teams_total": len(league), "teams_ready": sum(1 for x in played if x >= need),
+                "fewest_games": min(played), "most_games": max(played), "season": season,
+                "message": ("data gate off" if need <= 0 else
+                            ("every team has enough games - predictions are on" if min(played) >= need else
+                             f"collecting data: predictions open per game once both teams have played {need} games "
+                             f"({sum(1 for x in played if x >= need)}/{len(played)} teams there so far)"))}
+
+    def health(self):
+        h = super().health()
+        try:
+            h["gate"] = self.gate_info(h.get("season") or mon.season_for_date(self._today_fn()))
+        except Exception as e:
+            h["gate"] = {"error": f"{type(e).__name__}: {e}"}
+        return h
+
     # ---------------------------------------------------------------- survival curves
     @staticmethod
     def _sf(mu, disp):
@@ -191,13 +296,20 @@ class NBAProps(npf.NBAPlatform):
                 "_tip": tip,
             }
 
+        season = meta.get("season") or mon.season_for_date(d)
+        counts = self.team_game_counts(season)
+        for g in games.values():
+            hg, ag = counts.get(str(g["home_team_id"]), 0), counts.get(str(g["away_team_id"]), 0)
+            g["team_games"] = {"home": hg, "away": ag, "needed": MIN_TEAM_GAMES}
+            g["data_ready"] = bool(MIN_TEAM_GAMES <= 0 or (hg >= MIN_TEAM_GAMES and ag >= MIN_TEAM_GAMES))
+
         by_game = {}
         for r in rows:
             by_game.setdefault(r["game_id"], {}).setdefault(r["player_id"], []).append(r)
 
         for gid, g in games.items():
-            if g["completed"]:
-                continue
+            if g["completed"] or not g["data_ready"]:
+                continue                                  # finished, or still collecting this season's data: no lineup polling, no players
             info = self._lineup(gid, g["_tip"], now)
             g["lineup_confirmed"] = bool(info["confirmed"])
             if info.get("error"):
@@ -218,6 +330,7 @@ class NBAProps(npf.NBAPlatform):
                     "player_id": pid, "player": ref["player"], "team": ref["team"], "team_id": ref["team_id"],
                     "opp": ref["opp"], "home": bool(ref["home"]), "starter": pid in starters,
                     "position_group": ref["group"], "projected_minutes": ref["emin"],
+                    "projected_minutes_base": ref.get("emin_base"), "context": ref.get("ctx"),
                     "games_of_history": ref["n_prior"], "injury_status": ref["status"],
                     "teammates_out": [o["name"] for o in (ref.get("teammates_out") or [])][:4], "props": props,
                 })
@@ -225,10 +338,18 @@ class NBAProps(npf.NBAPlatform):
 
         glist = sorted(({k: v for k, v in g.items() if k != "_tip"} for g in games.values()),
                        key=lambda g: (g["tip_off"] or "", g["game_id"]))
+        try:
+            ctx_on = bool((self._props_context(season) or {}).get("ctx_model"))
+        except Exception:
+            ctx_on = False
+        gate = self.gate_info(season)
+        collecting = any(not g["data_ready"] and not g["completed"] for g in glist)
         payload = {"status": status, "date": key, "season": meta.get("season"), "warnings": warnings, "games": glist,
-                   "data_through": meta.get("data_through"),
-                   "note": "Projection assumes the player plays his usual role; teammates being out (usage up) is NOT modeled. "
-                           "Shadow-mode model: validated for calibration, NOT against real sportsbook lines."}
+                   "data_through": meta.get("data_through"), "gate": gate, "collecting": collecting,
+                   "minutes_context": ctx_on,
+                   "note": ("Minutes are adjusted for teammates out, blowout risk and (when validated) back-to-backs / late-season status; "
+                            if ctx_on else "Projection assumes the player plays his usual role; teammates being out (usage up) is NOT modeled. ")
+                           + "Shadow-mode model: validated for calibration, NOT against real sportsbook lines."}
         with self._plock:
             self._payloads[key] = (time.time(), payload)
         return payload
