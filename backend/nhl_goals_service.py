@@ -156,14 +156,23 @@ class NHLGoals(npf.NHLPlatform):
                         "periods": pp["periods"] if pp else None,
                     })
                 # games already finished on this date: show the result (no prediction is made for a played game)
+                logged = None
                 for g in games:
                     if g.get("date") != date:
                         continue
-                    out_games.append({
+                    item = {
                         "game_id": g["id"], "date": date, "start_utc": g.get("start_utc"), "started": True, "final": True,
                         "home": g["home"], "away": g["away"], "hg": g["hg"], "ag": g["ag"], "ended_in": g.get("period"),
                         "so_winner": g.get("so"), "period_goals": g.get("per"),
-                    })
+                    }
+                    # the pre-game prediction we logged for this game (shadow scorecard), shown next to the final score
+                    if logged is None:
+                        logged = self._shadow_load() or {}
+                    rec = logged.get(str(g["id"]))
+                    if rec:
+                        item.update({"mu_home": rec.get("mh"), "mu_away": rec.get("ma"), "ml_home": rec.get("ml"),
+                                     "ml_away": (1 - rec["ml"]) if rec.get("ml") is not None else None})
+                    out_games.append(item)
                 out_games.sort(key=lambda x: (x.get("start_utc") or "", x["game_id"]))
                 if not out_games:
                     warnings.append(f"No NHL games found on {date}.")

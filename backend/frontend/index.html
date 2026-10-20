@@ -7836,6 +7836,26 @@
     const per = pg && pg.home && pg.away
       ? `<div class="meta">${[0, 1, 2].map(i => `P${i + 1}: ${pg.away[i] ?? "–"}-${pg.home[i] ?? "–"}`).join(" · ")} <span style="opacity:.6;">(away-home)</span></div>` : "";
     const how = g.ended_in && g.ended_in !== "REG" ? ` (${g.ended_in}${g.ended_in === "SO" && g.so_winner ? ", " + (g.so_winner === "home" ? g.home : g.away) + " won" : ""})` : "";
+    if (g.mu_home != null && g.mu_away != null) {
+      const cols = "minmax(110px, 1.3fr) 52px 52px 52px";
+      const row = (team, ml, mu, goals, won) => `
+        <div class="hits-batter" style="grid-template-columns: ${cols}; gap:4px; padding:4px 0;">
+          <span style="font-size:1rem; font-weight:600;">${team}${won ? " ✓" : ""}</span>
+          <span class="prob-yes">${ml != null ? Math.round(ml * 100) + "%" : "–"}</span>
+          <span class="score" style="text-align:center; font-weight:700; overflow:visible;">${Math.round(mu)}</span>
+          <span class="score" style="text-align:center; font-weight:700; overflow:visible;">${goals}</span>
+        </div>`;
+      return `
+        <div class="card">
+          <div class="meta">Final${how}</div>
+          <div class="hits-batter-header" style="display:grid; grid-template-columns: ${cols}; gap:4px; margin-bottom:2px;">
+            <span style="text-align:left;">Team</span><span>Win %</span><span>Pred</span><span>Final</span>
+          </div>
+          ${row(g.away, g.ml_away, g.mu_away, g.ag, g.ag > g.hg)}
+          ${row(g.home, g.ml_home, g.mu_home, g.hg, g.hg > g.ag)}
+          ${per}
+        </div>`;
+    }
     return `
       <div class="card">
         <div class="meta">Final${how}</div>
