@@ -7772,7 +7772,7 @@
     const pushTip = push > 0.0005 ? ` title="Push (exact tie, stake refunded): ${(push * 100).toFixed(1)}%"` : "";
     return `
       <div class="hits-batter" style="grid-template-columns: ${NHLG_OU_COLS};">
-        <span style="font-size:0.8rem;">${label} <span class="hits-index">${mu != null ? mu.toFixed(2) : ""}</span></span>
+        <span style="font-size:0.8rem;">${label} <span class="hits-index">${mu != null ? Math.round(mu) : ""}</span></span>
         <input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNhlgLine('${gid}','${mk}',this.value)" />
         <span class="prob-yes"${pushTip}>${Math.round(over * 100)}%</span>
         <span class="prob-no"${pushTip}>${Math.round(under * 100)}%</span>
@@ -7818,7 +7818,7 @@
         </div>
         <div class="hits-batter" style="grid-template-columns: ${NHLG_ML_COLS}; padding:4px 0;">
           <span style="font-size:1rem; font-weight:600;">${team} <span class="prob-yes" title="Moneyline win probability (overtime and shootout included)">${pct}%</span></span>
-          <span class="score" style="text-align:center; font-weight:700; overflow:visible;">${mu.toFixed(1)}</span>
+          <span class="score" style="text-align:center; font-weight:700; overflow:visible;">${Math.round(mu)}</span>
           <input type="number" step="0.1" min="0" max="100" value="${marketVal}" placeholder="%" onchange="updateNhlgField('${gid}','${mk}','market',this.value)" />
           <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateNhlgField('${gid}','${mk}','useKelly',this.checked)" />
           ${wagerCell}
