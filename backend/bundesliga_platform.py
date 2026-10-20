@@ -68,6 +68,7 @@ LIMITATIONS: independent Poisson tends to understate draws a little (a 'draw_boo
     python bundesliga_platform.py bootstrap | refresh | fixtures | odds | results | track
     python bundesliga_platform.py daily               refresh everything, print the slate
     python bundesliga_platform.py slate               print the upcoming matches
+    python bundesliga_platform.py backlog [--season Y]  every match already played this season: walk-forward prediction vs result (CSV + summary)
     python bundesliga_platform.py predict --home "Bayern Munich" --away "Borussia Dortmund"
     python bundesliga_platform.py run bl_model backtest    (the embedded research tools: run bl_model backtest|compare|odds|table --dir DIR)
     python bundesliga_platform.py unpack OUTDIR      write the embedded modules out as .py files
@@ -2143,6 +2144,65 @@ class BundesligaPlatform:
         except Exception as e:                             # noqa: BLE001
             return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"]}
 
+    def backlog(self, season=None):
+        """Every match already played in `season` (default: the current one): the walk-forward prediction (previous-XI lineups, using only
+        matches before it), the actual result, closing odds where football-data has them.  Written to bl_backlog_<season>.csv and summarised."""
+        try:
+            run = self._run()
+            if run is None:
+                return {"status": "error", "warnings": ["not enough match data yet (run bootstrap first)"]}
+            cur = season if season is not None else season_of(self._now().date())
+            sel = [r for r in run["hist"] if r["season"] == cur]
+            if not sel:
+                return {"status": "error", "warnings": [f"no played matches found for season {cur}"]}
+            db = float(self.params()["draw_boost"])
+            rows = self._odds_rows()
+            joined = bm.join_odds(sel, rows)[0] if rows else {}
+            recs, table = [], []
+            for r in sel:
+                M = bm.markets(r["xh"], r["xa"], draw_boost=db)
+                mk = market_from_row(joined.get(r["id"])) or {}
+                y = "H" if r["hg"] > r["ag"] else ("D" if r["hg"] == r["ag"] else "A")
+                p = {"H": M["home"], "D": M["draw"], "A": M["away"]}
+                recs.append({"id": r["id"], "date": r["date"], "home": r["home"], "away": r["away"], "xh": r["xh"], "xa": r["xa"], "bh": r["lgh"],
+                             "ba": r["lga"], "hg": r["hg"], "ag": r["ag"], "mkt": mk or None})
+                table.append({"date": r["date"], "season": r["season"], "home": r["home"], "away": r["away"], "lineups": "previous XI",
+                              "xg_home": round(r["xh"], 3), "xg_away": round(r["xa"], 3), "p_home": round(M["home"], 4), "p_draw": round(M["draw"], 4),
+                              "p_away": round(M["away"], 4), "p_btts": round(M["btts"], 4), "p_over_1_5": round(M["total_over"]["1.5"], 4),
+                              "p_over_2_5": round(M["total_over"]["2.5"], 4), "p_over_3_5": round(M["total_over"]["3.5"], 4),
+                              "p_home_over_0_5": round(M["team_over"]["home"]["0.5"], 4), "p_home_over_1_5": round(M["team_over"]["home"]["1.5"], 4),
+                              "p_away_over_0_5": round(M["team_over"]["away"]["0.5"], 4), "p_away_over_1_5": round(M["team_over"]["away"]["1.5"], 4),
+                              "home_goals": r["hg"], "away_goals": r["ag"], "result": y, "total_goals": r["hg"] + r["ag"],
+                              "btts": int(r["hg"] > 0 and r["ag"] > 0), "over_2_5": int(r["hg"] + r["ag"] > 2.5),
+                              "p_actual_result": round(p[y], 4), "logloss": round(-math.log(max(p[y], 1e-9)), 4),
+                              "mkt_home": mk.get("H"), "mkt_draw": mk.get("D"), "mkt_away": mk.get("A"), "mkt_over_2_5": mk.get("o25")})
+            path = self._p(f"bl_backlog_{cur}.csv")
+            tmp = path + ".tmp"
+            with open(tmp, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, list(table[0]))
+                w.writeheader()
+                w.writerows(table)
+            os.replace(tmp, path)
+            teams = {}
+            for t in table:
+                for side, opp in (("home", "away"), ("away", "home")):
+                    d = teams.setdefault(t[side], {"team": t[side], "played": 0, "pts": 0, "exp_pts": 0.0, "gf": 0, "xgf": 0.0, "ga": 0, "xga": 0.0})
+                    d["played"] += 1
+                    d["gf"] += t[side + "_goals"]
+                    d["ga"] += t[opp + "_goals"]
+                    d["xgf"] += t["xg_" + side]
+                    d["xga"] += t["xg_" + opp]
+                    pw, pd_, pl = (t["p_home"], t["p_draw"], t["p_away"]) if side == "home" else (t["p_away"], t["p_draw"], t["p_home"])
+                    d["exp_pts"] += 3 * pw + pd_
+                    won = (t["result"] == "H") if side == "home" else (t["result"] == "A")
+                    d["pts"] += 3 if won else (1 if t["result"] == "D" else 0)
+            tt = sorted(({**d, "xgf": round(d["xgf"], 1), "xga": round(d["xga"], 1), "exp_pts": round(d["exp_pts"], 1)} for d in teams.values()),
+                        key=lambda d: -d["pts"])
+            return clean({"status": "ok", "warnings": [], "season": cur, "matches": len(table), "csv": path,
+                          "scorecard": score_records(recs, db), "teams": tt})
+        except Exception as e:                             # noqa: BLE001
+            return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"]}
+
     def get_results(self, n=40):
         try:
             live, _ = self._live_records()
@@ -2380,6 +2440,31 @@ def print_slate(s):
             print("   !", w)
 
 
+def print_backlog(b):
+    if b.get("status") != "ok":
+        print(b.get("warnings"))
+        return
+    sc = b["scorecard"]
+    x, g = sc["x12"], sc["goals"]
+    print(f"\nSeason {b['season']}: {b['matches']} matches already played, each predicted WALK-FORWARD (only earlier matches, previous-XI lineups).")
+    print(f"Every match is in: {b['csv']}")
+    print(f"\n1X2   log loss {x['logloss']:.4f} (league-average baseline {x['logloss_league_avg']:.4f}; lower is better, difference {x['logloss_minus_league_avg']:+.4f} +/- {x['se']:.4f})   accuracy {x['accuracy']:.1%}")
+    print(f"      home {x['home_pred']:.1%} predicted / {x['home_rate']:.1%} actual   draw {x['draw_pred']:.1%} / {x['draw_rate']:.1%}   away {x['away_pred']:.1%} / {x['away_rate']:.1%}")
+    print(f"Goals expected home {g['home_expected']:.2f} / away {g['away_expected']:.2f}   actual {g['home_actual']:.2f} / {g['away_actual']:.2f}   MAE of total {g['mae_total']:.2f} (league avg {g['mae_total_league_avg']:.2f})")
+    for ln in ("1.5", "2.5", "3.5"):
+        t = sc["total_over"][ln]
+        print(f"Total over {ln}: predicted {t['pred']:.1%}, actual {t['rate']:.1%}, Brier {t['brier']:.4f} (league avg {t['brier_league_avg']:.4f})")
+    print(f"BTTS: predicted {sc['btts']['pred']:.1%}, actual {sc['btts']['rate']:.1%}")
+    for key, name in (("vs_market_1x2", "1X2"), ("vs_market_ou25", "O/U 2.5")):
+        m = sc.get(key)
+        if m:
+            print(f"vs closing market {name} ({m['n']} matches): Brier model {m['brier_model']:.4f} vs market {m['brier_market']:.4f}  (model minus market {m['model_minus_market_brier']:+.4f} +/- {m['se']:.4f}; negative = model better)")
+    print(f"\n{'team':<26}{'P':>3}{'pts':>5}{'exp pts':>9}{'GF':>5}{'xGF':>7}{'GA':>5}{'xGA':>7}")
+    for t in b["teams"]:
+        print(f"{t['team']:<26}{t['played']:>3}{t['pts']:>5}{t['exp_pts']:>9.1f}{t['gf']:>5}{t['xgf']:>7.1f}{t['ga']:>5}{t['xga']:>7.1f}")
+    print("\n(pts vs exp pts: a team far above its expected points has been lucky or is better than its history says; the model only sees past matches.)")
+
+
 def _env_flag(name):
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -2390,6 +2475,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd")
     for name in ("daily", "slate", "refresh", "fixtures", "odds", "results", "track", "bootstrap"):
         sub.add_parser(name)
+    bk = sub.add_parser("backlog", help="every match already played this season: walk-forward prediction vs result -> CSV + summary")
+    bk.add_argument("--season", type=int, default=None, help="season start year (default: current)")
     pr = sub.add_parser("predict")
     pr.add_argument("--home", required=True)
     pr.add_argument("--away", required=True)
@@ -2446,6 +2533,8 @@ def main(argv=None):
         print(json.dumps(p.refresh_odds(), indent=2))
     elif args.cmd == "results":
         print(json.dumps(p.refresh_results(), indent=2))
+    elif args.cmd == "backlog":
+        print_backlog(p.backlog(args.season))
     elif args.cmd == "track":
         print(json.dumps(p.get_scorecard(), indent=2))
     elif args.cmd == "predict":

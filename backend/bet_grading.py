@@ -213,9 +213,11 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nhl_ml_home", "nhl_ml_away", "nhl_tg_home", "nhl_tg_away",
                           "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3",
                           "tennis_ml", "tennis_games", "tennis_sets",
-                          "bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
+                          "bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta",
+                          "efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta"}
 
 BL_BET_TYPES = {"bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
+EFL_BET_TYPES = {"efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta"}
 TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
 
 
@@ -234,18 +236,21 @@ def _grade_tennis_bet(bet: TrackedBet):
     return (1.0 if res == "yes" else 0.0), ("win" if res == bet.yn else "loss")
 
 
-def _grade_bl_bet(bet: TrackedBet):
+def _grade_bl_bet(bet: TrackedBet, service_module: str = "bundesliga_service", prefix: str = "bl_"):
     """Bundesliga bets from the Soccer tab. The bet stores the ESPN match id in external_player_id; yn == "yes" wins when the
     outcome happens (home / draw / away win, both teams score, total or team goals OVER the line) and "no" when it does not.
     Graded on the 90-minute score ESPN reports. Returns None until the match is final, else (actual, result)."""
-    import bundesliga_service
+    import importlib
     if not bet.external_player_id:
         return None
-    sc = bundesliga_service.get_service().final_score(bet.external_player_id)
+    sc = importlib.import_module(service_module).get_service().final_score(bet.external_player_id)
     if sc is None:
         return None
     hg, ag = sc
     t = bet.bet_type
+    if not t.startswith(prefix):
+        return None
+    t = "bl_" + t[len(prefix):]                     # the Championship (efl_*) bets grade exactly like the Bundesliga (bl_*) ones
     if t == "bl_h":
         happened, actual = hg > ag, float(hg - ag)
     elif t == "bl_d":
@@ -856,7 +861,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES:
                 try:
                     if bet.bet_type in NBA_BET_STATS:
                         graded_nba = _grade_nba_prop(bet)
@@ -864,6 +869,8 @@ def grade_pending_bets() -> dict:
                         graded_nba = _grade_tennis_bet(bet)
                     elif bet.bet_type in BL_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet)
+                    elif bet.bet_type in EFL_BET_TYPES:
+                        graded_nba = _grade_bl_bet(bet, "efl_service", "efl_")
                     else:
                         graded_nba = _grade_nhl_goal_bet(bet)
                 except Exception:

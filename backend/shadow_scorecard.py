@@ -977,8 +977,8 @@ def bundesliga_collect_from_events(events: list) -> list:
     return out
 
 
-def make_bundesliga_adapter(get_events: Callable, get_score: Callable) -> Adapter:
-    """get_events(db) -> slate events; get_score(match_id) -> (home goals, away goals) | None."""
+def make_bundesliga_adapter(get_events: Callable, get_score: Callable, sport: str = "bundesliga", label: str = "Bundesliga", benchmark: str = None) -> Adapter:
+    """get_events(db) -> slate events; get_score(match_id) -> (home goals, away goals) | None. (Also used for the Championship.)"""
     def collect(db):
         return bundesliga_collect_from_events(get_events(db))
 
@@ -1020,7 +1020,16 @@ def make_bundesliga_adapter(get_events: Callable, get_score: Callable) -> Adapte
     markets.update({k: f"Total goals Over {ln}" for k, ln in BL_LINES.items()})
     markets.update({f"th{k}": f"Home goals Over {ln}" for k, ln in BL_TEAM_LINES.items()})
     markets.update({f"ta{k}": f"Away goals Over {ln}" for k, ln in BL_TEAM_LINES.items()})
-    return Adapter(sport="bundesliga", label="Bundesliga", collect=collect, settle=settle, grade=grade, markets=markets, line_markets=set(),
-                   notes={"benchmark": "Research model: in its own backtest (351 matches) it beats the league average, ties a tuned team-level model, and does NOT beat the closing market. "
-                                       "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.",
+    bench = benchmark or ("Research model: in its own backtest (351 matches) it beats the league average, ties a tuned team-level model, and does NOT beat the closing market. "
+                          "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
+    return Adapter(sport=sport, label=label, collect=collect, settle=settle, grade=grade, markets=markets, line_markets=set(),
+                   notes={"benchmark": bench,
                           "team_pts": "Lines are fixed (total 1.5-4.5, team 0.5-2.5), not posted lines."})
+
+
+def make_efl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """English Championship: same markets, same grading (final score) as the Bundesliga card."""
+    return make_bundesliga_adapter(
+        get_events, get_score, sport="efl", label="EFL Championship",
+        benchmark="Research model: in its own backtest (351 matches) it beats the league average, ties a tuned team-level model, and does NOT beat the closing market. "
+                  "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")

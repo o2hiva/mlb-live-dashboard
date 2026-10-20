@@ -132,6 +132,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("Bundesliga service failed to start")
     try:
+        import efl_service
+        efl_service.start_background()
+    except Exception:
+        # the Championship is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("EFL Championship service failed to start")
+    try:
         import nfl_fantasy_service
         nfl_fantasy_service.start_background()
     except Exception:
@@ -147,6 +154,7 @@ async def lifespan(app: FastAPI):
         shadow_scorecard.register(shadow_scorecard.make_nba_adapter(_nba_shadow_payloads))
         shadow_scorecard.register(shadow_scorecard.make_tennis_adapter(_tennis_shadow_events, _tennis_shadow_result))
         shadow_scorecard.register(shadow_scorecard.make_bundesliga_adapter(_bl_shadow_events, _bl_shadow_score))
+        shadow_scorecard.register(shadow_scorecard.make_efl_adapter(_efl_shadow_events, _efl_shadow_score))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -754,6 +762,17 @@ def _bl_shadow_events(db):
 def _bl_shadow_score(match_id):
     import bundesliga_service
     return bundesliga_service.get_service().final_score(match_id)
+
+
+def _efl_shadow_events(db):
+    """Upcoming English Championship matches with the model's probabilities (the same slate the Soccer > Championship tab shows)."""
+    import efl_service
+    return (efl_service.get_service().slate() or {}).get("events") or []
+
+
+def _efl_shadow_score(match_id):
+    import efl_service
+    return efl_service.get_service().final_score(match_id)
 
 
 def _nba_shadow_payloads(db):
@@ -2024,6 +2043,70 @@ def refresh_bl(what: str = "fixtures"):
     return svc.refresh_fixtures()
 
 
+@app.get("/api/bl/backlog")
+def bl_backlog(season: int | None = None):
+    """Every Bundesliga match already played this season (or `season` = start year): the walk-forward prediction, the result and a
+    summary; also written to bl_backlog_<season>.csv in the data folder. Can take a few seconds."""
+    import bundesliga_service
+    return bundesliga_service.get_service().backlog(season)
+
+
+@app.get("/api/efl/slate")
+def efl_slate():
+    """Upcoming English Championship matches: expected goals, 1X2, BTTS, total and team goals, lineup used, football-data odds. See
+    efl_service.py / efl_platform.py."""
+    import efl_service
+    return efl_service.get_service().slate()
+
+
+@app.get("/api/efl/health")
+def efl_health():
+    import efl_service
+    return efl_service.get_service().health()
+
+
+@app.get("/api/efl/scorecard")
+def efl_scorecard():
+    """The platform's own record: live (logged before kickoff) and walk-forward season-to-date vs the closing market."""
+    import efl_service
+    return efl_service.get_service().get_scorecard()
+
+
+@app.get("/api/efl/results")
+def efl_results(n: int = 40):
+    import efl_service
+    return efl_service.get_service().get_results(n)
+
+
+@app.get("/api/efl/predict")
+def efl_predict(home: str, away: str):
+    import efl_service
+    return efl_service.get_service().predict(home, away)
+
+
+@app.get("/api/efl/backlog")
+def efl_backlog(season: int | None = None):
+    """Every Championship match already played this season: walk-forward prediction vs result (also saved as efl_backlog_<season>.csv)."""
+    import efl_service
+    return efl_service.get_service().backlog(season)
+
+
+@app.get("/api/admin/refresh-efl")
+def refresh_efl(what: str = "fixtures"):
+    """Manual trigger: what = data | fixtures | odds | results | bootstrap."""
+    import efl_service
+    svc = efl_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "odds":
+        return svc.refresh_odds()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_fixtures()
+
+
 @app.get("/api/nba/health")
 def nba_health():
     import nba_props_service
@@ -2319,7 +2402,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

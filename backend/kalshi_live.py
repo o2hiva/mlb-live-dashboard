@@ -25,13 +25,14 @@ import tennis_platform as tpf
 kal = tpf.kal
 log = logging.getLogger("kalshi_live")
 
-PREFIXES = {"KXMLB": "mlb", "KXNBA": "nba", "KXNHL": "nhl", "KXNFL": "nfl", "KXBUNDESLIGA": "bl"}
+PREFIXES = {"KXMLB": "mlb", "KXNBA": "nba", "KXNHL": "nhl", "KXNFL": "nfl", "KXBUNDESLIGA": "bl", "KXEFLCHAMPIONSHIP": "efl"}
 KNOWN = {
     "mlb": ["GAME", "SPREAD", "TOTAL", "TEAMTOTAL", "HIT", "HR", "HRR", "TB", "RBI", "KS", "F5", "F5TOTAL", "F5SPREAD", "RFI"],
     "nba": ["GAME", "SPREAD", "TOTAL", "TEAMTOTAL", "PTS", "REB", "AST", "3PT", "STL", "BLK"],
     "nhl": ["GAME", "SPREAD", "TOTAL", "TEAMTOTAL", "GOAL", "PTS", "AST", "SAVES", "1PTOTAL", "2PTOTAL", "3PTOTAL"],
     "nfl": ["GAME", "SPREAD", "TOTAL", "TEAMTOTAL", "ANYTD", "PASSYDS", "RUSHYDS", "RSHYDS", "RECYDS", "RECS", "PASSTDS"],
     "bl": ["GAME", "SPREAD", "TOTAL", "BTTS", "TEAMTOTAL"],       # Bundesliga (soccer): 1X2 winner/draw, totals, both teams to score
+    "efl": ["GAME", "SPREAD", "TOTAL", "BTTS", "TEAMTOTAL"],      # English Championship (KXEFLCHAMPIONSHIPGAME is confirmed; the rest are the usual suffixes)
 }
 SUFFIX_OK = re.compile(r"^(GAME|SPREAD|TOTAL|TEAMTOTAL|BTTS|HIT|HR|HRR|TB|RBI|KS|PTS|REB|AST|3PT|STL|BLK|GOAL|SAVES|ANYTD|PASSYDS|RUSHYDS|RSHYDS|RECYDS|RECS|"
                        r"PASSTDS|F5\w*|1INN\w*|RFI|YRFI|NRFI|[123]P\w*|[12]H\w*|[1-4]Q\w*)$")
