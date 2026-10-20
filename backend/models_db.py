@@ -28,15 +28,6 @@ class Game(Base):
     away_score = Column(Integer, default=0)
     inning = Column(Integer, default=0)
     inning_half = Column(String, nullable=True)  # "top" / "bottom"
-    # Full Game Lines - MONEYLINE ONLY (see full_game_lines_sync.py's own
-    # docstring for the validated formula and why total/spread are NOT
-    # exposed). Recomputed every poll cycle up to first pitch, same as
-    # first_inning_run's own Prediction row, then frozen once the game
-    # starts - a simple pair of columns rather than a separate history
-    # table since only the latest pre-game number is ever shown/tracked.
-    home_moneyline_win_prob = Column(Float, nullable=True)
-    away_moneyline_win_prob = Column(Float, nullable=True)
-    moneyline_model_version = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     inning_lines = relationship("InningLine", back_populates="game")
@@ -83,63 +74,6 @@ class TeamRuns5InnStat(Base):
     team_name = Column(String, primary_key=True)
     games = Column(Integer, default=0)
     runs5inn = Column(Integer, default=0)
-
-
-class TeamRunsFullGameStat(Base):
-    """Real season-to-date RUNS SCORED across the WHOLE game (every
-    inning actually played, not just 1-5) for one team - feeds the
-    Full Game Lines prop's own-scoring index (see
-    full_game_lines_sync.py). Deliberately a SEPARATE table from
-    TeamRuns5InnStat/TeamInningStat rather than reused - this one has
-    its own dedicated sync checkpoint (TeamBullpenCollectedGame; full
-    game runs and the bullpen split are collected together, one
-    boxscore fetch covers both) so it can never repeat the exact bug
-    class that hit TeamRuns5InnStat (a table added onto an existing
-    job's ALREADY-ADVANCED shared checkpoint, silently skipping the
-    season it should have backfilled - see
-    inning_stats_sync.backfill_runs5inn's docstring for the full
-    story)."""
-    __tablename__ = "team_runs_fullgame_stats"
-
-    team_name = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    runs_scored = Column(Integer, default=0)
-
-
-class TeamBullpenStat(Base):
-    """Real season-to-date outs recorded / runs allowed by a team's
-    BULLPEN ONLY - every pitcher who appeared in a game EXCEPT that
-    game's own real starter (identified via the same
-    probablePitcher-on-a-finished-game convention already relied on
-    elsewhere in this codebase, e.g. inning_stats_sync.py's
-    away_pname/home_pname). Complements PitcherHitsStat, which already
-    covers the STARTER's own runs-allowed/outs (reused as-is for the
-    starter side of the Full Game Lines formula - no new pitcher-level
-    table needed there). MLB's team-level season pitching stats don't
-    split starter vs. relief on their own, so this has to be
-    reconstructed per game from a real boxscore - see
-    full_game_lines_sync.py's module docstring."""
-    __tablename__ = "team_bullpen_stats"
-
-    team_name = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    outs = Column(Integer, default=0)
-    runs_allowed = Column(Integer, default=0)
-
-
-class TeamBullpenCollectedGame(Base):
-    """Dedup ledger for full_game_lines_sync.py's per-game boxscore
-    collector - one row per game_pk already folded into
-    TeamRunsFullGameStat/TeamBullpenStat, so the daily incremental job
-    never double-counts and the backfill is safe to re-run/resume
-    (picks up wherever it left off, same discipline as
-    NpbCollectedGame/NhlCollectedGame)."""
-    __tablename__ = "team_bullpen_collected_games"
-
-    game_pk = Column(Integer, primary_key=True)
-    date = Column(String)  # "YYYY-MM-DD"
-    home = Column(String)
-    away = Column(String)
 
 
 class TeamInningStat(Base):
@@ -190,6 +124,8 @@ class BetTrackerSettings(Base):
     bankroll = Column(Float, default=0.0)
     kelly_percent = Column(Float, default=25.0)  # quarter-Kelly is a common conservative default
     kalshi_balance = Column(Float, default=0.0)
+    westgate_balance = Column(Float, default=0.0)
+    market_book = Column(String, default="kalshi")
     polymarket_balance = Column(Float, default=0.0)
     novig_balance = Column(Float, default=0.0)
     fanduel_balance = Column(Float, default=0.0)
@@ -292,26 +228,6 @@ class TrackedBet(Base):
     # team was on - reusing existing columns rather than adding more.
     cfb_season = Column(Integer, nullable=True)
     cfb_week = Column(Integer, nullable=True)
-    spread_line = Column(Float, nullable=True)  # CFB Spread only: the line the user actually bet at, own-team perspective (Hawaii +10.5 -> 10.5). Kept separate from `line`, which _grade treats as a win/loss threshold.
-
-    # NFL Team Points / Game Total only: season/week needed to re-fetch this
-    # week's real games from api.nfldata.org at grading time (that API has no
-    # per-game numeric id to store the way CFBD's game_id does above) - see
-    # bet_grading.py's _nfl_team_points_actual / _nfl_game_total_actual.
-    # team_side is repurposed here too: holds the team's own name (e.g. "KC")
-    # for nfl_team_points, or an "AWAY@HOME" pair string (e.g. "BUF@KC") for
-    # nfl_game_total - not "home"/"away" like the MLB/CFB bet types use it.
-    nfl_season = Column(Integer, nullable=True)
-    nfl_week = Column(Integer, nullable=True)
-
-    # NFL Rushing Yards / By Position (QB DvP) props only: the player's
-    # gsis_id (e.g. "00-0034796") - NOT a valid int, so it can't reuse
-    # batter_id (an Integer column relied on elsewhere for real MLB
-    # player ids, CFBD game ids, etc). Tracking these bet types used to
-    # try passing the gsis_id string as batter_id, which Pydantic/the
-    # Integer column rejected outright - the POST silently failed and
-    # the frontend was left thinking the bet was tracked when it wasn't.
-    external_player_id = Column(String, nullable=True)
 
 
 class LineupBatter(Base):
@@ -423,188 +339,6 @@ class NflGame(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class NflRbStat(Base):
-    """One RB's real season-to-date rushing yards/carries/games total,
-    rebuilt from scratch by nfl_rushing_yards_sync.refresh_nfl_rushing_stats
-    every time it's called - exact (no estimation needed, same as
-    NflQbStat's own side), straight from /v1/stats/season. Kept as its
-    OWN table (not reusing NflQbStat) since this tracks a different
-    position/stat entirely and multiple RBs can qualify per team,
-    unlike the single-starter-per-team QB table."""
-    __tablename__ = "nfl_rb_stats"
-
-    gsis_id = Column(String, primary_key=True)
-    name = Column(String)
-    team = Column(String)  # most recent team on file - a traded/waived RB's most recent team is the relevant one
-    total_yards = Column(Integer, default=0)
-    carries = Column(Integer, default=0)
-    games = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflRbGame(Base):
-    """This week's real matchups - team/opponent pairs for the CURRENT
-    week only, same pattern as NflGame. Display-only here: the Rushing
-    Yards formula has no opponent adjustment (see
-    nfl_rushing_yards_sync.py's module docstring), so this table exists
-    only so each RB's card/row can show who their team is playing."""
-    __tablename__ = "nfl_rb_games"
-
-    team = Column(String, primary_key=True)
-    opponent = Column(String)
-    season = Column(Integer)
-    week = Column(Integer)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# ---------------------------------------------------------------------------
-# NFL "By Position" -> QB Defense-vs-Position props (passing_yards,
-# passing_tds, rushing_yards, rushing_tds) - ported from
-# core_nfl_qb_defense_props.py. Same estimation workaround as
-# NflQbStat/NflTeamAllowedStat above (no confirmed per-game breakdown
-# endpoint on this API - see nfl_qb_defense_props_sync.py's module
-# docstring), extended to all four props instead of just passing yards,
-# and with the opponent-allowed side built from each team's own
-# QB-POSITION-ONLY aggregate (not /stats/team's whole-roster totals,
-# which would wrongly fold RB rushing volume into "what a defense
-# allows to opposing QBs on the ground").
-# ---------------------------------------------------------------------------
-
-class NflQbDefensePropStat(Base):
-    """One QB's real season-to-date totals for all four props - exact,
-    no estimation needed (same as NflQbStat's own side), straight from
-    /v1/stats/season."""
-    __tablename__ = "nfl_qb_defense_prop_stats"
-
-    gsis_id = Column(String, primary_key=True)
-    name = Column(String)
-    team = Column(String)
-    games = Column(Integer, default=0)
-    attempts = Column(Integer, default=0)
-    passing_yards_sum = Column(Integer, default=0)
-    passing_tds_sum = Column(Integer, default=0)
-    rushing_yards_sum = Column(Integer, default=0)
-    rushing_tds_sum = Column(Integer, default=0)
-    passing_completions_sum = Column(Integer, default=0)
-    passing_attempts_sum = Column(Integer, default=0)
-    rushing_attempts_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflDefenseAllowedPropStat(Base):
-    """One team's ESTIMATED season-to-date totals allowed TO THE QB
-    POSITION for all four props - built the same estimation approach
-    NflTeamAllowedStat uses (real schedule + each real opponent's own
-    QB-position aggregate as the per-game estimate), see
-    nfl_qb_defense_props_sync.py's module docstring for the honest
-    limitation this carries."""
-    __tablename__ = "nfl_defense_allowed_prop_stats"
-
-    team = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    passing_yards_sum = Column(Integer, default=0)
-    passing_tds_sum = Column(Integer, default=0)
-    rushing_yards_sum = Column(Integer, default=0)
-    rushing_tds_sum = Column(Integer, default=0)
-    passing_completions_sum = Column(Integer, default=0)
-    passing_attempts_sum = Column(Integer, default=0)
-    rushing_attempts_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflQbDefensePropGame(Base):
-    """This week's real matchups - team/opponent pairs for the CURRENT
-    week only, same pattern as NflGame. Kept as its OWN table (not
-    reusing NflGame) so this prop's refresh can run independently of
-    NFL Passing Yards' own refresh without clobbering each other."""
-    __tablename__ = "nfl_qb_defense_prop_games"
-
-    team = Column(String, primary_key=True)
-    opponent = Column(String)
-    season = Column(Integer)
-    week = Column(Integer)
-    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_qb_defense_props_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# ---------------------------------------------------------------------------
-# NFL "By Position" -> RB Defense-vs-Position props (rushing_yards,
-# rushing_tds, receiving_yards, receiving_tds, total_yards, total_tds,
-# plus a derived anytime-TD probability) - ported from
-# core_nfl_rb_defense_props.py. Same estimation workaround as the QB
-# version above, but with core_nfl_rb_defense_props.py's own TWO
-# SEPARATE LEAGUE AVERAGES design: the RB's own side is shrunk toward
-# and indexed against the population of INDIVIDUAL RBs, while the
-# opponent-allowed side is shrunk toward and indexed against the
-# population of TEAM-WEEK TOTALS (every RB who touched the ball against
-# that defense, committee backfields included) - genuinely different
-# scales, so kept as two separate stat tables rather than reusing the
-# QB version's shared-league-avg shape. total_yards/total_tds are
-# derived on the fly at prediction time (rushing + receiving), never
-# stored as their own columns - same as core_nfl_rb_defense_props.py
-# itself never stores them separately.
-# ---------------------------------------------------------------------------
-
-class NflRbDefensePropStat(Base):
-    """One RB's real season-to-date totals for the four raw props
-    (rushing_yards, rushing_tds, receiving_yards, receiving_tds) - the
-    OWN side of the two-population design above. Exact, no estimation
-    needed, straight from /v1/stats/season."""
-    __tablename__ = "nfl_rb_defense_prop_stats"
-
-    gsis_id = Column(String, primary_key=True)
-    name = Column(String)
-    team = Column(String)
-    games = Column(Integer, default=0)
-    touches = Column(Integer, default=0)  # carries + targets, season-to-date - the qualifying floor for showing this RB individually (see nfl_rb_defense_props_sync.py)
-    rushing_yards_sum = Column(Integer, default=0)
-    rushing_tds_sum = Column(Integer, default=0)
-    receiving_yards_sum = Column(Integer, default=0)
-    receiving_tds_sum = Column(Integer, default=0)
-    carries_sum = Column(Integer, default=0)
-    receptions_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflRbDefenseAllowedPropStat(Base):
-    """One team's ESTIMATED season-to-date totals allowed TO THE RB
-    POSITION (every RB who touched the ball against that defense,
-    committee backfields included) for the four raw props - the OPP
-    side of the two-population design above, built the same real-
-    schedule-walk estimation as NflDefenseAllowedPropStat, using each
-    opponent's own team-wide RB aggregate (ALL RBs on that team summed,
-    not just one) as the per-game estimate."""
-    __tablename__ = "nfl_rb_defense_allowed_prop_stats"
-
-    team = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    rushing_yards_sum = Column(Integer, default=0)
-    rushing_tds_sum = Column(Integer, default=0)
-    receiving_yards_sum = Column(Integer, default=0)
-    receiving_tds_sum = Column(Integer, default=0)
-    carries_sum = Column(Integer, default=0)
-    receptions_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflRbDefensePropGame(Base):
-    """This week's real matchups - team/opponent pairs for the CURRENT
-    week only, same pattern as NflQbDefensePropGame. Unlike the QB
-    version, MULTIPLE qualifying RBs can share one team's row here -
-    each one gets looked up separately from NflRbDefensePropStat at
-    render time (committee backfields show up as more than one card,
-    same "every qualifying back, not just one starter" choice
-    NflRbStat/NflRbGame already made for NFL Rushing Yards)."""
-    __tablename__ = "nfl_rb_defense_prop_games"
-
-    team = Column(String, primary_key=True)
-    opponent = Column(String)
-    season = Column(Integer)
-    week = Column(Integer)
-    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - used to order boxes TNF-first/MNF-last (see nfl_rb_defense_props_sync.py; the API never populates a time-of-day field, so same-day Sunday games can't be sub-ordered)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 # ---------------------------------------------------------------------------
 # CFB Team Points prop - second non-MLB prop in this dashboard. Unlike NFL,
 # CFBD's /games endpoint gives real per-game final scores directly, so no
@@ -626,26 +360,6 @@ class CfbTeamPointsStat(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class CfbWeekTeamStat(Base):
-    """One team's real points-scored/points-allowed contribution from one
-    already-fetched, completed CFB week (FBS-vs-FBS only) - lets
-    cfb_points_sync.refresh_cfb_points_stats avoid re-fetching a past
-    week from CFBD on every refresh. CFBD's rate limit is MONTHLY (not
-    per-minute), so re-fetching a week that's already final wastes
-    irreplaceable quota for nothing - a finished week's score never
-    changes. Composite PK (season, week, team); only ever written for
-    week < the current week being refreshed (the current week is always
-    re-fetched fresh, since more of its games may still complete)."""
-    __tablename__ = "cfb_week_team_stats"
-
-    season = Column(Integer, primary_key=True)
-    week = Column(Integer, primary_key=True)
-    team = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    points_scored = Column(Integer, default=0)
-    points_allowed = Column(Integer, default=0)
-
-
 class CfbGame(Base):
     """This week's real matchups - team/opponent pairs for the CURRENT
     week only (refreshed each sync, not accumulated - same pattern as
@@ -660,49 +374,6 @@ class CfbGame(Base):
     is_home = Column(Boolean, default=False)  # was `team` the home side of game_id - needed so a tracked bet can send the correct team_side for grading
     season = Column(Integer)
     week = Column(Integer)
-    start_date_utc = Column(String, nullable=True)  # ISO8601 UTC kickoff, once CFBD's real field name is confirmed live - see cfb_points_sync.py
-    neutral_site = Column(Boolean, default=False)  # CFBD's real "neutralSite" field - moneyline's win-probability model zeroes out home-field advantage for these (see cfb_points_sync.win_probability)
-    home_spread = Column(Float, nullable=True)  # real market spread line, HOME team's perspective (negative = home favored) - from CFBD's /lines endpoint, one preferred provider picked per game (see cfb_points_sync.pick_provider_line). None if no line posted yet. Stored the same on both the home and away row of a game - the away side's own spread is just its negation.
-    spread_provider = Column(String, nullable=True)  # which sportsbook the home_spread above came from (e.g. "DraftKings") - see cfb_points_sync.PREFERRED_PROVIDERS
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflTeamPointsStat(Base):
-    """One NFL team's real season-to-date points-scored and points-allowed
-    totals, rebuilt from scratch by nfl_points_sync.refresh_nfl_points_stats
-    every time it's called - exact, same as CfbTeamPointsStat (api.nfldata.org's
-    /v1/games gives real completed-game scores directly, same as CFBD - this
-    prop needs no per-game estimation, unlike NFL Passing Yards' NflTeamAllowedStat
-    above, which DOES estimate because no exact per-game passing breakdown exists).
-    Kept as its OWN table (not reusing NflTeamAllowedStat) since that one tracks
-    passing yards allowed, a completely different stat, for a different prop."""
-    __tablename__ = "nfl_team_points_stats"
-
-    team = Column(String, primary_key=True)
-    games = Column(Integer, default=0)
-    points_scored_sum = Column(Integer, default=0)
-    points_allowed_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NflPointsGame(Base):
-    """This week's real matchups for the NFL Team Points / Game Total prop -
-    same pattern as CfbGame, kept as its OWN table (not reusing the existing
-    NflGame, which the Passing Yards prop already refreshes independently and
-    doesn't carry is_home). Unlike CfbGame, there's no numeric game_id here -
-    api.nfldata.org's /v1/games has no per-game id field, so grading instead
-    re-fetches the week's games and matches by team name directly (see
-    bet_grading.py's _nfl_team_points_actual / _nfl_game_total_actual)."""
-    __tablename__ = "nfl_points_games"
-
-    team = Column(String, primary_key=True)
-    opponent = Column(String)
-    is_home = Column(Boolean, default=False)
-    season = Column(Integer)
-    week = Column(Integer)
-    gameday = Column(String, nullable=True)  # "YYYY-MM-DD" from /v1/games - DAY-ONLY fallback ordering, kept for when the ESPN kickoff lookup below fails (see nfl_points_sync.py; api.nfldata.org's own "gametime" field is confirmed always null)
-    kickoff_utc = Column(String, nullable=True)  # ISO8601 UTC real kickoff time, from ESPN's public scoreboard API (site.api.espn.com) - api.nfldata.org itself never provides one, so this is a second data source merged in by team-pair match (see nfl_points_sync.fetch_espn_week_kickoffs). None if that lookup failed for this game.
-    neutral_site = Column(Boolean, default=False)  # ESPN's own "neutralSite" flag (International Series games - London/Dublin/Munich/Madrid/Sao Paulo) - same role as CfbGame.neutral_site
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -721,162 +392,4 @@ class NflQbSnapshot(Base):
     cumulative_games = Column(Integer, default=0)
     cumulative_attempts = Column(Integer, default=0)
     cumulative_yards = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NhlCollectedGame(Base):
-    """One real, finished NHL game already applied to NhlTeamShotsStat /
-    NhlGoalieSavesStat - the dedup ledger that makes
-    nhl_goalie_saves_sync.daily_update's game-collection step resumable
-    and incremental (only games NOT yet in this table get fetched and
-    applied on the next call). Same "resume, don't refetch" discipline as
-    nhl_backtest_team_shots.py's own JSON progress file, just ported to a
-    Postgres table since a full 82-game/32-team NHL season is too much to
-    rebuild from scratch on every refresh, unlike NFL/CFB's much smaller
-    week counts."""
-    __tablename__ = "nhl_collected_games"
-
-    game_id = Column(Integer, primary_key=True)  # NHL's own numeric game id
-    season = Column(String)   # NHL's 8-digit season code, e.g. "20262027"
-    date = Column(String)     # "YYYY-MM-DD"
-    home = Column(String)
-    away = Column(String)
-    home_sog = Column(Integer)
-    away_sog = Column(Integer)
-    collected_at = Column(DateTime, default=datetime.utcnow)
-
-
-class NhlTeamShotsStat(Base):
-    """One NHL team's real season-to-date shots-for/shots-against totals -
-    INCREMENTALLY accumulated by nhl_goalie_saves_sync.daily_update as
-    each newly-finished game is discovered (unlike the NFL/CFB points
-    props, this is never rebuilt from scratch - an 82-game/32-team NHL
-    season is too much to refetch every refresh). Mirrors
-    core_nhl_goalie_saves.py's team_counts shape (games/shots_for_sum/
-    shots_against_sum)."""
-    __tablename__ = "nhl_team_shots_stats"
-
-    team = Column(String, primary_key=True)
-    season = Column(String)
-    games = Column(Integer, default=0)
-    shots_for_sum = Column(Integer, default=0)
-    shots_against_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NhlGoalieSavesStat(Base):
-    """One goalie's real season-to-date saves/shots-against totals - ONLY
-    accumulated from real single-goalie full-game appearances (see
-    core_nhl_goalie_saves.py's single-goalie-game gating - a goalie who
-    split a game with another goalie, or logged a 0-TOI dressed-but-
-    unused appearance, never contributes here). Mirrors that module's
-    goalie_counts shape."""
-    __tablename__ = "nhl_goalie_saves_stats"
-
-    player_id = Column(Integer, primary_key=True)  # NHL's own numeric player id
-    name = Column(String)
-    team = Column(String)  # most-recently-seen team, kept current each game applied
-    season = Column(String)
-    games = Column(Integer, default=0)
-    saves_sum = Column(Integer, default=0)
-    shots_against_sum = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NhlGoalieGame(Base):
-    """One date's real matchups - one row per team per date, REFRESHED
-    only for the SPECIFIC date a daily_update/refresh call targets (other
-    dates already stored are left untouched) - same date-scoped-replace
-    pattern as NpbGame, not a single global row per team. game_id is the
-    NHL API's own numeric game id, kept for potential future grading use
-    (not currently used - see bet_grading.py, this prop is left
-    permanently pending like every other estimation-based prop in this
-    project).
-
-    NOTE: table renamed from the original "nhl_goalie_games" (where
-    `team` alone was the primary key, so switching the viewed date wiped
-    whatever date was previously stored - the exact bug this rename
-    fixes) to "nhl_goalie_games_v2" with its own surrogate id, so
-    create_all() builds the new shape fresh rather than needing a manual
-    ALTER TABLE on the live primary key."""
-    __tablename__ = "nhl_goalie_games_v2"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    team = Column(String, index=True)
-    opponent = Column(String)
-    is_home = Column(Boolean, default=False)
-    game_id = Column(Integer, nullable=True)
-    date = Column(String, nullable=True, index=True)  # "YYYY-MM-DD"
-    season = Column(String)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NpbCollectedGame(Base):
-    """Ledger of NPB games already applied to NpbTeamScoreStat /
-    NpbPitcherAllowStat - dedup ledger for npb_yrfi_sync.py's incremental
-    daily collection AND the one-time seed_from_progress() import of an
-    existing npb_first_inning_progress.json, mirrors NhlCollectedGame."""
-    __tablename__ = "npb_collected_games"
-
-    game_id = Column(String, primary_key=True)  # spaia.jp's own numeric game id, as a string
-    date = Column(String)  # "YYYYMMDD"
-    home = Column(String)
-    away = Column(String)
-    collected_at = Column(DateTime, default=datetime.utcnow)
-
-
-class NpbTeamScoreStat(Base):
-    """One NPB team's real season-to-date 1st-inning-SCORED (batting
-    side) rate - incrementally accumulated, same discipline as
-    NhlTeamShotsStat (never rebuilt from scratch)."""
-    __tablename__ = "npb_team_score_stats"
-
-    team = Column(String, primary_key=True)  # real Japanese team name, exactly as spaia.jp returns it
-    games = Column(Integer, default=0)
-    scored = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NpbPitcherAllowStat(Base):
-    """One NPB starting pitcher's real season-to-date 1st-inning-ALLOWED
-    rate - only accumulated from games where they were identified as the
-    STARTER (both_pitcher_game_stats's no="1" field - see
-    npb_yrfi_sync.py's module docstring)."""
-    __tablename__ = "npb_pitcher_allow_stats"
-
-    pitcher_id = Column(String, primary_key=True)  # spaia.jp's own numeric player id, as a string
-    name = Column(String)
-    team = Column(String)  # most-recently-seen team, kept current each start applied
-    starts = Column(Integer, default=0)
-    allowed = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class NpbGame(Base):
-    """One real NPB game for a given date - REFRESHED each time that date
-    is swept (not accumulated), holding enough to render a card: teams,
-    status, final score, and (once the game is finished and collected)
-    the REAL starters and 1st-inning outcome. visitor_scored_1st/
-    home_scored_1st double as the real outcome bet_grading.py needs to
-    grade a tracked npb_yrfi bet, keyed by this same game_id (no separate
-    fetch needed at grading time - see bet_grading.py)."""
-    __tablename__ = "npb_games"
-
-    game_id = Column(String, primary_key=True)
-    date = Column(String)  # "YYYYMMDD"
-    home_team = Column(String)
-    away_team = Column(String)
-    home_team_id = Column(String, nullable=True)
-    away_team_id = Column(String, nullable=True)
-    game_type = Column(String, nullable=True)
-    status = Column(String, nullable=True)  # raw gameStateName, e.g. "試合終了" (finished)
-    start_time_jst = Column(String, nullable=True)  # raw "startTime" from spaia.jp, "HHMM" 24h JST local clock time - see npb_yrfi_sync.start_time_pacific()
-    home_score = Column(Integer, nullable=True)
-    away_score = Column(Integer, nullable=True)
-    home_starter_id = Column(String, nullable=True)
-    home_starter_name = Column(String, nullable=True)
-    away_starter_id = Column(String, nullable=True)
-    away_starter_name = Column(String, nullable=True)
-    visitor_scored_1st = Column(Boolean, nullable=True)
-    home_scored_1st = Column(Boolean, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -49,6 +49,8 @@ _ensure_column("games", "home_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
 _ensure_column("games", "away_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
 _ensure_column("games", "abstract_status", "VARCHAR DEFAULT 'Preview'")
 _ensure_column("bet_tracker_settings", "kalshi_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "westgate_balance", "FLOAT DEFAULT 0.0")
+_ensure_column("bet_tracker_settings", "market_book", "VARCHAR DEFAULT 'kalshi'")
 _ensure_column("bet_tracker_settings", "polymarket_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "novig_balance", "FLOAT DEFAULT 0.0")
 _ensure_column("bet_tracker_settings", "fanduel_balance", "FLOAT DEFAULT 0.0")
@@ -2214,6 +2216,8 @@ def get_bet_tracker_settings(db: Session = Depends(get_db)):
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
         "kalshi_balance": settings.kalshi_balance,
+        "westgate_balance": settings.westgate_balance or 0.0,
+        "market_book": settings.market_book or "kalshi",
         "polymarket_balance": settings.polymarket_balance,
         "novig_balance": settings.novig_balance,
         "fanduel_balance": settings.fanduel_balance,
@@ -2224,6 +2228,8 @@ def get_bet_tracker_settings(db: Session = Depends(get_db)):
 class BetTrackerSettingsUpdate(BaseModel):
     kelly_percent: float | None = None
     kalshi_balance: float | None = None
+    westgate_balance: float | None = None
+    market_book: str | None = None
     polymarket_balance: float | None = None
     novig_balance: float | None = None
     fanduel_balance: float | None = None
@@ -2248,6 +2254,10 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
         settings.kelly_percent = update.kelly_percent
     if update.kalshi_balance is not None:
         settings.kalshi_balance = update.kalshi_balance
+    if update.westgate_balance is not None:
+        settings.westgate_balance = update.westgate_balance
+    if update.market_book in ("kalshi", "westgate", "polymarket", "novig", "fanduel", "draftkings"):
+        settings.market_book = update.market_book
     if update.polymarket_balance is not None:
         settings.polymarket_balance = update.polymarket_balance
     if update.novig_balance is not None:
@@ -2258,7 +2268,7 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
         settings.draftkings_balance = update.draftkings_balance
 
     settings.bankroll = (
-        settings.kalshi_balance + settings.polymarket_balance + settings.novig_balance +
+        (settings.kalshi_balance or 0) + (settings.westgate_balance or 0) + (settings.polymarket_balance or 0) + settings.novig_balance +
         settings.fanduel_balance + settings.draftkings_balance
     )
     db.commit()
@@ -2267,6 +2277,8 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
         "kalshi_balance": settings.kalshi_balance,
+        "westgate_balance": settings.westgate_balance or 0.0,
+        "market_book": settings.market_book or "kalshi",
         "polymarket_balance": settings.polymarket_balance,
         "novig_balance": settings.novig_balance,
         "fanduel_balance": settings.fanduel_balance,

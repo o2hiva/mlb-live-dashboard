@@ -594,26 +594,31 @@
     </div>
     <div class="platform-grid">
       <div class="settings-field">
-        <label for="kalshi-input">Kalshi</label>
+        <label for="kalshi-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-kalshi" onchange="pickMarketBook('kalshi', this.checked)" title="Use Kalshi for Market prices" style="width:auto;margin:0;" /> Kalshi</label>
         <input id="kalshi-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
-        <label for="polymarket-input">Polymarket</label>
+        <label for="westgate-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-westgate" onchange="pickMarketBook('westgate', this.checked)" title="Use Westgate for Market prices" style="width:auto;margin:0;" /> Westgate</label>
+        <input id="westgate-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
+      </div>
+      <div class="settings-field">
+        <label for="polymarket-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-polymarket" onchange="pickMarketBook('polymarket', this.checked)" title="Use Polymarket for Market prices" style="width:auto;margin:0;" /> Polymarket</label>
         <input id="polymarket-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
-        <label for="novig-input">NoVig</label>
+        <label for="novig-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-novig" onchange="pickMarketBook('novig', this.checked)" title="Use NoVig for Market prices" style="width:auto;margin:0;" /> NoVig</label>
         <input id="novig-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
-        <label for="fanduel-input">FanDuel</label>
+        <label for="fanduel-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-fanduel" onchange="pickMarketBook('fanduel', this.checked)" title="Use FanDuel for Market prices" style="width:auto;margin:0;" /> FanDuel</label>
         <input id="fanduel-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
-        <label for="draftkings-input">DraftKings</label>
+        <label for="draftkings-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-draftkings" onchange="pickMarketBook('draftkings', this.checked)" title="Use DraftKings for Market prices" style="width:auto;margin:0;" /> DraftKings</label>
         <input id="draftkings-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
     </div>
+    <div class="settings-hint" id="market-book-hint"></div>
     <div class="settings-hint">e.g. 25% runs quarter-Kelly - sizes each bet at 25% of what full Kelly would suggest, a common way to reduce swings from model error.</div>
 
     <h2 style="margin-top:32px;">Hit Rates</h2>
@@ -2728,7 +2733,41 @@
   refreshGlobalBankrollSettings();
 
   // ---- Bet Tracker tab ----
-  const PLATFORM_FIELDS = ["kalshi", "polymarket", "novig", "fanduel", "draftkings"];
+  const PLATFORM_FIELDS = ["kalshi", "westgate", "polymarket", "novig", "fanduel", "draftkings"];
+  // ---- Market source: which book fills the Market boxes. Kalshi = live prices; any other book = type your own prices
+  // (percent, or American odds like -150 / +130, converted to implied %). Checkbox in the Bankroll tab; default Kalshi.
+  const BOOK_NAMES = { kalshi: "Kalshi", westgate: "Westgate", polymarket: "Polymarket", novig: "NoVig", fanduel: "FanDuel", draftkings: "DraftKings" };
+  let marketBook = "kalshi";
+  try { const b = localStorage.getItem("marketBook"); if (b && BOOK_NAMES[b]) marketBook = b; } catch (e) {}
+  function americanToPct(v) {
+    if (v == null || isNaN(v) || Math.abs(v) < 100) return v;      // already a percent
+    const p = v < 0 ? (-v) / ((-v) + 100) : 100 / (v + 100);
+    return Math.round(p * 1000) / 10;
+  }
+  function renderBookPicks() {
+    document.querySelectorAll(".book-pick").forEach(cb => { cb.checked = cb.id === "book-pick-" + marketBook; });
+    const h = document.getElementById("market-book-hint");
+    if (h) h.textContent = marketBook === "kalshi"
+      ? "Market boxes use live Kalshi prices."
+      : "Market boxes use " + BOOK_NAMES[marketBook] + ": no live feed, so type each price in the Market box - as a percent, or American odds (e.g. -150 or +130, converted to implied %).";
+  }
+  function pickMarketBook(name, on) {
+    marketBook = on ? name : "kalshi";                 // unchecking falls back to the Kalshi default
+    try { localStorage.setItem("marketBook", marketBook); } catch (e) {}
+    renderBookPicks();
+    kalshiIndexCache = {};
+    fetch(`${API_BASE}/api/bet-tracker/settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ market_book: marketBook }) }).catch(() => {});
+    try { kalshiRerender(); } catch (e) {}
+  }
+  async function syncMarketBook() {
+    try {
+      const d = await (await fetch(`${API_BASE}/api/bet-tracker/settings`)).json();
+      if (d.market_book && BOOK_NAMES[d.market_book] && d.market_book !== marketBook) {
+        marketBook = d.market_book; try { localStorage.setItem("marketBook", marketBook); } catch (e) {}
+        kalshiIndexCache = {}; renderBookPicks(); try { kalshiRerender(); } catch (e) {}
+      }
+    } catch (e) {}
+  }
 
   function switchTab(tab) {
     document.getElementById("tab-content-mlb").style.display = tab === "mlb" ? "block" : "none";
@@ -3315,9 +3354,11 @@
       const res = await fetch(`${API_BASE}/api/bet-tracker/settings`);
       const data = await res.json();
       PLATFORM_FIELDS.forEach(name => {
-        document.getElementById(`${name}-input`).value = data[`${name}_balance`];
+        document.getElementById(`${name}-input`).value = data[`${name}_balance`] ?? 0;
       });
       document.getElementById("kelly-input").value = data.kelly_percent;
+      if (data.market_book && BOOK_NAMES[data.market_book]) { marketBook = data.market_book; try { localStorage.setItem("marketBook", marketBook); } catch (e) {} }
+      renderBookPicks();
       document.getElementById("bankroll-total").textContent =
         "$" + data.bankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     } catch (e) {
@@ -5161,6 +5202,7 @@
   }
 
   function kalshiMarkets(sport, kind) {
+    if (marketBook !== "kalshi") return [];   // another book selected: Market boxes are manual
     kalshiNeed(sport, kind);
     const st = kalshiStore[sport];
     return st ? st.markets.filter(m => m.k === kind) : [];
@@ -5268,7 +5310,7 @@
           if (manual != null) return manual;
           try { const v = resolver(state); return v == null ? null : v; } catch (e) { return null; }
         },
-        set(v) { manual = (v == null || isNaN(v)) ? null : v; },
+        set(v) { manual = (v == null || isNaN(v)) ? null : americanToPct(v); },
       });
       let thr = state.threshold, touched = false;
       if (finder && thr !== undefined) {
@@ -9548,6 +9590,7 @@
       statusEl.textContent = "Submit failed - check the values and try again.";
     }
   }
+  renderBookPicks(); syncMarketBook();
 </script>
 
 </body>
