@@ -214,10 +214,12 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "nhl_total", "nhl_p1", "nhl_p2", "nhl_p3",
                           "tennis_ml", "tennis_games", "tennis_sets",
                           "bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta",
-                          "efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta"}
+                          "efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta",
+                          "j1_h", "j1_d", "j1_a", "j1_btts", "j1_total", "j1_th", "j1_ta"}
 
 BL_BET_TYPES = {"bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
 EFL_BET_TYPES = {"efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta"}
+J1_BET_TYPES = {"j1_h", "j1_d", "j1_a", "j1_btts", "j1_total", "j1_th", "j1_ta"}
 TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
 
 
@@ -861,7 +863,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES or bet.bet_type in J1_BET_TYPES:
                 try:
                     if bet.bet_type in NBA_BET_STATS:
                         graded_nba = _grade_nba_prop(bet)
@@ -871,6 +873,8 @@ def grade_pending_bets() -> dict:
                         graded_nba = _grade_bl_bet(bet)
                     elif bet.bet_type in EFL_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet, "efl_service", "efl_")
+                    elif bet.bet_type in J1_BET_TYPES:
+                        graded_nba = _grade_bl_bet(bet, "j1_service", "j1_")
                     else:
                         graded_nba = _grade_nhl_goal_bet(bet)
                 except Exception:

@@ -527,6 +527,7 @@
     <div class="tabs">
       <span id="soccer-sub-btn-bundesliga" class="tab-btn active" onclick="switchSoccerSub('bundesliga')">Bundesliga</span>
       <span id="soccer-sub-btn-efl" class="tab-btn" onclick="switchSoccerSub('efl')">EFL Championship</span>
+      <span id="soccer-sub-btn-j1" class="tab-btn" onclick="switchSoccerSub('j1')">J1 League</span>
     </div>
     <div id="soccer-sub-bundesliga">
       <div class="tabs">
@@ -574,6 +575,30 @@
         <button class="tab-btn" onclick="loadShadowScorecard('efl','shadow-scorecard-efl',true); loadEflPlatformScorecard()" style="margin-bottom:10px;">Refresh</button>
         <div id="shadow-scorecard-efl"><div class="settings-hint">Open this tab to load.</div></div>
         <div id="efl-platform-scorecard"></div>
+      </div>
+    </div>
+    <div id="soccer-sub-j1" style="display:none;">
+      <div class="tabs">
+        <span id="j1-view-btn-games" class="tab-btn active" onclick="switchSportView('j1','games')">Matches</span>
+        <span id="j1-view-btn-scorecard" class="tab-btn" onclick="switchSportView('j1','scorecard')">Scorecard</span>
+      </div>
+      <div id="j1-games-wrap">
+        <div class="sub">J1 League (Japan) - the player plus-minus goals model for every upcoming match: home / draw / away, both teams to score, total goals and each team's goals, with Edge, Kelly and Wager. There is no Kalshi J1 series, so type each price in the Market box (percent, or American odds like -150 / +130). The model has not been backtested on J1 data yet - judge it on the Scorecard.</div>
+        <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
+          <div>
+            <label for="j1-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+            <select id="j1-date-select" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="setJ1Date(this.value)"></select>
+          </div>
+          <span class="hits-toggle" onclick="loadJ1Tab()" style="padding:6px 14px;">Refresh</span>
+        </div>
+        <div id="j1-status" class="settings-hint"></div>
+        <div id="j1-content">Loading...</div>
+      </div>
+      <div id="j1-scorecard-wrap" style="display:none;">
+        <div class="sub">J1 League Shadow Scorecard - the model's home / draw / away, both-teams-to-score, total-goals (1.5-4.5) and team-goals (0.5-2.5) probabilities are saved automatically before every kickoff and graded on the final score. No bets are placed. Judge each market after 30+ graded matches.</div>
+        <button class="tab-btn" onclick="loadShadowScorecard('j1','shadow-scorecard-j1',true); loadJ1PlatformScorecard()" style="margin-bottom:10px;">Refresh</button>
+        <div id="shadow-scorecard-j1"><div class="settings-hint">Open this tab to load.</div></div>
+        <div id="j1-platform-scorecard"></div>
       </div>
     </div>
   </div>
@@ -2793,8 +2818,8 @@
     document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
     document.getElementById("tab-btn-soccer").classList.toggle("active", tab === "soccer");
     if (tab === "soccer") {
-      const eflBox = document.getElementById("soccer-sub-efl");
-      if (eflBox && eflBox.style.display !== "none") loadEflTab(); else loadBlTab();
+      const eflBox = document.getElementById("soccer-sub-efl"), j1Box = document.getElementById("soccer-sub-j1");
+      if (eflBox && eflBox.style.display !== "none") loadEflTab(); else if (j1Box && j1Box.style.display !== "none") loadJ1Tab(); else loadBlTab();
     } else if (tab === "edges") {
       loadEdgesTab();
     } else if (tab === "bettracker") {
@@ -2922,6 +2947,7 @@
     if (view === "scorecard") loadShadowScorecard(sport, "shadow-scorecard-" + sport, false);
     if (sport === "bundesliga" && view === "scorecard") loadBlPlatformScorecard();
     if (sport === "efl" && view === "scorecard") loadEflPlatformScorecard();
+    if (sport === "j1" && view === "scorecard") loadJ1PlatformScorecard();
   }
 
   // ---- Generic shadow scorecard (any sport registered on the backend: /api/scorecard/{sport}) ----
@@ -3020,6 +3046,10 @@
     { label: "Championship BTTS", filter: b => b.bet_type === "efl_btts" },
     { label: "Championship Total Goals", filter: b => b.bet_type === "efl_total" },
     { label: "Championship Team Goals", filter: b => b.bet_type === "efl_th" || b.bet_type === "efl_ta" },
+    { label: "J1 Result (1X2)", filter: b => ["j1_h", "j1_d", "j1_a"].includes(b.bet_type) },
+    { label: "J1 BTTS", filter: b => b.bet_type === "j1_btts" },
+    { label: "J1 Total Goals", filter: b => b.bet_type === "j1_total" },
+    { label: "J1 Team Goals", filter: b => b.bet_type === "j1_th" || b.bet_type === "j1_ta" },
     { label: "NPB YRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "yes" },
     { label: "NPB NRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "no" },
   ];
@@ -3082,7 +3112,7 @@
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
-    { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") },
+    { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("j1_") },
   ];
 
   // Top "Hit Rates" group: Overall first, then MLB/NFL/CFB.
@@ -3307,7 +3337,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5202,7 +5232,7 @@
   }
 
   function kalshiMarkets(sport, kind) {
-    if (marketBook !== "kalshi") return [];   // another book selected: Market boxes are manual
+    if (marketBook !== "kalshi" || sport === "j1") return [];   // J1: no Kalshi series - Market boxes are typed   // another book selected: Market boxes are manual
     kalshiNeed(sport, kind);
     const st = kalshiStore[sport];
     return st ? st.markets.filter(m => m.k === kind) : [];
@@ -5378,6 +5408,7 @@
       if (vis("tab-content-edges") && typeof renderEdges === "function") renderEdges();
       if (vis("tab-content-soccer") && typeof renderBl === "function") renderBl();
       if (vis("tab-content-soccer") && typeof renderEfl === "function") renderEfl();
+      if (vis("tab-content-soccer") && typeof renderJ1 === "function") renderJ1();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
 
@@ -5599,6 +5630,27 @@
           const group = (b.kind === "btts" ? "BTTS" : isLine ? (b.kind === "total" ? "Total Goals" : "Team Goals") : "Result");
           add("Soccer", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
             html: byBetsRowHtml("EFL " + group, eflBetName(eflRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- Soccer: J1 League (the model's own backtest says it does not beat the closing market - judge these on the Scorecard) ----
+    if (j1Data && j1Data.events) {
+      for (const ev of j1Data.events) {
+        if (ev.state === "in") continue;
+        for (const b of j1BetList(ev)) {
+          const key = j1Key(ev, b);
+          j1Rows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+          const c = j1Calc(key);
+          const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
+          const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateJ1Field(${k},'yn',this.value)`, `updateJ1Field(${k},'market',this.value)`,
+            `updateJ1Field(${k},'useKelly',this.checked)`, `updateJ1Field(${k},'manualWager',this.value)`, "");
+          cells.ynHtml = `<select onchange="updateJ1Field(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${isLine ? "Over" : "Yes"}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${isLine ? "Under" : "No"}</option></select>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleJ1Track(${k},this.checked)" />`;
+          const group = (b.kind === "btts" ? "BTTS" : isLine ? (b.kind === "total" ? "Total Goals" : "Team Goals") : "Result");
+          add("Soccer", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("J1 " + group, j1BetName(j1Rows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
         }
       }
     }
@@ -5865,7 +5917,7 @@
     renderEdges();
     const jobs = [];
     if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
-    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
     // draw as soon as each sport arrives, not only when the slowest finishes
     jobs.forEach(j => j.then(renderEdges, renderEdges));
     await Promise.allSettled(jobs);
@@ -7451,13 +7503,14 @@
   }, 60000);
 
   function switchSoccerSub(sub) {
-    for (const k of ["bundesliga", "efl"]) {
+    for (const k of ["bundesliga", "efl", "j1"]) {
       const box = document.getElementById("soccer-sub-" + k), btn = document.getElementById("soccer-sub-btn-" + k);
       if (box) box.style.display = sub === k ? "block" : "none";
       if (btn) btn.classList.toggle("active", sub === k);
     }
     if (sub === "bundesliga") loadBlTab();
     if (sub === "efl") loadEflTab();
+    if (sub === "j1") loadJ1Tab();
   }
 
   // ======================================================================================================================
@@ -7787,6 +7840,335 @@
     const a = document.activeElement;
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadEflTab(true);
+  }, 60000);
+
+  // ======================================================================================================================
+  // SOCCER > J1 LEAGUE (JAPAN): the player plus-minus goals model (j1_platform.py). Per upcoming match: 1X2, both teams to score,
+  // total goals over 1.5-4.5 and each team's goals over 0.5-3.5, all with Market (live Kalshi ask by default), Edge, Kelly, Wager,
+  // Profit and Track. Tracked bets are graded on the final score (bet types j1_h / j1_d / j1_a / j1_btts / j1_total / j1_th / j1_ta).
+  // The model's own backtest says it does NOT beat the closing market - the tab says so; the Scorecard is the live check.
+  // ======================================================================================================================
+  let j1Data = null;
+  let j1Rows = {};
+  let j1DateChoice = null;
+  const j1State = {};
+  const j1TeamOpen = new Set();
+  const J1_COLS = "minmax(120px, 1.4fr) 56px 38px 38px 56px 64px 52px 46px 30px 58px 54px 40px";
+  const J1_TOTAL_LINES = ["1.5", "2.5", "3.5", "4.5"];
+  const J1_TEAM_LINES = ["0.5", "1.5", "2.5", "3.5"];
+
+  const j1TotalLine = {};
+  function j1PoissonOver(mu, line) {
+    const n = Math.floor(parseFloat(line));
+    let term = Math.exp(-mu), cdf = term;
+    for (let i = 1; i <= n; i++) { term *= mu / i; cdf += term; }
+    return Math.max(0, Math.min(1, 1 - cdf));
+  }
+  // probability total goals go over `line`: the model's own number for 1.5-4.5, Poisson on the expected total for any other line
+  function j1TotalOverProb(ev, line) {
+    const m = ev.total_over && ev.total_over[String(line)];
+    if (m != null) return m;
+    const xg = ev.expected_goals || {};
+    const mu = xg.total != null ? xg.total : (xg.home != null ? xg.home + xg.away : null);
+    return mu == null ? null : j1PoissonOver(mu, line);
+  }
+  function setJ1TotalLine(id, v) {
+    let x = parseFloat(v);
+    if (isNaN(x)) return;
+    x = Math.max(0.5, Math.min(8.5, Math.floor(x) + 0.5));
+    j1TotalLine[id] = x.toFixed(1);
+    renderJ1();
+  }
+
+  function j1KickoffDate(ev) { return kEtDate(ev.kickoff); }
+
+  // the Kalshi market object for one bet row, or null
+  function j1KalshiMkt(row, yn) {
+    const ev = row.ev, d = j1KickoffDate(ev);
+    if (row.kind === "h" || row.kind === "a") {
+      const f = kFindGame("j1", "game", ev.home, ev.away, d);
+      return f ? (row.kind === "h" ? f.home : f.away) : null;
+    }
+    if (row.kind === "d") {
+      const f = kFindGame("j1", "game", ev.home, ev.away, d);
+      return f ? (f.ev.ms.find(m => /^(tie|draw)/i.test(String(m.ys || "").trim())) || null) : null;
+    }
+    if (row.kind === "btts") {
+      const th = kTeamTokens("j1", ev.home).filter(t => t.length >= 3), ta = kTeamTokens("j1", ev.away).filter(t => t.length >= 3);
+      const hit = kalshiMarkets("j1", "btts").filter(m => {
+        if (d && m.d && kDayDiff(m.d, d) > 1) return false;
+        const text = kNorm((m.ti || "") + " " + (m.ys || ""));
+        return th.some(t => text.includes(t)) && ta.some(t => text.includes(t));
+      });
+      return hit.length === 1 ? hit[0] : (hit.find(m => /^yes/i.test(String(m.ys || "").trim())) || null);
+    }
+    const n = Math.floor(parseFloat(row.line)) + 1;
+    if (row.kind === "total") return kTotalMkts("j1", ev.home, ev.away, d).find(m => kNOf(m) === n) || null;
+    if (row.kind === "th" || row.kind === "ta") {
+      const hits = kTeamMkts("j1", row.kind === "th" ? ev.home : ev.away, d).filter(m => kNOf(m) === n);
+      return hits.length === 1 ? hits[0] : null;
+    }
+    return null;
+  }
+
+  function getJ1State(key) {
+    if (!j1State[key]) j1State[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return liveMarket(j1State[key], s => { const row = j1Rows[key]; return row ? kPct(j1KalshiMkt(row, s.yn), s.yn) : null; });
+  }
+
+  function j1BetList(ev, forCard) {
+    const pr = ev.probabilities || {}, out = [];
+    const nm = ev.home;
+    out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
+    out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
+    out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
+    if (forCard) {
+      const l = j1TotalLine[ev.id] || "2.5";
+      out.push({ kind: "total", line: l, label: "Total goals", p: j1TotalOverProb(ev, l), group: "Total", adjustable: true });
+    } else J1_TOTAL_LINES.forEach(l => { if (ev.total_over && ev.total_over[l] != null) out.push({ kind: "total", line: l, label: "Total goals", p: ev.total_over[l], group: "Total" }); });
+    for (const side of ["home", "away"]) {
+      J1_TEAM_LINES.forEach(l => {
+        const v = ev.team_over && ev.team_over[side] ? ev.team_over[side][l] : null;
+        if (v != null) out.push({ kind: side === "home" ? "th" : "ta", line: l, label: `${side === "home" ? ev.home : ev.away} goals`, p: v, group: "Team" });
+      });
+    }
+    return out.filter(b => b.p != null);
+  }
+
+  function j1Key(ev, b) { return `${ev.id}|${b.kind}|${b.line}`; }
+
+  function j1Calc(key) {
+    const row = j1Rows[key];
+    if (!row) return null;
+    const st = getJ1State(key);
+    const modelProb = st.yn === "yes" ? row.p : 1 - row.p;
+    const market = st.market;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function j1BetType(kind) { return { h: "j1_h", d: "j1_d", a: "j1_a", btts: "j1_btts", total: "j1_total", th: "j1_th", ta: "j1_ta" }[kind]; }
+  function j1BetName(row) {
+    const ev = row.ev;
+    if (row.kind === "h") return `${ev.home} to win`;
+    if (row.kind === "a") return `${ev.away} to win`;
+    if (row.kind === "d") return "Draw";
+    if (row.kind === "btts") return "Both teams to score";
+    if (row.kind === "total") return `Total goals Over ${row.line}`;
+    return `${row.kind === "th" ? ev.home : ev.away} goals Over ${row.line}`;
+  }
+
+  function updateJ1Field(key, field, value) {
+    const st = getJ1State(key);
+    if (field === "market") st.market = (value === "" || isNaN(parseFloat(value))) ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderJ1();
+  }
+
+  async function toggleJ1Track(key, checked) {
+    const c = j1Calc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: j1BetType(row.kind), external_player_id: String(row.ev.id), batter_name: j1BetName(row),
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: st.yn,
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; } else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderJ1();
+  }
+
+  function j1QuoteCell(row, st) {
+    const m = j1KalshiMkt(row, st.yn);
+    if (!m) return `<span class="hits-index" title="No Kalshi market found for this bet">–</span>`;
+    const ask = st.yn === "yes" ? m.ya : m.na;
+    const bid = st.yn === "yes" ? m.yb : m.nb;
+    const c = x => x == null ? "–" : Math.round(x * 100) + "¢";
+    return `<span class="hits-index" title="Kalshi ${st.yn === "yes" ? "YES" : "NO"}: bid ${c(bid)} / ask ${c(ask)}${m.v != null ? " · vol " + Math.round(m.v) : ""}">${c(bid)}/${c(ask)}</span>`;
+  }
+
+  function j1RowHtml(ev, b) {
+    const key = j1Key(ev, b);
+    j1Rows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+    const c = j1Calc(key);
+    const { st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const isLine = b.line !== "";
+    const yesPct = b.p * 100, noPct = 100 - yesPct;
+    const live = !st.isManual && market != null;
+    const wagerCell = st.useKelly ? `<span>$${wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateJ1Field(${k},'manualWager',this.value)" />`;
+    const yes = isLine ? "Over" : "Yes", no = isLine ? "Under" : "No";
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${J1_COLS};">
+        <span style="font-size:0.8rem;">${b.label}</span>
+        ${b.adjustable ? `<input type="number" step="1" min="0.5" max="8.5" value="${b.line}" title="Type or step the total goals line (x.5)" onchange="setJ1TotalLine('${ev.id}',this.value)" />` : `<span style="text-align:center;">${isLine ? b.line : "—"}</span>`}
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="updateJ1Field(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
+        ${j1QuoteCell(j1Rows[key], st)}
+        <input type="number" step="0.1" min="0" max="100" value="${market != null ? market : ""}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Live Kalshi price - type to override, clear to go back to live" : "No Kalshi price found - type your market price"}" onchange="updateJ1Field(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateJ1Field(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleJ1Track(${k},this.checked)" />
+      </div>`;
+  }
+
+  function j1HeaderHtml() {
+    return `<div class="hits-batter hits-batter-header" style="grid-template-columns: ${J1_COLS};"><span>Bet</span><span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Quote</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function j1FmtKickoff(ev) {
+    if (!ev.kickoff) return "Kickoff TBD";
+    const dt = new Date(ev.kickoff);
+    if (isNaN(dt.getTime())) return "Kickoff TBD";
+    return dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }) + " PT";
+  }
+
+  function toggleJ1Team(id) { if (j1TeamOpen.has(id)) j1TeamOpen.delete(id); else j1TeamOpen.add(id); renderJ1(); }
+
+  function j1EventCardHtml(ev) {
+    const bets = j1BetList(ev, true);
+    const pc = x => x == null ? "–" : Math.round(x * 100) + "%";
+    const mk = ev.market;
+    const fd = mk && mk.H != null ? `football-data: H ${pc(mk.H)} · D ${pc(mk.D)} · A ${pc(mk.A)}${mk.o25 != null ? " · O2.5 " + pc(mk.o25) : ""}` : "";
+    const ix = ev.indices || {};
+    const idx = ix.home_attack != null ? `attack/defence idx: ${ev.home} ${ix.home_attack.toFixed(2)}/${ix.home_defence.toFixed(2)} · ${ev.away} ${ix.away_attack.toFixed(2)}/${ix.away_defence.toFixed(2)}` : "";
+    const lu = (ev.lineup && ev.lineup.source) === "confirmed" ? "confirmed lineups" : "previous XIs";
+    const xg = ev.expected_goals || {};
+    const scores = (ev.likeliest_scores || []).slice(0, 4).map(s => `${s.score} (${Math.round(s.p * 100)}%)`).join(" · ");
+    const main = bets.filter(b => b.group !== "Team"), team = bets.filter(b => b.group === "Team");
+    const open = j1TeamOpen.has(ev.id);
+    return `
+      <div class="card">
+        <div class="meta">${j1FmtKickoff(ev)}${ev.state === "in" ? " · <b>in play</b> (pre-match numbers)" : ""} · ${lu}</div>
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${xg.home != null ? Math.round(xg.home) + " - " + Math.round(xg.away) : ""}</span></div>
+        <div class="meta">predicted score · ${scores ? "likeliest: " + scores : ""}</div>
+        <div class="meta">${[fd, idx].filter(Boolean).join(" · ")}</div>
+        ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
+        ${j1HeaderHtml()}
+        ${main.map(b => j1RowHtml(ev, b)).join("")}
+        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleJ1Team('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => j1RowHtml(ev, b)).join("") : ""}` : ""}
+      </div>`;
+  }
+
+  function setJ1Date(v) { j1DateChoice = v; renderJ1(); }
+
+  function renderJ1() {
+    const container = document.getElementById("j1-content");
+    if (!container || !j1Data) return;
+    const statusEl = document.getElementById("j1-status");
+    const d = j1Data;
+    if (d.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || ["J1 League data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    if (!all.length) {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || []).join(" ") || "No upcoming J1 League matches right now."}${d.needs_bootstrap ? " The first start downloads about three seasons of ESPN data (roughly 15 minutes) - this page fills in by itself." : ""}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const dateKey = ev => (ev.kickoff ? kEtDate(ev.kickoff) : "") || "";
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (j1DateChoice === null) j1DateChoice = "";
+    const sel = document.getElementById("j1-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All upcoming matches (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === j1DateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      sel.value = j1DateChoice;
+    }
+    const shown = j1DateChoice ? all.filter(e => dateKey(e) === j1DateChoice) : all;
+    j1Rows = {};
+    if (statusEl) {
+      const age = d.fixtures_age_minutes != null ? `fixtures ${Math.round(d.fixtures_age_minutes)} min old` : "";
+      const through = d.data_through ? `results through ${d.data_through}` : "";
+      const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
+      statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
+    }
+    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(j1EventCardHtml).join("")}</div>`;
+  }
+
+  async function loadJ1Tab(silent) {
+    const container = document.getElementById("j1-content");
+    if (!silent && !j1Data && container) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/j1/slate`);
+      j1Data = await res.json();
+      renderJ1();
+    } catch (e) {
+      if (!silent && container) container.innerHTML = `<div class="settings-hint">Couldn't load the J1 League matches.</div>`;
+    }
+  }
+
+  // the platform's own record (live, logged before kickoff; and walk-forward season-to-date vs the closing market) under the shadow card
+  async function loadJ1PlatformScorecard() {
+    const el = document.getElementById("j1-platform-scorecard");
+    if (!el) return;
+    el.innerHTML = `<div class="settings-hint">Loading the platform record...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/j1/scorecard`);
+      const d = await res.json();
+      if (d.status !== "ok") { el.innerHTML = `<div class="settings-hint">Platform record unavailable: ${(d.warnings || ["error"])[0]}</div>`; return; }
+      const f3 = x => x == null ? "–" : Number(x).toFixed(3), f2 = x => x == null ? "–" : Number(x).toFixed(2), pc = x => x == null ? "–" : (x * 100).toFixed(1) + "%";
+      const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;", td = "text-align:right; padding:3px 8px;";
+      const block = (title, r) => {
+        if (!r || !r.n) return `<h3 style="margin:14px 0 4px;">${title}</h3><div class="settings-hint">No settled matches yet.</div>`;
+        const x = r.x12, g = r.goals, o = r.total_over && r.total_over["2.5"];
+        let h = `<h3 style="margin:14px 0 4px;">${title} <span class="settings-hint">(${r.n} matches)</span></h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><th style="${th}"></th><th style="${th}">Model</th><th style="${th}">League avg</th></tr>
+            <tr><td style="${td}">1X2 log loss (lower is better)</td><td style="${td}">${f3(x.logloss)}</td><td style="${td}">${f3(x.logloss_league_avg)}</td></tr>
+            <tr><td style="${td}">1X2 Brier</td><td style="${td}">${f3(x.brier)}</td><td style="${td}">${f3(x.brier_league_avg)}</td></tr>
+            <tr><td style="${td}">Total goals error (MAE)</td><td style="${td}">${f2(g.mae_total)}</td><td style="${td}">${f2(g.mae_total_league_avg)}</td></tr>
+            ${o ? `<tr><td style="${td}">Over 2.5 Brier</td><td style="${td}">${f3(o.brier)}</td><td style="${td}">${f3(o.brier_league_avg)}</td></tr>` : ""}
+            <tr><td style="${td}">Home win: said / happened</td><td style="${td}">${pc(x.home_pred)}</td><td style="${td}">${pc(x.home_rate)}</td></tr>
+            <tr><td style="${td}">Draw: said / happened</td><td style="${td}">${pc(x.draw_pred)}</td><td style="${td}">${pc(x.draw_rate)}</td></tr>
+          </table>`;
+        const vm = r.vs_market_1x2, vo = r.vs_market_ou25;
+        if (vm) h += `<div class="settings-hint" style="margin-top:6px;">vs closing 1X2 market (${vm.n} matches): Brier model ${f3(vm.brier_model)} vs market ${f3(vm.brier_market)} (model minus market ${f3(vm.model_minus_market_brier)} ± ${f3(vm.se)}; negative = model better, only trust beyond 2 se).</div>`;
+        if (vo) h += `<div class="settings-hint">vs closing over/under 2.5 (${vo.n} matches): Brier model ${f3(vo.brier_model)} vs market ${f3(vo.brier_market)} (difference ${f3(vo.model_minus_market_brier)} ± ${f3(vo.se)}).</div>`;
+        return h;
+      };
+      const recent = (d.live_recent || []).map(r => `<tr><td style="${td}">${r.date}</td><td style="text-align:left; padding:3px 8px;">${r.match}</td><td style="${td}">${pc(r.p_home)}</td><td style="${td}">${pc(r.p_draw)}</td><td style="${td}">${pc(r.p_away)}</td><td style="${td}">${pc(r.p_over_2_5)}</td><td style="${td}">${r.result}</td></tr>`).join("");
+      el.innerHTML = `<h2 style="margin-top:22px;">Platform record</h2>
+        <div class="settings-hint">${(d.warnings || []).join(" ")}</div>
+        <div class="settings-hint">${d.logged_predictions || 0} pre-match predictions logged.</div>
+        ${block("Live (logged before kickoff)", d.live)}
+        ${block("Walk-forward season-to-date" + (d.retrospective && d.retrospective.label ? "" : ""), d.retrospective)}
+        ${recent ? `<h3 style="margin:14px 0 4px;">Recent settled matches</h3><table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Date</th><th style="${th}; text-align:left;">Match</th><th style="${th}">Home</th><th style="${th}">Draw</th><th style="${th}">Away</th><th style="${th}">O2.5</th><th style="${th}">Result</th></tr>${recent}</table>` : ""}`;
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the platform record.</div>`;
+    }
+  }
+
+  // re-read the slate every 60 s while the J1 League tab is open (skipped while the viewer is typing); Kalshi prices ride the 60 s Kalshi poll
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-soccer");
+    if (!tab || tab.style.display === "none") return;
+    const sub = document.getElementById("soccer-sub-j1");
+    if (!sub || sub.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadJ1Tab(true);
   }, 60000);
 
   // ---- NHL Goalie Saves - ported from core_nhl_goalie_saves.py, same

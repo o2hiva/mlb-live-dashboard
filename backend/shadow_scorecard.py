@@ -1033,3 +1033,11 @@ def make_efl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
         get_events, get_score, sport="efl", label="EFL Championship",
         benchmark="Research model: in its own backtest (351 matches) it beats the league average, ties a tuned team-level model, and does NOT beat the closing market. "
                   "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
+
+
+def make_j1_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """J1 League (Japan): same markets, same grading (final score) as the Bundesliga card."""
+    return make_bundesliga_adapter(
+        get_events, get_score, sport="j1", label="J1 League",
+        benchmark="Research model, NOT yet backtested on J1 data. Football-data.co.uk lists only 1X2 closing odds for J1, so there is no market line to beat on totals. "
+                  "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")

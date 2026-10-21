@@ -141,6 +141,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("EFL Championship service failed to start")
     try:
+        import j1_service
+        j1_service.start_background()
+    except Exception:
+        # J1 is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("J1 League service failed to start")
+    try:
         import nfl_fantasy_service
         nfl_fantasy_service.start_background()
     except Exception:
@@ -157,6 +164,7 @@ async def lifespan(app: FastAPI):
         shadow_scorecard.register(shadow_scorecard.make_tennis_adapter(_tennis_shadow_events, _tennis_shadow_result))
         shadow_scorecard.register(shadow_scorecard.make_bundesliga_adapter(_bl_shadow_events, _bl_shadow_score))
         shadow_scorecard.register(shadow_scorecard.make_efl_adapter(_efl_shadow_events, _efl_shadow_score))
+        shadow_scorecard.register(shadow_scorecard.make_j1_adapter(_j1_shadow_events, _j1_shadow_score))
         shadow_scorecard.start_background()
     except Exception:
         # the shadow scorecards are optional: never stop the whole app from booting over them
@@ -775,6 +783,17 @@ def _efl_shadow_events(db):
 def _efl_shadow_score(match_id):
     import efl_service
     return efl_service.get_service().final_score(match_id)
+
+
+def _j1_shadow_events(db):
+    """Upcoming J1 League matches with the model's probabilities (the same slate the Soccer > J1 tab shows)."""
+    import j1_service
+    return (j1_service.get_service().slate() or {}).get("events") or []
+
+
+def _j1_shadow_score(match_id):
+    import j1_service
+    return j1_service.get_service().final_score(match_id)
 
 
 def _nba_shadow_payloads(db):
@@ -2109,6 +2128,62 @@ def refresh_efl(what: str = "fixtures"):
     return svc.refresh_fixtures()
 
 
+@app.get("/api/j1/slate")
+def j1_slate():
+    """Upcoming English J1 League matches: expected goals, 1X2, BTTS, total and team goals, lineup used, football-data odds. See
+    j1_service.py / j1_platform.py."""
+    import j1_service
+    return j1_service.get_service().slate()
+
+
+@app.get("/api/j1/health")
+def j1_health():
+    import j1_service
+    return j1_service.get_service().health()
+
+
+@app.get("/api/j1/scorecard")
+def j1_scorecard():
+    """The platform's own record: live (logged before kickoff) and walk-forward season-to-date vs the closing market."""
+    import j1_service
+    return j1_service.get_service().get_scorecard()
+
+
+@app.get("/api/j1/results")
+def j1_results(n: int = 40):
+    import j1_service
+    return j1_service.get_service().get_results(n)
+
+
+@app.get("/api/j1/predict")
+def j1_predict(home: str, away: str):
+    import j1_service
+    return j1_service.get_service().predict(home, away)
+
+
+@app.get("/api/j1/backlog")
+def j1_backlog(season: int | None = None):
+    """Every J1 League match already played this season: walk-forward prediction vs result (also saved as j1_backlog_<season>.csv)."""
+    import j1_service
+    return j1_service.get_service().backlog(season)
+
+
+@app.get("/api/admin/refresh-j1")
+def refresh_j1(what: str = "fixtures"):
+    """Manual trigger: what = data | fixtures | odds | results | bootstrap."""
+    import j1_service
+    svc = j1_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "odds":
+        return svc.refresh_odds()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_fixtures()
+
+
 @app.get("/api/nba/health")
 def nba_health():
     import nba_props_service
@@ -2414,7 +2489,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,
