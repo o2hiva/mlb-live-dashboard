@@ -1041,3 +1041,11 @@ def make_j1_adapter(get_events: Callable, get_score: Callable) -> Adapter:
         get_events, get_score, sport="j1", label="J1 League",
         benchmark="Research model, NOT yet backtested on J1 data. Football-data.co.uk lists only 1X2 closing odds for J1, so there is no market line to beat on totals. "
                   "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
+
+
+def make_cl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """UEFA Champions League: same markets, same grading (regulation score) as the Bundesliga card."""
+    return make_bundesliga_adapter(
+        get_events, get_score, sport="cl", label="Champions League",
+        benchmark="Research model (the platform's 'all leagues' model): in its own backtest it was level with the closing market, so an 'edge' is as likely the model's noise as the market's. "
+                  "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the regulation score (90 minutes + stoppage, no extra time or penalties). Calibration, not betting profit.")
