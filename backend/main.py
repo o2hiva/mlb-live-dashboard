@@ -2349,8 +2349,8 @@ def get_bet_tracker_settings(db: Session = Depends(get_db)):
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
         "kalshi_balance": settings.kalshi_balance,
-        "westgate_balance": settings.westgate_balance or 0.0,
-        "market_book": settings.market_book or "kalshi",
+        "westgate_balance": getattr(settings, "westgate_balance", 0.0) or 0.0,
+        "market_book": getattr(settings, "market_book", None) or "kalshi",
         "polymarket_balance": settings.polymarket_balance,
         "novig_balance": settings.novig_balance,
         "fanduel_balance": settings.fanduel_balance,
@@ -2388,9 +2388,11 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
     if update.kalshi_balance is not None:
         settings.kalshi_balance = update.kalshi_balance
     if update.westgate_balance is not None:
-        settings.westgate_balance = update.westgate_balance
+        if hasattr(settings, "westgate_balance"):
+            settings.westgate_balance = update.westgate_balance
     if update.market_book in ("kalshi", "westgate", "polymarket", "novig", "fanduel", "draftkings"):
-        settings.market_book = update.market_book
+        if hasattr(settings, "market_book"):
+            settings.market_book = update.market_book
     if update.polymarket_balance is not None:
         settings.polymarket_balance = update.polymarket_balance
     if update.novig_balance is not None:
@@ -2401,7 +2403,7 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
         settings.draftkings_balance = update.draftkings_balance
 
     settings.bankroll = (
-        (settings.kalshi_balance or 0) + (settings.westgate_balance or 0) + (settings.polymarket_balance or 0) + settings.novig_balance +
+        (settings.kalshi_balance or 0) + (getattr(settings, "westgate_balance", 0) or 0) + (settings.polymarket_balance or 0) + settings.novig_balance +
         settings.fanduel_balance + settings.draftkings_balance
     )
     db.commit()
@@ -2410,8 +2412,8 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
         "kalshi_balance": settings.kalshi_balance,
-        "westgate_balance": settings.westgate_balance or 0.0,
-        "market_book": settings.market_book or "kalshi",
+        "westgate_balance": getattr(settings, "westgate_balance", 0.0) or 0.0,
+        "market_book": getattr(settings, "market_book", None) or "kalshi",
         "polymarket_balance": settings.polymarket_balance,
         "novig_balance": settings.novig_balance,
         "fanduel_balance": settings.fanduel_balance,
