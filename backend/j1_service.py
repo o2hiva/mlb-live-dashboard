@@ -41,6 +41,22 @@ class J1Service(bp.J1Platform):
         self.start_background_refresh(data_s=3600, fixtures_s=900, odds_s=10800, results_s=3600, bootstrap=True)
         log.info("j1 service started (data dir %s)", self.dir)
 
+    # The embedded J1 file still carries the Bundesliga / Championship backtest sentences ("351 matches") in two messages. J1 has NOT been
+    # backtested, so the dashboard replaces them with the accurate statement.
+    NOT_TESTED = "NOT backtested on J1 data yet: a research display only. Judge it on the Scorecard (live record vs the closing 1X2 market)."
+
+    def health(self):
+        h = super().health()
+        if isinstance(h, dict) and "validation" in h:
+            h["validation"] = self.NOT_TESTED
+        return h
+
+    def get_scorecard(self):
+        d = super().get_scorecard()
+        if isinstance(d, dict) and d.get("status") == "ok":
+            d["warnings"] = [self.NOT_TESTED if "351 matches" in str(w) else w for w in (d.get("warnings") or [])]
+        return d
+
     def slate(self):
         now = time.time()
         with self._slate_lock:
