@@ -14,9 +14,9 @@ needs on top:
   * Final-box-score lookup used by bet_grading for tracked NBA prop bets.
 
   * DATA GATE ("collect first, predict later"): the current season is collected from ESPN every 30 minutes. A game's player
-    predictions are only released once BOTH teams have played NBA_MIN_TEAM_GAMES (default 10, 0 = off) completed regular-season
-    games this season; until then the game is listed as "collecting data" with each team's game count. (Players also need >= 10 games
-    of history, and the minutes-context features need ~5 team games, so very early-season numbers would lean on last year.)
+    predictions are only released once BOTH teams have played NBA_MIN_TEAM_GAMES (default 1, 0 = off) completed regular-season
+    games this season (raise it with that variable to wait for more of this season's data); until then the game is listed as "collecting data" with each team's game count. (Players also need >= 10 games
+    of history - last season counts - and the minutes-context features need ~5 team games, so early-season numbers lean on last year.)
   * Minutes context from nba_platform.py (teammates out / blowout risk / back-to-back / late season) is applied automatically when
     nba_prop_params.json has a validated "minutes_context" block; each player row then carries base vs adjusted minutes and flags.
 
@@ -50,7 +50,7 @@ LINEUP_TTL_CONFIRMED = 600.0                         # seconds between re-checks
 PAYLOAD_TTL = 20.0
 STATS = ("pts", "reb", "ast", "pra")
 MAX_SF = 100
-MIN_TEAM_GAMES = int(os.environ.get("NBA_MIN_TEAM_GAMES", "10"))     # completed regular-season games each team needs before its games get predictions
+MIN_TEAM_GAMES = int(os.environ.get("NBA_MIN_TEAM_GAMES", "1"))     # completed regular-season games each team needs before its games get predictions
 DAY_SETTLE_DAYS = 2          # a scoreboard day counts as fully collected only once it is this many (UTC) days old - late West-Coast games
 
 
