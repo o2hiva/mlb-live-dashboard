@@ -114,18 +114,41 @@ def get_api_key() -> str:
     return key
 
 
+# ---- CFBD quota protection ------------------------------------------------------------------------------------------
+# CFBD's free tier is a MONTHLY budget (see refresh_cfb_points_stats). Once CFBD answers 429 the budget is gone until the cycle resets, so
+# every further call is wasted and only delays recovery. After a 429 we stop calling CFBD for QUOTA_BACKOFF (one probe call after that, in
+# case the quota was restored early) and fail fast with a clear message. The block lives in this process: a redeploy costs one probe call.
+QUOTA_BACKOFF = timedelta(hours=12)
+_cfbd_blocked_until = None
+_cfbd_calls = 0
+
+
+def _cfbd_get(path: str, params: dict):
+    global _cfbd_blocked_until, _cfbd_calls
+    now = datetime.utcnow()
+    if _cfbd_blocked_until and now < _cfbd_blocked_until:
+        raise requests.exceptions.RequestException(
+            "CFBD monthly call quota is used up - not calling CFBD again until %s UTC (next probe). The saved schedule and stats are kept."
+            % _cfbd_blocked_until.strftime("%Y-%m-%d %H:%M"))
+    _cfbd_calls += 1
+    log.info("CFBD call #%d since start: %s %s", _cfbd_calls, path, params)
+    resp = requests.get(
+        f"{API_BASE}{path}", params=params,
+        headers={"Authorization": f"Bearer {get_api_key()}"}, timeout=TIMEOUT,
+    )
+    if resp.status_code == 429:
+        _cfbd_blocked_until = now + QUOTA_BACKOFF
+        log.warning("CFBD answered 429 (quota) - pausing CFBD calls until %s UTC", _cfbd_blocked_until)
+    resp.raise_for_status()
+    _cfbd_blocked_until = None
+    return resp.json()
+
+
 def get_week_games(year: int, week: int, season_type: str = "regular") -> list[dict]:
     """Every game for one week, in CFBD's real, confirmed /games shape
     (camelCase: homeTeam, homePoints, awayTeam, awayPoints, completed,
     homeClassification, awayClassification, id)."""
-    resp = requests.get(
-        f"{API_BASE}/games",
-        params={"year": year, "week": week, "seasonType": season_type},
-        headers={"Authorization": f"Bearer {get_api_key()}"},
-        timeout=TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    return _cfbd_get("/games", {"year": year, "week": week, "seasonType": season_type})
 
 
 def get_week_lines(year: int, week: int, season_type: str = "regular") -> list[dict]:
@@ -137,14 +160,7 @@ def get_week_lines(year: int, week: int, season_type: str = "regular") -> list[d
     game with no book posted yet (common well before kickoff) just has
     an empty/missing "lines" array - handled by pick_provider_line, not
     here."""
-    resp = requests.get(
-        f"{API_BASE}/lines",
-        params={"year": year, "week": week, "seasonType": season_type},
-        headers={"Authorization": f"Bearer {get_api_key()}"},
-        timeout=TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    return _cfbd_get("/lines", {"year": year, "week": week, "seasonType": season_type})
 
 
 def pick_provider_line(game: dict, preferred_providers: list[str] = PREFERRED_PROVIDERS) -> tuple[str | None, float | None]:
@@ -182,7 +198,7 @@ def pick_posted_total(game: dict, preferred_providers: list = PREFERRED_PROVIDER
     return None
 
 
-def refresh_cfb_scores_if_stale(db, season: int, week: int, games, min_minutes: int = 30) -> dict:
+def refresh_cfb_scores_if_stale(db, season: int, week: int, games, min_minutes: int = 90) -> dict:
     """Score-only refresh used by /api/cfb/games: if any of this week's games
     kicked off 3+ hours ago and has no saved final yet, re-fetch ONE CFBD
     /games call (at most once per min_minutes) and store the finals in
@@ -205,7 +221,7 @@ def refresh_cfb_scores_if_stale(db, season: int, week: int, games, min_minutes: 
                 kick = datetime.strptime(sd[:19], "%Y-%m-%dT%H:%M:%S")
             except Exception:
                 continue
-            if now - kick > timedelta(hours=3):
+            if timedelta(hours=3) < now - kick < timedelta(hours=48):   # older games with no final (postponed / cancelled) are not re-polled forever
                 need = True
                 break
         if not need:
