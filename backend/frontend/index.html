@@ -475,7 +475,7 @@
       <span id="nba-stat-btn-ast" class="tab-btn" onclick="switchNbaStat('ast')">Assists</span>
       <span id="nba-stat-btn-pra" class="tab-btn" onclick="switchNbaStat('pra')">PRA</span>
     </div>
-    <div class="sub">NBA player props - Points, Rebounds, Assists and PRA (points + rebounds + assists). Each game's predictions appear only once both starting lineups are announced. "Proj" is the player's projected total; O/U is adjustable and the probabilities update instantly. Regular-season games only (the season opens Oct 22).</div>
+    <div class="sub">NBA player props - Points, Rebounds, Assists and PRA (points + rebounds + assists). Predictions don't wait for the posted lineups: until ESPN publishes them, each team's rosters and starters (★) come from its previous game, and they switch to the real lineups once posted. "Proj" is the player's projected total; O/U is adjustable and the probabilities update instantly. Regular-season games only (the season opens Oct 22).</div>
     <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
       <div>
         <label for="nba-date-picker" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Date</label>
@@ -6794,8 +6794,12 @@
       const tg = g.team_games || {};
       return `<div class="card">${head}<div class="settings-hint">Collecting data - predictions open once both teams have played ${tg.needed} games this season (${g.away_team} ${Math.min(tg.away, tg.needed)}/${tg.needed}, ${g.home_team} ${Math.min(tg.home, tg.needed)}/${tg.needed}).</div></div>`;
     }
-    if (!g.lineup_confirmed) {
-      return `<div class="card">${head}<div class="settings-hint">Lineups not announced yet - predictions appear once both starting lineups are posted (usually ~30 minutes before tip-off).</div></div>`;
+    // Predictions no longer wait for the posted lineups: until ESPN publishes them, each team's rosters and starters (★) come from its previous game.
+    const basisNote = g.lineup_confirmed
+      ? `<div class="settings-hint" style="margin-bottom:6px;">Starting lineups confirmed (★ = starter).</div>`
+      : `<div class="settings-hint" style="margin-bottom:6px;">Projected lineups - ★ marks each team's starters from its previous game (next man up for anyone listed Out). Switches to the posted lineups ~30 minutes before tip-off, so check again then.</div>`;
+    if (!(g.players || []).length) {
+      return `<div class="card">${head}${basisNote}<div class="settings-hint">No players with enough history yet.</div></div>`;
     }
     const cols = "minmax(150px, 1.5fr) 40px 50px 34px 34px 46px 52px 30px 58px 54px 40px";
     const header = `
@@ -6807,6 +6811,7 @@
       <div class="hits-side-label">${label}</div>
       ${players.length ? header + players.map(p => nbaPlayerRowHtml(g, p, cols)).join("") : `<div class="settings-hint">No players with enough history.</div>`}`;
     return `<div class="card">${head}
+      ${basisNote}
       ${section(g.away_team + " (Away)", g.players.filter(p => !p.home))}
       ${section(g.home_team + " (Home)", g.players.filter(p => p.home))}
     </div>`;
@@ -6824,7 +6829,7 @@
       : `<input type="number" step="0.01" min="0" value="${state.manualWager}" onchange="updateNbaBetField('${gid}','${pid}','${stat}','manualWager',this.value)" />`;
     const tags = (p.starter ? " ★" : "") + (p.injury_status ? ` (${p.injury_status})` : "");
     const mb = p.projected_minutes_base, ctxF = (p.context && p.context.flags) || [];
-    const title = `${Math.round(p.projected_minutes)} min proj` + (mb != null && Math.abs(mb - p.projected_minutes) >= 0.5 ? ` (base ${Math.round(mb)}, adjusted for situation)` : "") + (ctxF.length ? ` · ${ctxF.join("; ")}` : "") + (blk.last10 != null ? ` · last-10 avg ${blk.last10}` : "") + (p.teammates_out && p.teammates_out.length ? ` · teammates out: ${p.teammates_out.join(", ")}` : "");
+    const title = `${Math.round(p.projected_minutes)} min proj` + (mb != null && Math.abs(mb - p.projected_minutes) >= 0.5 ? ` (base ${Math.round(mb)}, adjusted for situation)` : "") + (ctxF.length ? ` · ${ctxF.join("; ")}` : "") + (blk.last10 != null ? ` · last-10 avg ${blk.last10}` : "") + (p.teammates_out && p.teammates_out.length ? ` · teammates out: ${p.teammates_out.join(", ")}` : "") + (p.started_last_game != null ? ` · ${p.started_last_game ? "started" : "did not start"} last game${p.minutes_last_game != null ? " (" + Math.round(p.minutes_last_game) + " min)" : ""}, ${p.starts_last5 || 0} starts in last 5` : "");
     return `
       <div class="hits-batter" style="grid-template-columns: ${cols};" title="${title.replace(/"/g, "&quot;")}">
         <span>${p.player}${tags}</span>

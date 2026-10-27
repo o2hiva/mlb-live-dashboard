@@ -3706,7 +3706,7 @@ if __name__ == "__main__":
     main()
 '''
 # ======================================================================
-# embedded module: core_nba_player_props.py (494 lines)
+# embedded module: core_nba_player_props.py (534 lines)
 # ======================================================================
 _SRC["core_nba_player_props"] = r'''"""
 core_nba_player_props.py
@@ -3730,7 +3730,8 @@ MODEL (per prop)
   (parameters in nba_prop_params.json, written by backtest_nba_player_props.py --out).
 
 WHO IS PREDICTED  Players whose latest team is playing, who appeared in >= RECENT_MIN of that team's last
-  RECENT_WINDOW games, have >= 10 prior games and project >= 15 minutes. Injury feed: 'Out' players are
+  RECENT_WINDOW games OR played in that team's most recent game (previous-game rosters; no wait for posted lineups),
+  have >= 10 prior games and project >= 15 minutes. Injury feed: 'Out' players are
   skipped; Day-To-Day players ARE predicted but flagged (the mean is conditional on playing).
 
 MINUTES CONTEXT (nba_minutes_context.py; only when nba_prop_params.json has a 'minutes_context' block, written by
@@ -3777,6 +3778,7 @@ LOG_FILE = "nba_prop_log.jsonl"
 HISTORY_SEASONS = 3          # this season + 2 prior (prior seasons feed the carry-over)
 RECENT_WINDOW = 10           # team games looked at to decide who is on the roster
 RECENT_MIN = 3               # appearances within that window
+STARTS_WINDOW = 5            # team games looked at for "how often does he start"
 MAX_LINE = 90
 STATS = bp.STATS
 LABELS_SHORT = {"teammates_out": "teammates out", "rest": "rest", "blowout": "blowout risk", "late_season": "late season"}
@@ -3852,6 +3854,34 @@ def _box_seasons(directory):
     return sorted(out)
 
 
+def roster_roles(team_games, window=STARTS_WINDOW):
+    """Previous-game roster facts for ONE team. team_games: chronological list of {pid: (minutes, started)} (one dict per
+    team game, players who played only). -> {'last': {pid: (minutes, started)}, 'starts': {pid: n_starts in the last
+    `window` team games}, 'avg_min': {pid: mean minutes over the games he played in that window}, 'n_games': n}."""
+    if not team_games:
+        return {"last": {}, "starts": {}, "avg_min": {}, "n_games": 0}
+    recent = team_games[-window:]
+    starts, mins = {}, {}
+    for g in recent:
+        for pid, (m, st) in g.items():
+            starts[pid] = starts.get(pid, 0) + (1 if st else 0)
+            mins.setdefault(pid, []).append(m)
+    return {"last": dict(team_games[-1]), "starts": starts,
+            "avg_min": {p: sum(v) / len(v) for p, v in mins.items()}, "n_games": len(recent)}
+
+
+def projected_five(roles, unavailable=(), size=5):
+    """The expected starting five from the PREVIOUS game: last game's starters first, then whoever started most of the
+    last `STARTS_WINDOW` games, then by recent minutes. Players in `unavailable` (Out) are skipped, so the next man up
+    takes the spot. -> list of player ids (best first)."""
+    bad = set(unavailable)
+    last = roles.get("last", {})
+    cands = [p for p in set(roles.get("starts", {})) | set(last) if p not in bad]
+    cands.sort(key=lambda p: (-(1 if (last.get(p) and last[p][1]) else 0), -roles["starts"].get(p, 0),
+                              -roles["avg_min"].get(p, 0.0), p))
+    return cands[:size]
+
+
 def build_state(days, stat, P, season):
     """Replay every game date through PState (predict then update, exactly like the backtest), then roll over
     to `season` if the data stop before it."""
@@ -3878,10 +3908,11 @@ def build_context(directory=".", season=None, params=None, game_date=None, pra_d
         raise SystemExit("no usable v2 boxscores found; run nba_collect_boxscores.py --upgrade")
     # names / roster from the raw boxscores of the current and previous season
     names, last_tid, last_pos = {}, {}, {}
-    seen, gdate = {}, {}
+    seen, gdate, boxes = {}, {}, {}
     for date, rows in days:
         for r in rows:
             seen.setdefault((r[4], r[2]), set()).add(r[3])
+            boxes.setdefault((r[4], r[2]), {})[r[3]] = (r[7], bool(r[8]))
             last_tid[r[3]] = r[4]
             if r[6]:
                 last_pos[r[3]] = r[6]
@@ -3889,9 +3920,11 @@ def build_context(directory=".", season=None, params=None, game_date=None, pra_d
     per_team = {}
     for (tid, gid), pids in seen.items():
         per_team.setdefault(tid, []).append((gdate[gid], gid, pids))
-    recent = {}
+    recent, roles = {}, {}
     for tid, lst in per_team.items():
-        lst.sort()
+        lst.sort(key=lambda t: (t[0], t[1]))
+        roles[tid] = roster_roles([boxes[(tid, gid)] for _, gid, _ in lst])
+        roles[tid]["last_date"] = lst[-1][0]
         cnt = {}
         for _, _, pids in lst[-RECENT_WINDOW:]:
             for p in pids:
@@ -3920,7 +3953,7 @@ def build_context(directory=".", season=None, params=None, game_date=None, pra_d
     if pra_direct:
         states["pra"] = build_state(days, "pra", stat_params(params, "pra"), season)
     return {"season": season, "params": params, "states": states, "names": names, "last_tid": last_tid,
-            "last_pos": last_pos, "recent": recent, "last_date": days[-1][0], "book": book, "ctx_model": ctx_model,
+            "last_pos": last_pos, "recent": recent, "roles": roles, "last_date": days[-1][0], "book": book, "ctx_model": ctx_model,
             "name_to_id": {n: p for p, n in names.items()}}
 
 
@@ -3996,20 +4029,22 @@ def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum", e
         for side, tid, oid, home, tname, oname in (("home", g["home_id"], g["away_id"], 1, g["home_name"], g["away_name"]),
                                                    ("away", g["away_id"], g["home_id"], 0, g["away_name"], g["home_name"])):
             cnt = ctx["recent"].get(tid, {})
+            roles = (ctx.get("roles") or {}).get(tid) or {"last": {}, "starts": {}, "avg_min": {}, "n_games": 0}
+            last_played = roles["last"]
+            roster = {pid for pid, n in cnt.items() if n >= RECENT_MIN} | set(last_played)
+            roster = {pid for pid in roster if ctx["last_tid"].get(pid) == tid}
+            out_now = {pid for pid, v in injuries.items() if v[0] <= 0.0}
+            five = projected_five(roles, unavailable=out_now)
             vec = info = None
             if model is not None and book is not None:
                 out_pids = {pid for pid, v in injuries.items() if v[0] <= 0.0 and ctx["last_tid"].get(pid) == tid}
                 vec, info = book.features(tid, oid, datetime.date.fromisoformat(gdate).toordinal(), bool(home), out=out_pids)
                 flags = context_flags(info, model)
             team_out = []
-            for pid, n in cnt.items():
-                if n < RECENT_MIN or ctx["last_tid"].get(pid) != tid:
-                    continue
+            for pid in sorted(roster):
                 if pid in injuries and injuries[pid][0] <= 0.0:
                     team_out.append({"id": pid, "name": ctx["names"].get(pid, pid), "status": injuries[pid][1]})
-            for pid, n in sorted(cnt.items()):
-                if n < RECENT_MIN or ctx["last_tid"].get(pid) != tid:
-                    continue
+            for pid in sorted(roster):
                 inj = injuries.get(pid)
                 if inj is not None and inj[0] <= 0.0:
                     continue
@@ -4049,7 +4084,11 @@ def predict_from_context(ctx, events, injury_data, lines=None, pra_mode="sum", e
                            "opp_index": round(pr[stat]["opp_idx"], 3) if stat in pr else None,
                            "group": ref["g"], "n_prior": int(ref["nprior"]), "fair_line": fair_line(mu, disp), "disp": disp,
                            "status": inj[1] if inj else None, "teammates_out": [o for o in team_out if o["id"] != pid],
-                           "pra_mode": pra_mode if stat == "pra" else None, "spread_k": None if sk is None else round(sk, 3)}
+                           "pra_mode": pra_mode if stat == "pra" else None, "spread_k": None if sk is None else round(sk, 3),
+                           "role": "S" if pid in five else "B", "started_last": bool(last_played.get(pid) and last_played[pid][1]),
+                           "starts_last5": int(roles["starts"].get(pid, 0)), "games_basis": int(roles["n_games"]),
+                           "min_last": (round(last_played[pid][0], 1) if pid in last_played else None),
+                           "roster_basis": roles.get("last_date")}
                     if stat in pl:
                         line, oo, uo = pl[stat]
                         po, pu, pp = over_under(line, mu, disp)
@@ -4160,9 +4199,10 @@ def print_table(rows, meta, min_edge=None):
                 if abs(c["delta_min"]) >= 0.4 or c["flags"]:
                     note.append(f"min {r['emin_base']:.0f}->{r['emin']:.0f}" + (f" ({', '.join(parts)})" if parts else "")
                                 + ("; " + "; ".join(c["flags"]) if c["flags"] else ""))
-            print(f"{r['player'][:23]:<24}{str(r['team'])[:13]:<14}{r['stat']:<5}{r['mu']:>6.1f}{r['emin']:>5.0f}{f('last10', '{:.1f}'):>7}{r['fair_line']:>6.1f}  "
+            print(f"{('*' if r.get('role') == 'S' else ' ') + r['player'][:22]:<24}{str(r['team'])[:13]:<14}{r['stat']:<5}{r['mu']:>6.1f}{r['emin']:>5.0f}{f('last10', '{:.1f}'):>7}{r['fair_line']:>6.1f}  "
                   f"{f('line', '{:.1f}'):>6}{pct(r.get('p_over')):>7}{pct(r.get('p_under')):>7}{f('ev_over', '{:+.3f}'):>7}{f('ev_under', '{:+.3f}'):>7}  {'; '.join(note)}")
-    print("\nproj = expected stat given he plays his usual role; fair = half-point line with P(over)~50%. SHADOW MODE: track before betting.")
+    print("\n* = projected starter (previous game's starters, next man up for anyone Out); rosters come from each team's previous games, not posted lineups.")
+    print("proj = expected stat given he plays his usual role; fair = half-point line with P(over)~50%. SHADOW MODE: track before betting.")
 
 
 def load_lines(path):
@@ -5118,7 +5158,7 @@ class NBAPlatform(svc_mod.NBAService):
             return data
 
     # ------------------------------------------------------------- READ path: props
-    def props_rows(self, date=None, lines=None):
+    def props_rows(self, date=None, lines=None, extra_out=None):
         """-> (rows, meta, warnings, status). Raw one-row-per-(player, stat) records; used by get_props and the CLI table."""
         warnings = []
         d = self._parse_date(date) if date is not None else self._today_fn()
@@ -5128,7 +5168,7 @@ class NBAPlatform(svc_mod.NBAService):
         if events is None:
             raise RuntimeError("scoreboard unreachable and no cached copy")
         inj, inj_age = self._injuries(warnings)
-        rows, meta = cp.predict_from_context(ctx, events, inj, lines if lines is not None else self._prop_lines(), self.pra_mode)
+        rows, meta = cp.predict_from_context(ctx, events, inj, lines if lines is not None else self._prop_lines(), self.pra_mode, extra_out)
         now = self._now()
         for r in rows:
             t = cs.tip_off(r)
@@ -5152,14 +5192,14 @@ class NBAPlatform(svc_mod.NBAService):
             warnings.append("injury feed unavailable: players who are OUT may be included")
         return rows, meta, warnings, status
 
-    def get_props(self, date=None, lines=None):
+    def get_props(self, date=None, lines=None, out_players=None):
         """One entry per player (games grouped), each with pts/reb/ast/pra blocks. Never raises."""
         base = {"schema_version": SCHEMA_VERSION, "generated_at": self._now().isoformat(timespec="seconds"),
                 "model": {"shadow_mode": True, "pra_mode": self.pra_mode,
                           "note": "projection assumes the player plays; minutes are adjusted for teammates out / back-to-back / blowout risk / "
                                   "late-season status only when nba_prop_params.json has a validated 'minutes_context' block (see each player's 'context')"}}
         try:
-            rows, meta, warnings, status = self.props_rows(date, lines)
+            rows, meta, warnings, status = self.props_rows(date, lines, out_players)
         except Exception as e:
             ds = None
             try:
@@ -5183,13 +5223,23 @@ class NBAPlatform(svc_mod.NBAService):
                                   "player": r["player"], "team": r["team"], "team_id": r["team_id"], "opp": r["opp"], "opp_id": r["opp_id"],
                                   "home": bool(r["home"]), "position_group": r["group"], "projected_minutes": r["emin"],
                                   "games_of_history": r["n_prior"], "status": r["status"], "teammates_out": r["teammates_out"],
-                                  "projected_minutes_base": r.get("emin_base"), "context": r.get("ctx"), "props": {}}
+                                  "projected_minutes_base": r.get("emin_base"), "context": r.get("ctx"),
+                                  "role": r.get("role"), "started_last_game": r.get("started_last"), "starts_last5": r.get("starts_last5"),
+                                  "minutes_last_game": r.get("min_last"), "props": {}}
             blk = {k2: r.get(k2) for k2 in ("mu", "last10", "fair_line", "opp_index", "line", "p_over", "p_under", "p_push",
                                             "over_odds", "under_odds", "ev_over", "ev_under")}
             blk["projection"] = blk.pop("mu")
             p["props"][r["stat"]] = blk
         plist = sorted(players.values(), key=lambda p: (p["tip_off"] or "", p["team"], -p["projected_minutes"]))
-        out = clean(dict(base, date=meta["date"], season=meta["season"], status=status, warnings=warnings, players=plist,
+        lineups = {}
+        for p in plist:
+            if p.get("role") == "S":
+                lineups.setdefault((p["game_id"], p["team"]), []).append(p["player"])
+        lineup_list = [{"game_id": g, "team": t, "projected_starters": names, "basis": "previous game's starters (next man up for anyone Out)"}
+                       for (g, t), names in lineups.items()]
+        if out_players:
+            warnings.append("what-if: treated as Out -> " + "; ".join(out_players))
+        out = clean(dict(base, date=meta["date"], season=meta["season"], status=status, warnings=warnings, players=plist, lineups=lineup_list,
                          data={"box_scores_through": meta["data_through"], "scoreboard_age_s": meta["scoreboard_age_s"],
                                "injuries_age_s": meta["injuries_age_s"], "injuries_ok": meta["inj_ok"],
                                "injuries_parsed": meta["injuries_parsed"], "injuries_unidentifiable": meta["unmatched_injuries"]}))
@@ -5305,7 +5355,7 @@ def serve(platform, host="127.0.0.1", port=8051, cors=False):
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             season = int(q["season"]) if q.get("season", "").isdigit() else None
             routes = {"/api/nba/slate": lambda: platform.get_slate(q.get("date")),
-                      "/api/nba/props": lambda: platform.get_props(q.get("date")),
+                      "/api/nba/props": lambda: platform.get_props(q.get("date"), out_players=[x.strip() for x in q.get("out", "").split(";") if x.strip()] or None),
                       "/api/nba/scorecard": lambda: platform.get_scorecard(season),
                       "/api/nba/props/scorecard": lambda: platform.get_props_scorecard(season),
                       "/health": platform.health, "/api/nba/health": platform.health}
@@ -5365,6 +5415,7 @@ def main(argv=None):
         s.add_argument("--no-log", action="store_true")
         s.add_argument("--only", default=None, help="props: show players whose name contains this text")
         s.add_argument("--pra", choices=["sum", "direct"], default="sum")
+        s.add_argument("--out-players", default=None, help='props: what-if, treat these players as Out, e.g. "Jayson Tatum;Jaylen Brown"')
     sub.add_parser("refresh")
     t = sub.add_parser("track")
     t.add_argument("--season", type=int, default=None)
@@ -5418,7 +5469,8 @@ def main(argv=None):
             _print_slate(p.get_slate(args.date))
         if args.cmd in ("daily", "props"):
             try:
-                rows, meta, warnings, status = p.props_rows(args.date)
+                extra = [x.strip() for x in (args.out_players or "").split(";") if x.strip()]
+                rows, meta, warnings, status = p.props_rows(args.date, extra_out=extra or None)
                 for w in warnings:
                     print(f"  [warn] {w}")
                 shown = [r for r in rows if not args.only or args.only.lower() in r["player"].lower()]

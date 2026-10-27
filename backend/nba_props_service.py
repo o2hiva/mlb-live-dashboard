@@ -6,9 +6,9 @@ needs on top:
 
   * PROPS-ONLY refresh loop (collect new games + box scores from ESPN, rebuild the model context when the
     files changed). The platform's game-side work (player-value fits for spreads/moneylines) is skipped.
-  * LINEUP GATING, like MLB: a game's player predictions are only released once ESPN shows the starting
-    lineups for BOTH teams (5 flagged starters each) or the game has already started. Until then the game is
-    listed as "lineups not announced yet" with no probabilities.
+  * PROJECTED LINEUPS: a game's player predictions no longer wait for ESPN to post the starting lineups. Until both lineups
+    (5 flagged starters each) are posted, rosters and starters come from each team's PREVIOUS game (that game's starters, next man
+    up for anyone Out) and the game is flagged "projected lineup"; the posted lineups replace the projection when they appear.
   * Full survival curve per (player, stat) so the browser can recompute P(over) for any line instantly,
     exactly like every other prop in the dashboard.
   * Final-box-score lookup used by bet_grading for tracked NBA prop bets.
@@ -292,7 +292,7 @@ class NBAProps(npf.NBAPlatform):
                 "away_team": g["away_name"], "home_team": g["home_name"],
                 "away_team_id": g["away_id"], "home_team_id": g["home_id"],
                 "completed": g["completed"], "started": bool(tip and now >= tip),
-                "lineup_confirmed": False, "players": [],
+                "lineup_confirmed": False, "lineup_basis": None, "players": [],
                 "_tip": tip,
             }
 
@@ -312,11 +312,13 @@ class NBAProps(npf.NBAPlatform):
                 continue                                  # finished, or still collecting this season's data: no lineup polling, no players
             info = self._lineup(gid, g["_tip"], now)
             g["lineup_confirmed"] = bool(info["confirmed"])
+            # Predictions no longer wait for the posted lineups: until ESPN publishes them the rosters and starters come from each team's
+            # PREVIOUS game (nba_platform: last game's starters, next man up for anyone Out). Once both lineups are posted the real
+            # starters replace the projection.
+            g["lineup_basis"] = "confirmed" if g["lineup_confirmed"] else "previous game"
             if info.get("error"):
                 warnings.append(f"lineup check for game {gid}: {info['error']}")
-            if not g["lineup_confirmed"]:
-                continue
-            starters = {pid for ids in info["starters"].values() for pid in ids}
+            starters = {pid for ids in info["starters"].values() for pid in ids} if g["lineup_confirmed"] else None
             for pid, prs in by_game.get(gid, {}).items():
                 ref = prs[0]
                 props = {}
@@ -328,7 +330,9 @@ class NBAProps(npf.NBAPlatform):
                     continue
                 g["players"].append({
                     "player_id": pid, "player": ref["player"], "team": ref["team"], "team_id": ref["team_id"],
-                    "opp": ref["opp"], "home": bool(ref["home"]), "starter": pid in starters,
+                    "opp": ref["opp"], "home": bool(ref["home"]),
+                    "starter": (pid in starters) if starters is not None else (ref.get("role") == "S"),
+                    "started_last_game": ref.get("started_last"), "starts_last5": ref.get("starts_last5"), "minutes_last_game": ref.get("min_last"),
                     "position_group": ref["group"], "projected_minutes": ref["emin"],
                     "projected_minutes_base": ref.get("emin_base"), "context": ref.get("ctx"),
                     "games_of_history": ref["n_prior"], "injury_status": ref["status"],
