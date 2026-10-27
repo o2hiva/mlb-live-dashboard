@@ -648,7 +648,7 @@
         <input id="kalshi-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
-        <label for="westgate-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-westgate" onchange="pickMarketBook('westgate', this.checked)" title="Use Westgate for Market prices" style="width:auto;margin:0;" /> Westgate</label>
+        <label for="westgate-input" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="book-pick" id="book-pick-westgate" onchange="pickMarketBook('westgate', this.checked)" title="Use Caesars (Westgate) for Market prices" style="width:auto;margin:0;" /> Caesars</label>
         <input id="westgate-input" type="number" step="0.01" min="0" onchange="saveBetTrackerSettings()" oninput="updateBankrollTotalDisplay()" />
       </div>
       <div class="settings-field">
@@ -2786,7 +2786,7 @@
   const PLATFORM_FIELDS = ["kalshi", "westgate", "polymarket", "novig", "fanduel", "draftkings"];
   // ---- Market source: which book fills the Market boxes. Kalshi = live prices; any other book = type your own prices
   // (percent, or American odds like -150 / +130, converted to implied %). Checkbox in the Bankroll tab; default Kalshi.
-  const BOOK_NAMES = { kalshi: "Kalshi", westgate: "Westgate", polymarket: "Polymarket", novig: "NoVig", fanduel: "FanDuel", draftkings: "DraftKings" };
+  const BOOK_NAMES = { kalshi: "Kalshi", westgate: "Caesars", polymarket: "Polymarket", novig: "NoVig", fanduel: "FanDuel", draftkings: "DraftKings" };
   let marketBook = "kalshi";
   try { const b = localStorage.getItem("marketBook"); if (b && BOOK_NAMES[b]) marketBook = b; } catch (e) {}
   function americanToPct(v) {
