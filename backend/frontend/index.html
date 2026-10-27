@@ -23,16 +23,11 @@
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   .sub { color: var(--muted); margin-bottom: 20px; font-size: 0.85rem; }
   #status-line { margin-bottom: 16px; font-size: 0.8rem; color: var(--muted); }
+  /* one game card per row, every sport (full width, never two games side by side) */
   .grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 24px;
-  }
-  @media (max-width: 1100px) {
-    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-  @media (max-width: 600px) {
-    .grid { grid-template-columns: 1fr; }
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
   }
   /* NFL By Position QB cards only - 4 per row instead of the default 3 (see .grid above). */
   .nfl-dvp-grid {
@@ -6780,7 +6775,7 @@
     }
     const gt = data.gate;
     const banner = data.collecting && gt ? `<div class="settings-hint" style="margin-bottom:10px;">Collecting data: ${gt.teams_ready}/${gt.teams_total} teams have played ${gt.min_team_games} games (fewest ${gt.fewest_games}, most ${gt.most_games}). A game's predictions switch on once both teams are there.</div>` : "";
-    container.innerHTML = banner + `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));">${games.map(g => nbaGameCardHtml(g)).join("")}</div>`;
+    container.innerHTML = banner + `<div class="grid">${games.map(g => nbaGameCardHtml(g)).join("")}</div>`;
   }
 
   function nbaGameCardHtml(g) {
@@ -7200,7 +7195,7 @@
       return;
     }
     container.innerHTML = `
-      ${ok.length ? `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(700px, 1fr));">${ok.map(tennisEventCardHtml).join("")}</div>` : `<div class="settings-hint">None of these matches could be modelled yet.</div>`}
+      ${ok.length ? `<div class="grid">${ok.map(tennisEventCardHtml).join("")}</div>` : `<div class="settings-hint">None of these matches could be modelled yet.</div>`}
       ${rest.length ? (tennisShowUnrated ? tennisUnratedHtml(rest) : `<div class="settings-hint" style="margin-top:10px;">${rest.length} match(es) not modelled (qualifiers / no ATP history) - tick "Show not-modelled" to list them.</div>`) : ""}`;
   }
 
@@ -7487,7 +7482,7 @@
       const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
       statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
     }
-    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(blEventCardHtml).join("")}</div>`;
+    container.innerHTML = `<div class="grid">${shown.map(blEventCardHtml).join("")}</div>`;
   }
 
   async function loadBlTab(silent) {
@@ -7828,7 +7823,7 @@
       const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
       statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
     }
-    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(eflEventCardHtml).join("")}</div>`;
+    container.innerHTML = `<div class="grid">${shown.map(eflEventCardHtml).join("")}</div>`;
   }
 
   async function loadEflTab(silent) {
@@ -8157,7 +8152,7 @@
       const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
       statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
     }
-    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(j1EventCardHtml).join("")}</div>`;
+    container.innerHTML = `<div class="grid">${shown.map(j1EventCardHtml).join("")}</div>`;
   }
 
   async function loadJ1Tab(silent) {
@@ -8474,7 +8469,7 @@
       const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
       statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
     }
-    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(760px, 1fr));">${shown.map(clEventCardHtml).join("")}</div>`;
+    container.innerHTML = `<div class="grid">${shown.map(clEventCardHtml).join("")}</div>`;
   }
 
   async function loadClTab(silent) {
@@ -9129,7 +9124,7 @@
       container.innerHTML = `<div class="settings-hint">No NHL games on this date.</div>`;
       return;
     }
-    container.innerHTML = `<div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));">${games.map(nhlgCardHtml).join("")}</div>`;
+    container.innerHTML = `<div class="grid">${games.map(nhlgCardHtml).join("")}</div>`;
   }
 
   async function loadNhlGamesTab(silent) {
