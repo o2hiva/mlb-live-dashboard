@@ -843,6 +843,8 @@ def grade_pending_bets() -> dict:
         graded, wins, losses, still_pending = 0, 0, 0, 0
 
         for bet in pending:
+            if bet.bet_type == "manual":
+                continue  # hand-entered bet: graded only by the W/L buttons, never by this job
             if bet.bet_type not in NO_MLB_GAME_BET_TYPES:
                 game = db.get(Game, bet.game_pk)
                 if not game:

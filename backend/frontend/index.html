@@ -679,6 +679,22 @@
     <div id="weekly-hit-rate-table">Loading...</div>
 
     <h2 style="margin-top:32px;">Tracked Bets</h2>
+    <details id="manual-bet-box" style="margin-bottom:14px;">
+      <summary style="cursor:pointer;font-weight:600;">+ Add a bet manually</summary>
+      <div class="platform-grid" style="margin-top:10px;">
+        <div class="settings-field"><label for="mb-label">Bet (player / team / description)</label><input id="mb-label" type="text" placeholder="e.g. Connor McDavid Over 2.5 SOG" /></div>
+        <div class="settings-field"><label for="mb-matchup">Matchup</label><input id="mb-matchup" type="text" placeholder="e.g. EDM @ CGY" /></div>
+        <div class="settings-field"><label for="mb-yn">Y/N (Yes = Over)</label><select id="mb-yn"><option value="yes">yes</option><option value="no">no</option></select></div>
+        <div class="settings-field"><label for="mb-line">Line</label><input id="mb-line" type="number" step="0.5" placeholder="optional" /></div>
+        <div class="settings-field"><label for="mb-market">Market (% or American odds)</label><input id="mb-market" type="number" step="0.01" placeholder="e.g. 45 or -120" /></div>
+        <div class="settings-field"><label for="mb-wager">Wager ($)</label><input id="mb-wager" type="number" step="0.01" min="0" /></div>
+        <div class="settings-field"><label for="mb-profit">Profit if win ($)</label><input id="mb-profit" type="number" step="0.01" min="0" placeholder="blank = auto" /></div>
+        <div class="settings-field"><label for="mb-model">Model % (optional)</label><input id="mb-model" type="number" step="0.1" min="0" max="100" /></div>
+        <div class="settings-field"><label for="mb-date">Date placed (optional)</label><input id="mb-date" type="date" /></div>
+      </div>
+      <button type="button" onclick="addManualBet()" style="margin-top:10px;">Add bet</button>
+      <span id="mb-status" class="settings-hint" style="margin-left:10px;"></span>
+    </details>
     <div id="tracked-bets-list" class="tracked-bets-list">Loading...</div>
   </div>
 
@@ -3082,6 +3098,7 @@
     { label: "Champions LG BTTS", filter: b => b.bet_type === "cl_btts" },
     { label: "Champions LG Total Goals", filter: b => b.bet_type === "cl_total" },
     { label: "Champions LG Team Goals", filter: b => b.bet_type === "cl_th" || b.bet_type === "cl_ta" },
+    { label: "Manual Bets", filter: b => b.bet_type === "manual" },
     { label: "NPB YRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "yes" },
     { label: "NPB NRFI", filter: b => b.bet_type === "npb_yrfi" && b.yn === "no" },
   ];
@@ -3143,6 +3160,7 @@
     { label: "NHL", filter: b => b.bet_type.startsWith("nhl_") },
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
+    { label: "Manual", filter: b => b.bet_type === "manual" },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
     { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("cl_") },
   ];
@@ -3328,7 +3346,7 @@
       renderMonthlyHitRateTable(bets);
       renderWeeklyHitRateTable(bets);
       if (!bets.length) {
-        container.innerHTML = `<div class="settings-hint">No bets tracked yet - check the Track box on a Hits row to add one.</div>`;
+        container.innerHTML = `<div class="settings-hint">No bets tracked yet - check a Track box, or use \"Add a bet manually\" above.</div>`;
         return;
       }
       const header = `
@@ -3369,7 +3387,7 @@
           <span>${b.batter_name}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type === "manual" || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -3381,6 +3399,42 @@
       container.innerHTML = header + rows;
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load tracked bets.</div>`;
+    }
+  }
+
+  // Hand-entered bet: saved as bet_type "manual" so it shows in Tracked Bets
+  // with the same columns, Remove and W/L grade buttons as a clicked bet and
+  // counts in Overall / month / week hit rates. It is never auto-graded.
+  async function addManualBet() {
+    const st = document.getElementById("mb-status");
+    const num = id => { const v = document.getElementById(id).value; return v === "" ? null : parseFloat(v); };
+    const label = document.getElementById("mb-label").value.trim();
+    const wager = num("mb-wager");
+    const rawMkt = num("mb-market");
+    if (!label) { st.textContent = "Enter what the bet is."; return; }
+    if (wager == null || wager <= 0) { st.textContent = "Enter a wager."; return; }
+    if (rawMkt == null) { st.textContent = "Enter the market % or American odds."; return; }
+    const pct = Math.abs(rawMkt) >= 100 ? americanToPct(rawMkt) : rawMkt;
+    if (pct == null || isNaN(pct) || pct <= 0 || pct >= 100) { st.textContent = "Market must be between 0 and 100 (or American odds)."; return; }
+    let profit = num("mb-profit");
+    if (profit == null) profit = profitIfWon(wager, pct, false);
+    const d = document.getElementById("mb-date").value;
+    const body = {
+      game_pk: null, bet_type: "manual", batter_name: label,
+      team_side: document.getElementById("mb-matchup").value.trim() || "Manual entry",
+      line: num("mb-line"), yn: document.getElementById("mb-yn").value,
+      model_probability: num("mb-model"), market_probability: Math.round(pct * 100) / 100,
+      wager: wager, potential_profit: profit != null ? Math.round(profit * 100) / 100 : null,
+      placed_at: d ? d + "T12:00:00" : null
+    };
+    try {
+      const res = await fetch(`${API_BASE}/api/bet-tracker/track`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(res.status);
+      st.textContent = "Added.";
+      ["mb-label","mb-matchup","mb-line","mb-market","mb-wager","mb-profit","mb-model","mb-date"].forEach(i => document.getElementById(i).value = "");
+      loadTrackedBets();
+    } catch (e) {
+      st.textContent = "Couldn't save the bet (" + e.message + ").";
     }
   }
 

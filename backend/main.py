@@ -1,7 +1,7 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -2441,6 +2441,7 @@ class TrackedBetCreate(BaseModel):
     nfl_season: int | None = None  # NFL team-points/game-total bets only - needed to re-fetch that week's real games at grading time (no numeric id to store, see nfl_points_sync.py)
     nfl_week: int | None = None
     external_player_id: str | None = None  # gsis_id, for NFL rushing yards / by-position props - batter_id can't hold this (see models_db.py)
+    placed_at: datetime | None = None  # manual bets only: lets a bet be back-dated; omitted = now
 
 
 @app.post("/api/bet-tracker/track")
@@ -2453,7 +2454,12 @@ def track_bet(bet: TrackedBetCreate, db: Session = Depends(get_db)):
     frontend holds onto so unchecking the box can delete the right row.
     """
     from models_db import TrackedBet
-    row = TrackedBet(**bet.model_dump())
+    data = bet.model_dump()
+    if data.get("placed_at") is None:
+        data.pop("placed_at", None)
+    elif data["placed_at"].tzinfo is not None:
+        data["placed_at"] = data["placed_at"].astimezone(timezone.utc).replace(tzinfo=None)
+    row = TrackedBet(**data)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -2549,7 +2555,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("cl_")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("cl_") or r.bet_type == "manual") and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,
