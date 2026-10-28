@@ -469,7 +469,7 @@
       <span id="nba-view-btn-scorecard" class="tab-btn" onclick="switchSportView('nba','scorecard')">Scorecard</span>
     </div>
     <div id="nba-games-wrap">
-    <div class="tabs">
+    <div class="tabs" style="display:none;">
       <span id="nba-stat-btn-pts" class="tab-btn active" onclick="switchNbaStat('pts')">Points</span>
       <span id="nba-stat-btn-reb" class="tab-btn" onclick="switchNbaStat('reb')">Rebounds</span>
       <span id="nba-stat-btn-ast" class="tab-btn" onclick="switchNbaStat('ast')">Assists</span>
@@ -858,8 +858,7 @@
           </div>` : ""}
         ${(g.home_lineup_confirmed || g.away_lineup_confirmed) ? `
           <div style="margin-top:14px;">
-            <span id="lineup-toggle-${g.game_pk}" class="hits-toggle" onclick="toggleLineup(${g.game_pk})">Show Lineup ▾</span>
-            <div id="lineup-container-${g.game_pk}" class="hits-container" style="display:none;"></div>
+            <div id="lineup-container-${g.game_pk}" class="hits-container" style="display:block;"></div>
           </div>` : ""}
       </div>
     `;
@@ -1567,8 +1566,7 @@
   }
 
   function rerenderHits(gamePk) {
-    if (activeLineupTab[gamePk] !== "hits") return; // that tab isn't currently shown, nothing to update
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-hits`);
     if (contentDiv && hitsDataCache[gamePk]) {
       contentDiv.innerHTML = hitsSectionHtml(gamePk, hitsDataCache[gamePk]);
     }
@@ -1614,8 +1612,7 @@
   }
 
   function rerenderHr(gamePk) {
-    if (activeLineupTab[gamePk] !== "hr") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-hr`);
     if (contentDiv && hrDataCache[gamePk]) {
       contentDiv.innerHTML = hrSectionHtml(gamePk, hrDataCache[gamePk]);
     }
@@ -1765,8 +1762,7 @@
   }
 
   function rerenderGameLines(gamePk) {
-    if (activeLineupTab[gamePk] !== "gamelines") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-gamelines`);
     if (contentDiv && gameLinesDataCache[gamePk]) {
       contentDiv.innerHTML = gameLinesSectionHtml(gamePk, gameLinesDataCache[gamePk]);
     }
@@ -1918,8 +1914,7 @@
   }
 
   function rerenderF5(gamePk) {
-    if (activeLineupTab[gamePk] !== "f5") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-f5`);
     if (contentDiv && f5DataCache[gamePk]) {
       contentDiv.innerHTML = f5SectionHtml(gamePk, f5DataCache[gamePk]);
     }
@@ -2136,8 +2131,7 @@
   }
 
   function rerenderPha(gamePk) {
-    if (activeLineupTab[gamePk] !== "pha") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-pha`);
     if (contentDiv && phaDataCache[gamePk]) {
       contentDiv.innerHTML = phaSectionHtml(gamePk, phaDataCache[gamePk]);
     }
@@ -2286,8 +2280,7 @@
   }
 
   function rerenderK(gamePk) {
-    if (activeLineupTab[gamePk] !== "k") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-k`);
     if (contentDiv && kDataCache[gamePk]) {
       contentDiv.innerHTML = kSectionHtml(gamePk, kDataCache[gamePk]);
     }
@@ -2414,8 +2407,7 @@
     });
   }
   function rerenderKpo(gamePk) {
-    if (activeLineupTab[gamePk] !== "kpo") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-kpo`);
     if (contentDiv && kDataCache[gamePk]) contentDiv.innerHTML = kpoSectionHtml(gamePk, kDataCache[gamePk]);
   }
   function updateKpoThreshold(gamePk, side, value) {
@@ -2613,8 +2605,7 @@
   }
 
   function rerenderHrr(gamePk) {
-    if (activeLineupTab[gamePk] !== "hrr") return;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
+    const contentDiv = document.getElementById(`lineup-content-${gamePk}-hrr`);
     if (contentDiv && hrrDataCache[gamePk]) {
       contentDiv.innerHTML = hrrSectionHtml(gamePk, hrrDataCache[gamePk]);
     }
@@ -2722,70 +2713,62 @@
     `;
   }
 
+  // Every MLB prop section is shown stacked in the game box (no Show Lineup toggle, no tabs).
+  // Sections load lazily through a small queue (3 at a time) so a full slate does not fire
+  // hundreds of requests at once; already-loaded sections paint instantly from cache.
+  const LINEUP_SECTIONS = [
+    { tab: "hits", title: "Hits", cache: () => hitsDataCache, render: (g, d) => hitsSectionHtml(g, d), path: "hits" },
+    { tab: "hrr", title: "HRR", cache: () => hrrDataCache, render: (g, d) => hrrSectionHtml(g, d), path: "hrr" },
+    { tab: "hr", title: "HR", cache: () => hrDataCache, render: (g, d) => hrSectionHtml(g, d), path: "hr" },
+    { tab: "k", title: "Pitcher K", cache: () => kDataCache, render: (g, d) => kSectionHtml(g, d), path: "pitcher-k" },
+    { tab: "kpo", title: "Pitcher K (PO)", cache: () => kDataCache, render: (g, d) => kpoSectionHtml(g, d), path: "pitcher-k" },
+    { tab: "pha", title: "Pitcher Hits Allowed", cache: () => phaDataCache, render: (g, d) => phaSectionHtml(g, d), path: "pitcher-hits-allowed" },
+    { tab: "f5", title: "1st 5 Innings", cache: () => f5DataCache, render: (g, d) => f5SectionHtml(g, d), path: "f5-lines" },
+    { tab: "gamelines", title: "Game Lines", cache: () => gameLinesDataCache, render: (g, d) => gameLinesSectionHtml(g, d), path: "game-lines" },
+  ];
+  const lineupFetchQueue = [];
+  const lineupInFlight = {};   // "gamePk/path" -> Promise, so K and K (PO) share one request
+  let lineupFetchActive = 0;
+  function pumpLineupQueue() {
+    while (lineupFetchActive < 3 && lineupFetchQueue.length) {
+      const job = lineupFetchQueue.shift();
+      lineupFetchActive++;
+      job().finally(() => { lineupFetchActive--; pumpLineupQueue(); });
+    }
+  }
+  function fetchLineupData(gamePk, sec) {
+    const key = gamePk + "/" + sec.path;
+    if (!lineupInFlight[key]) {
+      lineupInFlight[key] = new Promise(resolve => {
+        lineupFetchQueue.push(() => fetch(`${API_BASE}/api/games/${gamePk}/${sec.path}`)
+          .then(res => res.json())
+          .then(data => { sec.cache()[gamePk] = data; resolve(true); })
+          .catch(() => resolve(false))
+          .finally(() => { delete lineupInFlight[key]; }));
+        pumpLineupQueue();
+      });
+    }
+    return lineupInFlight[key];
+  }
+
   function renderLineupSection(gamePk) {
     const outerContainer = document.getElementById(`lineup-container-${gamePk}`);
-    const toggle = document.getElementById(`lineup-toggle-${gamePk}`);
     if (!outerContainer) return;
-
-    if (!expandedLineupGames.has(gamePk)) {
-      outerContainer.style.display = "none";
-      outerContainer.innerHTML = "";
-      if (toggle) toggle.textContent = "Show Lineup ▾";
-      return;
-    }
-
-    if (toggle) toggle.textContent = "Hide Lineup ▴";
     outerContainer.style.display = "block";
-
-    const tab = activeLineupTab[gamePk] || "hits";
-    outerContainer.innerHTML = `
-      <div class="lineup-tabs">
-        <span class="lineup-tab ${tab === "hits" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hits')">Hits</span>
-        <span class="lineup-tab ${tab === "hrr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hrr')">HRR</span>
-        <span class="lineup-tab ${tab === "hr" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'hr')">HR</span>
-        <span class="lineup-tab ${tab === "k" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'k')">K</span>
-        <span class="lineup-tab ${tab === "kpo" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'kpo')">K (PO)</span>
-        <span class="lineup-tab ${tab === "pha" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'pha')">P-Hits</span>
-        <span class="lineup-tab ${tab === "f5" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'f5')">1st 5</span>
-        <span class="lineup-tab ${tab === "gamelines" ? "active" : ""}" onclick="switchLineupTab(${gamePk},'gamelines')">Game Lines</span>
-      </div>
-      <div id="lineup-content-${gamePk}"></div>
-    `;
-    const contentDiv = document.getElementById(`lineup-content-${gamePk}`);
-
-    const TAB_CONFIG = {
-      hits: { cache: hitsDataCache, render: hitsSectionHtml, path: "hits" },
-      hr: { cache: hrDataCache, render: hrSectionHtml, path: "hr" },
-      hrr: { cache: hrrDataCache, render: hrrSectionHtml, path: "hrr" },
-      k: { cache: kDataCache, render: kSectionHtml, path: "pitcher-k" },
-      kpo: { cache: kDataCache, render: kpoSectionHtml, path: "pitcher-k" },
-      pha: { cache: phaDataCache, render: phaSectionHtml, path: "pitcher-hits-allowed" },
-      f5: { cache: f5DataCache, render: f5SectionHtml, path: "f5-lines" },
-      gamelines: { cache: gameLinesDataCache, render: gameLinesSectionHtml, path: "game-lines" },
-    };
-    const { cache: dataCache, render: sectionHtmlFn, path: apiPath } = TAB_CONFIG[tab];
-
-    if (dataCache[gamePk]) {
-      contentDiv.innerHTML = sectionHtmlFn(gamePk, dataCache[gamePk]);
-      return;
-    }
-
-    contentDiv.innerHTML = `<div class="hits-loading">Loading batters...</div>`;
-    fetch(`${API_BASE}/api/games/${gamePk}/${apiPath}`)
-      .then(res => res.json())
-      .then(data => {
-        dataCache[gamePk] = data;
-        // Only paint the result if the viewer hasn't switched tabs/collapsed
-        // the section while this fetch was in flight.
-        if (expandedLineupGames.has(gamePk) && (activeLineupTab[gamePk] || "hits") === tab) {
-          contentDiv.innerHTML = sectionHtmlFn(gamePk, data);
-        }
-      })
-      .catch(() => {
-        if (expandedLineupGames.has(gamePk) && (activeLineupTab[gamePk] || "hits") === tab) {
-          contentDiv.innerHTML = `<div class="hits-loading">Couldn't load batters.</div>`;
-        }
+    outerContainer.innerHTML = LINEUP_SECTIONS.map(sec => `
+      <div class="settings-hint" style="margin:16px 0 4px; font-weight:600;">${sec.title}</div>
+      <div id="lineup-content-${gamePk}-${sec.tab}"></div>`).join("");
+    LINEUP_SECTIONS.forEach(sec => {
+      const div = document.getElementById(`lineup-content-${gamePk}-${sec.tab}`);
+      const cache = sec.cache();
+      if (cache[gamePk]) { div.innerHTML = sec.render(gamePk, cache[gamePk]); return; }
+      div.innerHTML = `<div class="hits-loading">Loading...</div>`;
+      fetchLineupData(gamePk, sec).then(ok => {
+        const el = document.getElementById(`lineup-content-${gamePk}-${sec.tab}`);   // the grid may have been rebuilt meanwhile
+        if (!el) return;
+        el.innerHTML = ok && cache[gamePk] ? sec.render(gamePk, cache[gamePk]) : `<div class="hits-loading">Couldn't load.</div>`;
       });
+    });
   }
 
   function reapplyExpandedLineups() {
@@ -2793,7 +2776,7 @@
     // previously-expanded lineup section needs to be restored afterward -
     // from cache (instant) rather than re-fetched, since batter season
     // stats don't change within a browsing session.
-    expandedLineupGames.forEach(renderLineupSection);
+    document.querySelectorAll('[id^="lineup-container-"]').forEach(el => renderLineupSection(Number(el.id.replace("lineup-container-", ""))));
   }
 
   fetchGames();
@@ -6767,24 +6750,16 @@
 
   function cfbCardHtml(gameId, pair, season, week) {
     const startDateUtc = (pair.home && pair.home.start_date_utc) || (pair.away && pair.away.start_date_utc) || null;
-    const expanded = expandedCfbLinesGames.has(gameId);
-    const tab = activeCfbPropTab[gameId] || "lines";
-    const tabContentHtml = tab === "spread"
-      ? cfbSpreadSectionHtml(gameId, pair.home, pair.away)
-      : cfbTotalRowHtml(gameId, pair.home, pair.away);
-    const expandedHtml = expanded ? `
-          <div class="lineup-tabs">
-            <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchCfbPropTab(${gameId},'lines')">Game Lines</span>
-            <span class="lineup-tab ${tab === "spread" ? "active" : ""}" onclick="switchCfbPropTab(${gameId},'spread')">Spread</span>
-          </div>
-          <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
+    // Everything is always shown: Game Lines and Spread stacked, no Show Props toggle.
+    const expandedHtml = `
+          <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Game Lines</div>${cfbTotalRowHtml(gameId, pair.home, pair.away)}
+          <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Spread</div>${cfbSpreadSectionHtml(gameId, pair.home, pair.away)}`;
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${formatKickoffPacific(startDateUtc)}</div>
         ${cfbTeamBlockHtml(pair.away, false)}
         ${cfbTeamBlockHtml(pair.home, true)}
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
-          <span class="hits-toggle" onclick="toggleCfbLines(${gameId})">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
           ${expandedHtml}
         </div>
       </div>`;
@@ -6934,9 +6909,12 @@
         <span>Player</span><span>Proj</span><span>O/U</span><span>Yes</span><span>No</span>
         <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
       </div>`;
+    // All four stats (Points, Rebounds, Assists, PRA) are shown stacked for each team - no stat selector.
     const section = (label, players) => `
       <div class="hits-side-label">${label}</div>
-      ${players.length ? header + players.map(p => nbaPlayerRowHtml(g, p, cols)).join("") : `<div class="settings-hint">No players with enough history.</div>`}`;
+      ${players.length ? Object.keys(NBA_STAT_LABELS).map(st => `
+        <div class="settings-hint" style="margin:12px 0 4px; font-weight:600;">${NBA_STAT_LABELS[st]}</div>
+        ${header}${players.map(p => nbaPlayerRowHtml(g, p, cols, st)).join("")}`).join("") : `<div class="settings-hint">No players with enough history.</div>`}`;
     return `<div class="card">${head}
       ${basisNote}
       ${section(g.away_team + " (Away)", g.players.filter(p => !p.home))}
@@ -6944,8 +6922,7 @@
     </div>`;
   }
 
-  function nbaPlayerRowHtml(g, p, cols) {
-    const stat = activeNbaStat;
+  function nbaPlayerRowHtml(g, p, cols, stat) {
     const c = nbaRowCalc(g.game_id, p.player_id, stat);
     if (!c) return "";
     const { blk, state, line, yesPct, noPct, modelProb, wager, profit } = c;
@@ -7576,7 +7553,7 @@
         ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
         ${blHeaderHtml()}
         ${main.map(b => blRowHtml(ev, b)).join("")}
-        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleBlTeam('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => blRowHtml(ev, b)).join("") : ""}` : ""}
+        ${team.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">Team goals</div>${team.map(b => blRowHtml(ev, b)).join("")}` : ""}
       </div>`;
   }
 
@@ -7917,7 +7894,7 @@
         ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
         ${eflHeaderHtml()}
         ${main.map(b => eflRowHtml(ev, b)).join("")}
-        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleEflTeam('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => eflRowHtml(ev, b)).join("") : ""}` : ""}
+        ${team.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">Team goals</div>${team.map(b => eflRowHtml(ev, b)).join("")}` : ""}
       </div>`;
   }
 
@@ -8246,7 +8223,7 @@
         ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
         ${j1HeaderHtml()}
         ${main.map(b => j1RowHtml(ev, b)).join("")}
-        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleJ1Team('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => j1RowHtml(ev, b)).join("") : ""}` : ""}
+        ${team.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">Team goals</div>${team.map(b => j1RowHtml(ev, b)).join("")}` : ""}
       </div>`;
   }
 
@@ -8563,7 +8540,7 @@
         ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
         ${clHeaderHtml()}
         ${main.map(b => clRowHtml(ev, b)).join("")}
-        ${team.length ? `<div class="hits-toggle" style="margin-top:8px;" onclick="toggleClTeam('${ev.id}')">${open ? "Hide" : "Show"} team goals ${open ? "▴" : "▾"}</div>${open ? team.map(b => clRowHtml(ev, b)).join("") : ""}` : ""}
+        ${team.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">Team goals</div>${team.map(b => clRowHtml(ev, b)).join("")}` : ""}
       </div>`;
   }
 
@@ -9208,26 +9185,21 @@
     const gid = g.game_id;
     const status = g.started ? "Started / in progress" : (g.start_utc ? formatKickoffPacific(g.start_utc) : "Time TBD");
     const warn = g.trusted ? "" : ` · <span style="color:#e0a050;" title="A team has fewer than 3 games of data this season - predictions lean on last season / league average">early-season data</span>`;
-    const expanded = expandedNhlgGames.has(String(gid));
     let expandedHtml = "";
-    if (expanded) {
+    {
       const periodRows = g.periods
         ? ["p1", "p2", "p3"].map(mk => nhlgOuRowHtml(gid, mk, NHLG_LABELS[mk])).join("")
         : `<div class="settings-hint">Period model unavailable.</div>`;
-      const tab = activeNhlgPropTab[String(gid)] || "lines";
-      const body = tab === "goalies"
-        ? `<div style="margin-top:10px;">${nhlgGoalieSectionHtml(g)}</div>`
-        : `<div style="margin-top:10px;">
+      // Everything is always shown: Game Lines and Goalie Saves stacked, no Show Props toggle.
+      expandedHtml = `
+        <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Game Lines</div>
+        <div style="margin-top:6px;">
           ${nhlgOuHeaderHtml("Goals (both teams)")}
           ${nhlgOuRowHtml(gid, "total", NHLG_LABELS.total)}
           ${periodRows}
-        </div>`;
-      expandedHtml = `
-        <div class="lineup-tabs">
-          <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchNhlgPropTab('${gid}','lines')">Game Lines</span>
-          <span class="lineup-tab ${tab === "goalies" ? "active" : ""}" onclick="switchNhlgPropTab('${gid}','goalies')">Goalie Saves</span>
         </div>
-        ${body}`;
+        <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Goalie Saves</div>
+        <div style="margin-top:6px;">${nhlgGoalieSectionHtml(g)}</div>`;
     }
     return `
       <div class="card">
@@ -9235,7 +9207,6 @@
         ${nhlgTeamBlockHtml(g, "away")}
         ${nhlgTeamBlockHtml(g, "home")}
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
-          <span class="hits-toggle" onclick="toggleNhlgProps('${gid}')">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
           ${expandedHtml}
         </div>
       </div>`;
@@ -10320,32 +10291,19 @@
     // format as CFB's formatKickoffPacific. Falls back to the day-only
     // label only when that lookup failed for this game.
     const gamedayLabel = kickoffUtc ? formatKickoffPacific(kickoffUtc) : formatGamedayOnly(gameday);
-    const expanded = expandedNflLinesGames.has(gameId);
-    const tab = activeNflPropTab[gameId] || "lines";
     const awayTeam = pair.away ? pair.away.team : null;
     const homeTeam = pair.home ? pair.home.team : null;
-    let tabContentHtml = "";
-    if (tab === "lines") {
-      tabContentHtml = nflTotalRowHtml(gameId, pair.home, pair.away);
-    } else if (tab === "passing") {
-      tabContentHtml = nflPassingSectionHtml(awayTeam, homeTeam);
-    } else if (tab === "rushing") {
-      tabContentHtml = nflRushingSectionHtml(awayTeam, homeTeam);
-    }
-    const expandedHtml = expanded ? `
-          <div class="lineup-tabs">
-            <span class="lineup-tab ${tab === "lines" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','lines')">Game Lines</span>
-            <span class="lineup-tab ${tab === "passing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','passing')">Passing</span>
-            <span class="lineup-tab ${tab === "rushing" ? "active" : ""}" onclick="switchNflPropTab('${gameId}','rushing')">Rushing Yards</span>
-          </div>
-          <div style="margin-top:10px;">${tabContentHtml}</div>` : "";
+    // Everything is always shown: Game Lines, Passing and Rushing stacked, no Show Props toggle.
+    const expandedHtml = `
+          <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Game Lines</div>${nflTotalRowHtml(gameId, pair.home, pair.away)}
+          <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Passing</div>${nflPassingSectionHtml(awayTeam, homeTeam)}
+          <div class="settings-hint" style="margin:14px 0 4px; font-weight:600;">Rushing Yards</div>${nflRushingSectionHtml(awayTeam, homeTeam)}`;
     return `
       <div class="card">
         <div class="meta">Season ${season} · Week ${week} · ${gamedayLabel}</div>
         ${nflTeamBlockHtml(pair.away, false)}
         ${nflTeamBlockHtml(pair.home, true)}
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);">
-          <span class="hits-toggle" onclick="toggleNflLines('${gameId}')">${expanded ? "Hide Props ▴" : "Show Props ▾"}</span>
           ${expandedHtml}
         </div>
       </div>`;
