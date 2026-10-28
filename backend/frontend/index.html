@@ -2866,6 +2866,7 @@
     } else if (tab === "tennis") {
       loadTennisTab();
     }
+    { const parked = deferredTabRenders["tab-content-" + tab]; if (parked) { delete deferredTabRenders["tab-content-" + tab]; try { parked(); } catch (e) {} } }
     // "mlb" needs nothing extra here - its own sub-tabs (switchMlbSubTab)
     // handle their own loading, and "Live Games" (the default MLB
     // sub-tab) already polls unconditionally from page load.
@@ -5282,8 +5283,26 @@
   const kalshiLoading = {};
   let kalshiIndexCache = {};
 
+  // The Edges tab loads every sport's data in the background; drawing each sport's (large) tab while it is hidden is wasted work.
+  // A hidden tab's redraw is parked here and run when switchTab opens it.
+  const deferredTabRenders = {};
+  function deferIfTabHidden(tabElId, fn) {
+    const el = document.getElementById(tabElId);
+    if (el && el.style.display === "none") { deferredTabRenders[tabElId] = fn; return true; }
+    return false;
+  }
+
+  // kNorm runs thousands of times per Edges scan on the same few strings (every player x every Kalshi market), so cache it.
+  const kNormCache = new Map();
   function kNorm(s) {
-    return String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+    const raw = String(s || "");
+    let out = kNormCache.get(raw);
+    if (out === undefined) {
+      out = raw.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+      if (kNormCache.size > 20000) kNormCache.clear();
+      kNormCache.set(raw, out);
+    }
+    return out;
   }
 
   const K_NFL = { ARI: ["cardinals", "arizona"], ATL: ["falcons", "atlanta"], BAL: ["ravens", "baltimore"], BUF: ["bills", "buffalo"], CAR: ["panthers", "carolina"], CHI: ["bears", "chicago"],
@@ -5416,7 +5435,22 @@
   const kNs = ms => [...new Set(ms.map(kNOf).filter(n => n != null))].sort((x, y) => x - y);
   const kPick = (ms, n, yn) => { const hit = ms.find(m => kNOf(m) === n); return hit ? kPct(hit, yn) : null; };
 
+  // Lookup results only change when the Kalshi snapshot (or the selected book) does, so memoize per snapshot.
+  function kMemo(tag, sport, kind, parts, compute) {
+    kalshiMarkets(sport, kind);   // make sure the kind is requested / loaded
+    const st = kalshiStore[sport];
+    const key = tag + "|" + sport + "|" + kind + "|" + marketBook + "|" + (st ? st.v : "") + "|" + parts.join("|");
+    const hit = kalshiIndexCache[key];
+    if (hit) return hit;
+    const val = compute();
+    kalshiIndexCache[key] = val;
+    return val;
+  }
+
   function kTotalMkts(sport, home, away, date) {
+    return kMemo("T", sport, "total", [home, away, date], () => kTotalMktsRaw(sport, home, away, date));
+  }
+  function kTotalMktsRaw(sport, home, away, date) {
     return kalshiMarkets(sport, "total").filter(m => {
       if (date && m.d && kDayDiff(m.d, date) > 1) return false;
       const text = kNorm((m.ti || "") + " " + (m.ys || ""));
@@ -5427,6 +5461,9 @@
 
   function kPlayerMkts(sport, kind, name, date) {
     if (!name) return [];
+    return kMemo("P", sport, kind, [name, date], () => kPlayerMktsRaw(sport, kind, name, date));
+  }
+  function kPlayerMktsRaw(sport, kind, name, date) {
     const words = String(name).replace(/\b(jr|sr|ii|iii|iv)\b\.?/gi, "").trim().split(/\s+/);
     const full = kNorm(words.join(" "));
     const last = kNorm(words.slice(1).join(" ")) || kNorm(words[0]);
@@ -5450,6 +5487,9 @@
 
   // Team total ("<team> scores at least N"): kind "teamtotal" market whose yes-side text names this team.
   function kTeamMkts(sport, team, date) {
+    return kMemo("M", sport, "teamtotal", [team, date], () => kTeamMktsRaw(sport, team, date));
+  }
+  function kTeamMktsRaw(sport, team, date) {
     const toks = kTeamTokens(sport, team).filter(t => t.length >= 3);
     if (!toks.length) return [];
     return kalshiMarkets(sport, "teamtotal").filter(m => {
@@ -6040,9 +6080,19 @@
   function edgesSetMin(v) { const n = parseFloat(v); edgesMinEdge = isNaN(n) ? 0 : n; renderEdges(); }
   function edgesSetSport(v) { edgesSportFilter = v; renderEdges(); }
 
+  // renderEdges is called from many places at once (each sport finishing its load, every Kalshi refresh, every edit); each call
+  // rescans every bet of every sport, so coalesce bursts into a single scan.
+  let edgesRenderTimer = null;
   function renderEdges() {
+    if (edgesRenderTimer) return;
+    edgesRenderTimer = setTimeout(() => { edgesRenderTimer = null; renderEdgesNow(); }, 150);
+  }
+
+  function renderEdgesNow() {
     const container = document.getElementById("edges-content");
     if (!container) return;
+    const tabEl = document.getElementById("tab-content-edges");
+    if (tabEl && tabEl.style.display === "none") return;   // not visible: it is redrawn when the tab is opened
     let items = collectEdgeItems();
     if (edgesApplyBestSides(items)) items = collectEdgeItems();
     for (const it of items) it.edge = it.sides.cur;
@@ -6766,6 +6816,7 @@
   }
 
   function renderCfbFromCache() {
+    if (deferIfTabHidden("tab-content-cfb", renderCfbFromCache)) return;
     const container = document.getElementById("cfb-content");
     if (!cfbDataCache) return;
     const games = cfbDataCache.games || [];
@@ -6860,6 +6911,7 @@
   }
 
   function rerenderNba() {
+    if (deferIfTabHidden("tab-content-nba", rerenderNba)) return;
     const container = document.getElementById("nba-content");
     if (!container || !nbaDataCache) return;
     const data = nbaDataCache;
@@ -7266,6 +7318,7 @@
   }
 
   function renderTennisFromCache() {
+    if (deferIfTabHidden("tab-content-tennis", renderTennisFromCache)) return;
     const container = document.getElementById("tennis-content");
     if (!container || !tennisData) return;
     const statusEl = document.getElementById("tennis-status");
@@ -7560,6 +7613,7 @@
   function setBlDate(v) { blDateChoice = v; renderBl(); }
 
   function renderBl() {
+    if (deferIfTabHidden("tab-content-soccer", renderBl)) return;
     const container = document.getElementById("bl-content");
     if (!container || !blData) return;
     const statusEl = document.getElementById("bl-status");
@@ -7901,6 +7955,7 @@
   function setEflDate(v) { eflDateChoice = v; renderEfl(); }
 
   function renderEfl() {
+    if (deferIfTabHidden("tab-content-soccer", renderEfl)) return;
     const container = document.getElementById("efl-content");
     if (!container || !eflData) return;
     const statusEl = document.getElementById("efl-status");
@@ -8230,6 +8285,7 @@
   function setJ1Date(v) { j1DateChoice = v; renderJ1(); }
 
   function renderJ1() {
+    if (deferIfTabHidden("tab-content-soccer", renderJ1)) return;
     const container = document.getElementById("j1-content");
     if (!container || !j1Data) return;
     const statusEl = document.getElementById("j1-status");
@@ -8547,6 +8603,7 @@
   function setClDate(v) { clDateChoice = v; renderCl(); }
 
   function renderCl() {
+    if (deferIfTabHidden("tab-content-soccer", renderCl)) return;
     const container = document.getElementById("cl-content");
     if (!container || !clData) return;
     const statusEl = document.getElementById("cl-status");
@@ -9213,6 +9270,7 @@
   }
 
   function renderNhlGamesFromCache() {
+    if (deferIfTabHidden("tab-content-nhl", renderNhlGamesFromCache)) return;
     const container = document.getElementById("nhlg-content");
     if (!container || !nhlgData) return;
     const statusEl = document.getElementById("nhlg-status");
@@ -10310,6 +10368,7 @@
   }
 
   function renderNflPointsFromCache() {
+    if (deferIfTabHidden("tab-content-nfl", renderNflPointsFromCache)) return;
     const container = document.getElementById("nfl-points-content");
     if (!nflPointsDataCache) return;
     const games = nflPointsDataCache.games || [];
