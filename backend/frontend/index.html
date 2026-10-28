@@ -3387,7 +3387,7 @@
              </div>`;
         return `
         <div class="tracked-bet-row">
-          <span>${b.batter_name}</span>
+          <span>${b.batter_name}${(() => { const m = manualInfo(b); return m ? `<div class="settings-hint" id="mcat-${b.id}" style="margin:2px 0 0;">${m.sport} · ${m.type} · <span class="tracked-bet-remove" onclick="editManualCategory(${b.id}, '${m.sport.replace(/'/g, "")}')">change</span></div>` : ""; })()}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
           <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
@@ -3419,7 +3419,6 @@
                "Championship Result (1X2)", "Championship BTTS", "Championship Total Goals", "Championship Team Goals",
                "J1 Result (1X2)", "J1 BTTS", "J1 Total Goals", "J1 Team Goals",
                "Champions LG Result (1X2)", "Champions LG BTTS", "Champions LG Total Goals", "Champions LG Team Goals"],
-    "Other": []
   };
   const MANUAL_ALIAS = { "NHL Period Goals": ["NHL 1st Period Goals", "NHL 2nd Period Goals", "NHL 3rd Period Goals"] };
   const MANUAL_OTHER = "Other (type a name)";
@@ -3494,6 +3493,31 @@
     } catch (e) {
       st.textContent = "Couldn't save the bet (" + e.message + ").";
     }
+  }
+
+  // Move a hand-entered bet to another sport / bet type (so it lands in the right hit-rate boxes).
+  function editManualCategory(id, curSport) {
+    const box = document.getElementById("mcat-" + id);
+    if (!box) return;
+    const sports = Object.keys(MANUAL_TYPES);
+    const sp = sports.includes(curSport) ? curSport : sports[0];
+    box.innerHTML = `
+      <select id="mcat-sport-${id}" onchange="manualCatSportChanged(${id})">${sports.map(x => `<option ${x === sp ? "selected" : ""}>${x}</option>`).join("")}</select>
+      <select id="mcat-type-${id}"></select>
+      <span class="tracked-bet-remove" onclick="saveManualCategory(${id})">save</span>`;
+    manualCatSportChanged(id);
+  }
+  function manualCatSportChanged(id) {
+    const sport = document.getElementById("mcat-sport-" + id).value;
+    document.getElementById("mcat-type-" + id).innerHTML = (MANUAL_TYPES[sport] || []).map(t => `<option>${t}</option>`).join("");
+  }
+  async function saveManualCategory(id) {
+    const sport = document.getElementById("mcat-sport-" + id).value;
+    const type = document.getElementById("mcat-type-" + id).value;
+    try {
+      await fetch(`${API_BASE}/api/bet-tracker/recategorize/${id}?sport=${encodeURIComponent(sport)}&bet_type=${encodeURIComponent(type)}`, { method: "POST" });
+    } catch (e) { /* the reload below shows the true state */ }
+    loadTrackedBets();
   }
 
   async function removeTrackedBet(id) {
