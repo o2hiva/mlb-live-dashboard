@@ -10889,18 +10889,29 @@
     }
     const statusEl = document.getElementById("nfl-points-refresh-status");
     statusEl.textContent = `Refreshing NFL Team Points, Passing and Rushing Yards for ${season} week ${week} - this fetches real data and can take a little while...`;
-    try {
-      await Promise.all([
-        fetch(`${API_BASE}/api/admin/refresh-nfl-points-stats?season=${season}&week=${week}`),
-        fetch(`${API_BASE}/api/admin/refresh-nfl-stats?season=${season}&week=${week}`),
-        fetch(`${API_BASE}/api/admin/refresh-nfl-rushing-stats?season=${season}&week=${week}`),
-        fetch(`${API_BASE}/api/admin/refresh-nfl-qb-defense-props-stats?season=${season}&week=${week}`),
-      ]);
-      statusEl.textContent = `Refreshed for ${season} week ${week}.`;
-      loadNflPointsTab();
-    } catch (e) {
-      statusEl.textContent = "Refresh failed - check the season/week and try again.";
+    // One at a time (they share the database, and a parallel burst made some of them fail silently), and each result is checked:
+    // a step that fails is named instead of the whole thing saying "Refreshed".
+    const steps = [
+      ["Team Points", "refresh-nfl-points-stats"],
+      ["Passing Yards", "refresh-nfl-stats"],
+      ["Rushing Yards", "refresh-nfl-rushing-stats"],
+      ["QB DvP", "refresh-nfl-qb-defense-props-stats"],
+      ["RB DvP", "refresh-nfl-rb-defense-props-stats"],
+    ];
+    const failed = [];
+    for (const [label, path] of steps) {
+      statusEl.textContent = `Refreshing ${label} for ${season} week ${week}... (${steps.findIndex(x => x[1] === path) + 1}/${steps.length})`;
+      try {
+        const res = await fetch(`${API_BASE}/api/admin/${path}?season=${season}&week=${week}`);
+        if (!res.ok) failed.push(`${label} (HTTP ${res.status})`);
+      } catch (e) {
+        failed.push(`${label} (no response)`);
+      }
     }
+    statusEl.textContent = failed.length
+      ? `Refreshed for ${season} week ${week}, but these failed: ${failed.join(", ")}. Try the button again.`
+      : `Refreshed everything for ${season} week ${week}.`;
+    loadNflPointsTab();
   }
 
   // ---- NFL team box (one per side within a matchup card) - identical

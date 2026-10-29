@@ -104,6 +104,16 @@ _league_avg_cache_time = None
 # Fetch functions - both confirmed working against live data.
 # ---------------------------------------------------------------------------
 
+# api.nfldata.org spells a few franchises differently in different endpoints (the schedule says WSH, the player / team stat feeds can
+# say WAS; Jacksonville JAC/JAX, the Rams LA/LAR, ...). Everything is converted to ONE spelling when it is read in, so a team's
+# quarterback and defence are found no matter which endpoint the name came from. A name already in the target spelling is unchanged.
+TEAM_CANON = {"WAS": "WSH", "JAC": "JAX", "LAR": "LA", "OAK": "LV", "SD": "LAC", "STL": "LA"}
+
+
+def canon_team(team):
+    return TEAM_CANON.get(team, team) if team else team
+
+
 def get_season_qbs(season: int, min_attempts: int = LIVE_MIN_SEASON_ATTEMPTS) -> list:
     """All QBs with real season-to-date attempts, from /v1/stats/season
     (paginated). Returns a list of dicts (gsis_id, name, team, games,
@@ -123,7 +133,7 @@ def get_season_qbs(season: int, min_attempts: int = LIVE_MIN_SEASON_ATTEMPTS) ->
                 qbs.append({
                     "gsis_id": row["player_id"],
                     "name": row.get("player_display_name", row.get("player_name", "")),
-                    "team": row.get("recent_team"),
+                    "team": canon_team(row.get("recent_team")),
                     "games": row.get("games", 0) or 0,
                     "attempts": row.get("attempts", 0) or 0,
                     "yards": row.get("passing_yards", 0) or 0,
@@ -144,7 +154,7 @@ def get_all_team_season_stats(season: int) -> dict:
     resp = requests.get(f"{API_BASE}/stats/team", params={"season": season}, timeout=30)
     resp.raise_for_status()
     rows = resp.json().get("data", [])
-    return {r["team"]: {"games": r.get("games", 0) or 0, "attempts": r.get("attempts", 0) or 0,
+    return {canon_team(r["team"]): {"games": r.get("games", 0) or 0, "attempts": r.get("attempts", 0) or 0,
                          "yards": r.get("passing_yards", 0) or 0} for r in rows if r.get("team")}
 
 
@@ -158,7 +168,7 @@ def get_week_games(season: int, week: int) -> dict:
     for g in games:
         if g.get("game_type") != "REG":
             continue
-        away, home = g.get("away_team"), g.get("home_team")
+        away, home = canon_team(g.get("away_team")), canon_team(g.get("home_team"))
         if away and home:
             matchups[away] = home
             matchups[home] = away
@@ -245,6 +255,7 @@ def refresh_nfl_stats(season: int, current_week: int):
     except Exception:
         log.exception("refresh_nfl_stats failed")
         db.rollback()
+        raise   # the admin endpoint must report the failure - swallowing it left old-week matchups showing as "refreshed"
     finally:
         db.close()
 
