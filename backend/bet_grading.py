@@ -217,12 +217,14 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta",
                           "j1_h", "j1_d", "j1_a", "j1_btts", "j1_total", "j1_th", "j1_ta",
                           "sa_h", "sa_d", "sa_a", "sa_btts", "sa_total", "sa_th", "sa_ta",
+                          "epl_h", "epl_d", "epl_a", "epl_btts", "epl_total", "epl_th", "epl_ta",
                           "cl_h", "cl_d", "cl_a", "cl_btts", "cl_total", "cl_th", "cl_ta"}
 
 BL_BET_TYPES = {"bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
 EFL_BET_TYPES = {"efl_h", "efl_d", "efl_a", "efl_btts", "efl_total", "efl_th", "efl_ta"}
 J1_BET_TYPES = {"j1_h", "j1_d", "j1_a", "j1_btts", "j1_total", "j1_th", "j1_ta"}
 SA_BET_TYPES = {"sa_h", "sa_d", "sa_a", "sa_btts", "sa_total", "sa_th", "sa_ta"}
+EPL_BET_TYPES = {"epl_h", "epl_d", "epl_a", "epl_btts", "epl_total", "epl_th", "epl_ta"}
 CL_BET_TYPES = {"cl_h", "cl_d", "cl_a", "cl_btts", "cl_total", "cl_th", "cl_ta"}
 TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
 
@@ -869,7 +871,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES or bet.bet_type in J1_BET_TYPES or bet.bet_type in SA_BET_TYPES or bet.bet_type in CL_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES or bet.bet_type in J1_BET_TYPES or bet.bet_type in SA_BET_TYPES or bet.bet_type in EPL_BET_TYPES or bet.bet_type in CL_BET_TYPES:
                 try:
                     if bet.bet_type in NBA_BET_STATS:
                         graded_nba = _grade_nba_prop(bet)
@@ -883,6 +885,8 @@ def grade_pending_bets() -> dict:
                         graded_nba = _grade_bl_bet(bet, "j1_service", "j1_")
                     elif bet.bet_type in SA_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet, "sa_service", "sa_")
+                    elif bet.bet_type in EPL_BET_TYPES:
+                        graded_nba = _grade_bl_bet(bet, "epl_service", "epl_")
                     elif bet.bet_type in CL_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet, "cl_service", "cl_")
                     else:
