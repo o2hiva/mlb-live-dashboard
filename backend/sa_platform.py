@@ -630,6 +630,9 @@ import sa_data
 LINES_TEAM = (0.5, 1.5, 2.5)
 LINES_TOTAL = (1.5, 2.5, 3.5, 4.5)
 LG_DEFAULT = (1.45, 1.15)
+X12_STRETCH = 1.35   # home/draw/away ONLY: expected goals are stretched away from the league average, x' = lg * (x / lg) ** 1.35, before the three
+#                       probabilities are computed (pooled Serie A / Premier League / La Liga study: k chosen on 2024, leave-one-league-out gain 0.0077 logloss, se 0.0026).
+#                       Totals, team totals, BTTS, scorelines and the displayed expected goals are NOT stretched.  1.0 switches it off.
 FD_URL = "https://www.football-data.co.uk/mmz4281/{s}/I1.csv"
 
 
@@ -661,7 +664,7 @@ def outcome_probs(lh, la, n=14):
     return h / s, d / s, a / s
 
 
-def markets(xh, xa, n=14, draw_boost=1.0, team_lines=(0.5, 1.5, 2.5, 3.5), total_lines=(1.5, 2.5, 3.5, 4.5)):
+def markets(xh, xa, n=14, draw_boost=1.0, team_lines=(0.5, 1.5, 2.5, 3.5), total_lines=(1.5, 2.5, 3.5, 4.5), lg=None):
     """Everything the platform shows for one match from the two expected-goal figures (independent Poisson; optional crude draw boost).
     -> dict(home, draw, away, btts, team_over{home,away}{line}, total_over{line}, scorelines[(h,a,p)] top 6)"""
     ph, pa = pois_pmf(xh, n), pois_pmf(xa, n)
@@ -674,6 +677,16 @@ def markets(xh, xa, n=14, draw_boost=1.0, team_lines=(0.5, 1.5, 2.5, 3.5), total
     H = sum(J[i][j] for i in range(n + 1) for j in range(n + 1) if i > j)
     D = sum(J[i][i] for i in range(n + 1))
     A = 1.0 - H - D
+    if lg is not None and X12_STRETCH != 1.0:                       # calibration step for home/draw/away only (see X12_STRETCH)
+        sh, sa_ = pois_pmf(lg[0] * (max(xh, 1e-6) / lg[0]) ** X12_STRETCH, n), pois_pmf(lg[1] * (max(xa, 1e-6) / lg[1]) ** X12_STRETCH, n)
+        J2 = [[sh[i] * sa_[j] for j in range(n + 1)] for i in range(n + 1)]
+        if draw_boost != 1.0:
+            for k in range(n + 1):
+                J2[k][k] *= draw_boost
+        z2 = sum(sum(r) for r in J2)
+        H = sum(J2[i][j] for i in range(n + 1) for j in range(n + 1) if i > j) / z2
+        D = sum(J2[i][i] for i in range(n + 1)) / z2
+        A = 1.0 - H - D
     mh = [sum(J[i]) for i in range(n + 1)]
     ma = [sum(J[i][j] for i in range(n + 1)) for j in range(n + 1)]
     tot = [0.0] * (2 * n + 1)
@@ -1337,7 +1350,22 @@ def _metrics(rows, hk, ak, k):
     return out
 
 
-def sharpen_study(ms, odds, ts, grid=SHARPEN_GRID, out=print):
+def _dump_rows(rows, mkt, path, league):
+    """Write per-match expected goals (three variants), results and the de-vigged closing 1X2 so leagues can be pooled."""
+    import json as _json
+    recs = []
+    for r in rows:
+        d = {k: r[k] for k in ("id", "season", "hg", "ag", "lgh", "lga", "yh", "ya", "th", "ta", "zh", "za")}
+        d["id"] = str(d["id"])
+        if r["id"] in mkt:
+            d["mkt"] = list(mkt[r["id"]])
+        recs.append(d)
+    with open(path, "w") as f:
+        _json.dump({"league": league, "rows": recs}, f)
+    print(f"wrote {len(recs)} matches to {path}")
+
+
+def sharpen_study(ms, odds, ts, grid=SHARPEN_GRID, out=print, dump=None, league=""):
     """Walk-forward: does stretching the expected goals away from the league average (k > 1) fix the too-timid favourites?
     k is chosen on the tune season only (earlier seasons are burn-in); tested on later seasons.  Previous-XI lineups (deployable)."""
     seasons = sorted({m["season"] for m in ms})
@@ -1413,6 +1441,8 @@ def sharpen_study(ms, odds, ts, grid=SHARPEN_GRID, out=print):
                 entry.setdefault("vs_market", {})[lab] = dm
             out(line)
         results[nm] = entry
+    if dump:
+        _dump_rows(tune_rows + test_rows, mkt, dump, league)
     out("\nRule: adopt sharpening only if, for the platform's variant, the goals loglik AND the 1X2 logloss both improve by more than about two se on the TEST seasons "
         "(k chosen on the tune season, so the test seasons did not choose it) and the O/U 2.5 and team 1.5 Briers do not get worse.  Otherwise leave the model as it is.")
     return results
@@ -1425,7 +1455,7 @@ def cmd_sharpen(a):
     if odds:
         sel = Model(prior90=1e9, team_prior=10.0, half_life=730.0, lg_half_life=240.0).run(ms)
         joined, _ = join_odds([r for r in sel if r["season"] > a.tune_season], odds)
-    sharpen_study(ms, joined, a.tune_season)
+    sharpen_study(ms, joined, a.tune_season, dump=getattr(a, "dump", None), league=getattr(a, "league", "") or "Serie A")
 
 
 def cmd_probe(a, get=None, http=None, today=None, out=print):
@@ -1524,6 +1554,8 @@ if __name__ == "__main__":
     ap.add_argument("--odds", default="sa_odds")
     ap.add_argument("--fd", nargs="+", default=["2324", "2425", "2526", "2627"])
     ap.add_argument("--tune-season", type=int, default=2024)
+    ap.add_argument("--dump", default=None)
+    ap.add_argument("--league", default="")
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--prior", type=float, default=40.0)
     ap.add_argument("--half-life", type=float, default=None)
@@ -1649,8 +1681,8 @@ def market_from_row(row):
     return out if len(out) > 1 else None
 
 
-def _rec_markets(xh, xa, draw_boost=1.0):
-    return bm.markets(xh, xa, draw_boost=draw_boost)
+def _rec_markets(xh, xa, draw_boost=1.0, lg=None):
+    return bm.markets(xh, xa, draw_boost=draw_boost, lg=lg)
 
 
 # ===================================================================== scoring helpers
@@ -1677,8 +1709,8 @@ def score_records(recs, draw_boost=1.0):
         return {"n": 0}
     rows = []
     for r in recs:
-        M = _rec_markets(r["xh"], r["xa"], draw_boost)
-        B = _rec_markets(r["bh"], r["ba"], draw_boost)
+        M = _rec_markets(r["xh"], r["xa"], draw_boost, lg=(r["bh"], r["ba"]))
+        B = _rec_markets(r["bh"], r["ba"], draw_boost, lg=(r["bh"], r["ba"]))
         y = "H" if r["hg"] > r["ag"] else ("D" if r["hg"] == r["ag"] else "A")
         rows.append((r, M, B, y, {"H": M["home"], "D": M["draw"], "A": M["away"]}, {"H": B["home"], "D": B["draw"], "A": B["away"]}))
     ll = lambda p, y: -math.log(max(p[y], 1e-9))
@@ -1927,7 +1959,7 @@ class SerieAPlatform:
     # ------------------------------------------------------------------ views
     def _view(self, rec, fx=None, now=None):
         p = self.params()
-        M = _rec_markets(rec["xh"], rec["xa"], float(p["draw_boost"]))
+        M = _rec_markets(rec["xh"], rec["xa"], float(p["draw_boost"]), lg=(rec["lgh"], rec["lga"]))
         warns = []
         if rec.get("future"):
             if rec.get("lineup_source") != "confirmed":
@@ -1938,7 +1970,7 @@ class SerieAPlatform:
                     warns.append(f"no match history loaded for the {side} team: league-average rating used")
         v = {"id": rec["id"], "home": rec["home"], "away": rec["away"], "expected_goals": {"home": rec["xh"], "away": rec["xa"], "total": rec["xh"] + rec["xa"]},
              "indices": {"home_attack": rec["home_att"], "home_defence": rec["home_def"], "away_attack": rec["away_att"], "away_defence": rec["away_def"],
-                         "league_home_goals": rec["lgh"], "league_away_goals": rec["lga"]},
+                         "league_home_goals": rec["lgh"], "league_away_goals": rec["lga"], "x12_stretch": bm.X12_STRETCH},
              "lineup": {"source": rec.get("lineup_source"), "attackers_defenders_home": rec.get("home_n"), "attackers_defenders_away": rec.get("away_n")},
              "probabilities": {"home": M["home"], "draw": M["draw"], "away": M["away"], "btts": M["btts"]},
              "team_over": M["team_over"], "total_over": M["total_over"],
@@ -2251,7 +2283,7 @@ class SerieAPlatform:
                 rec = run["fut"].get(str(fx["id"]))
                 if rec is None or fx.get("state") != "pre" or not kt or kt <= now:
                     continue
-                M = _rec_markets(rec["xh"], rec["xa"], float(p["draw_boost"]))
+                M = _rec_markets(rec["xh"], rec["xa"], float(p["draw_boost"]), lg=(rec["lgh"], rec["lga"]))
                 row = self._odds_for({"id": fx["id"], "date": kt.date().isoformat(), "home": fx["home"]["name"], "away": fx["away"]["name"]})
                 mk = market_from_row(row)
                 sig = [round(rec["xh"], 3), round(rec["xa"], 3), rec.get("lineup_source"),
@@ -2397,7 +2429,7 @@ class SerieAPlatform:
             joined = bm.join_odds(sel, rows)[0] if rows else {}
             recs, table = [], []
             for r in sel:
-                M = bm.markets(r["xh"], r["xa"], draw_boost=db)
+                M = bm.markets(r["xh"], r["xa"], draw_boost=db, lg=(r["lgh"], r["lga"]))
                 mk = market_from_row(joined.get(r["id"])) or {}
                 y = "H" if r["hg"] > r["ag"] else ("D" if r["hg"] == r["ag"] else "A")
                 p = {"H": M["home"], "D": M["draw"], "A": M["away"]}

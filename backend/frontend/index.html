@@ -526,6 +526,7 @@
       <span id="soccer-sub-btn-cl" class="tab-btn" onclick="switchSoccerSub('cl')">Champions LG</span>
       <span id="soccer-sub-btn-sa" class="tab-btn" onclick="switchSoccerSub('sa')">Serie A</span>
       <span id="soccer-sub-btn-epl" class="tab-btn" onclick="switchSoccerSub('epl')">Premier League</span>
+      <span id="soccer-sub-btn-laliga" class="tab-btn" onclick="switchSoccerSub('laliga')">La Liga</span>
     </div>
     <div id="soccer-sub-bundesliga">
       <div class="tabs">
@@ -645,6 +646,30 @@
         <button class="tab-btn" onclick="loadShadowScorecard('epl','shadow-scorecard-epl',true); loadEplPlatformScorecard()" style="margin-bottom:10px;">Refresh</button>
         <div id="shadow-scorecard-epl"><div class="settings-hint">Open this tab to load.</div></div>
         <div id="epl-platform-scorecard"></div>
+      </div>
+    </div>
+    <div id="soccer-sub-laliga" style="display:none;">
+      <div class="tabs">
+        <span id="laliga-view-btn-games" class="tab-btn active" onclick="switchSportView('laliga','games')">Matches</span>
+        <span id="laliga-view-btn-scorecard" class="tab-btn" onclick="switchSportView('laliga','scorecard')">Scorecard</span>
+      </div>
+      <div id="laliga-games-wrap">
+        <div class="sub">La Liga (Spain) - the player plus-minus goals model for every upcoming match: home / draw / away, both teams to score, total goals and each team's goals, with Edge, Kelly and Wager. Type each price in the Market box (percent, or American odds like -150 / +130). The model has not been backtested on La Liga data here - judge it on the Scorecard.</div>
+        <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
+          <div>
+            <label for="laliga-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+            <select id="laliga-date-select" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px;" onchange="setLaLigaDate(this.value)"></select>
+          </div>
+          <span class="hits-toggle" onclick="loadLaLigaTab()" style="padding:6px 14px;">Refresh</span>
+        </div>
+        <div id="laliga-status" class="settings-hint"></div>
+        <div id="laliga-content">Loading...</div>
+      </div>
+      <div id="laliga-scorecard-wrap" style="display:none;">
+        <div class="sub">La Liga Shadow Scorecard - the model's home / draw / away, both-teams-to-score, total-goals (1.5-4.5) and team-goals (0.5-2.5) probabilities are saved automatically before every kickoff and graded on the final score. No bets are placed. Judge each market after 30+ graded matches.</div>
+        <button class="tab-btn" onclick="loadShadowScorecard('laliga','shadow-scorecard-laliga',true); loadLaLigaPlatformScorecard()" style="margin-bottom:10px;">Refresh</button>
+        <div id="shadow-scorecard-laliga"><div class="settings-hint">Open this tab to load.</div></div>
+        <div id="laliga-platform-scorecard"></div>
       </div>
     </div>
     <div id="soccer-sub-cl" style="display:none;">
@@ -2902,8 +2927,8 @@
     document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
     document.getElementById("tab-btn-soccer").classList.toggle("active", tab === "soccer");
     if (tab === "soccer") {
-      const eflBox = document.getElementById("soccer-sub-efl"), j1Box = document.getElementById("soccer-sub-j1"), clBox = document.getElementById("soccer-sub-cl"), saBox = document.getElementById("soccer-sub-sa"), eplBox = document.getElementById("soccer-sub-epl");
-      if (eflBox && eflBox.style.display !== "none") loadEflTab(); else if (j1Box && j1Box.style.display !== "none") loadJ1Tab(); else if (clBox && clBox.style.display !== "none") loadClTab(); else if (saBox && saBox.style.display !== "none") loadSaTab(); else if (eplBox && eplBox.style.display !== "none") loadEplTab(); else loadBlTab();
+      const eflBox = document.getElementById("soccer-sub-efl"), j1Box = document.getElementById("soccer-sub-j1"), clBox = document.getElementById("soccer-sub-cl"), saBox = document.getElementById("soccer-sub-sa"), eplBox = document.getElementById("soccer-sub-epl"), laligaBox = document.getElementById("soccer-sub-laliga");
+      if (eflBox && eflBox.style.display !== "none") loadEflTab(); else if (j1Box && j1Box.style.display !== "none") loadJ1Tab(); else if (clBox && clBox.style.display !== "none") loadClTab(); else if (saBox && saBox.style.display !== "none") loadSaTab(); else if (eplBox && eplBox.style.display !== "none") loadEplTab(); else if (laligaBox && laligaBox.style.display !== "none") loadLaLigaTab(); else loadBlTab();
     } else if (tab === "edges") {
       loadEdgesTab();
     } else if (tab === "bettracker") {
@@ -3036,6 +3061,7 @@
     if (sport === "cl" && view === "scorecard") loadClPlatformScorecard();
     if (sport === "sa" && view === "scorecard") loadSaPlatformScorecard();
     if (sport === "epl" && view === "scorecard") loadEplPlatformScorecard();
+    if (sport === "laliga" && view === "scorecard") loadLaLigaPlatformScorecard();
   }
 
   // ---- Generic shadow scorecard (any sport registered on the backend: /api/scorecard/{sport}) ----
@@ -3149,6 +3175,10 @@
     { label: "Premier League BTTS", filter: b => b.bet_type === "epl_btts" },
     { label: "Premier League Total Goals", filter: b => b.bet_type === "epl_total" },
     { label: "Premier League Team Goals", filter: b => b.bet_type === "epl_th" || b.bet_type === "epl_ta" },
+    { label: "La Liga Result (1X2)", filter: b => ["laliga_h", "laliga_d", "laliga_a"].includes(b.bet_type) },
+    { label: "La Liga BTTS", filter: b => b.bet_type === "laliga_btts" },
+    { label: "La Liga Total Goals", filter: b => b.bet_type === "laliga_total" },
+    { label: "La Liga Team Goals", filter: b => b.bet_type === "laliga_th" || b.bet_type === "laliga_ta" },
     { label: "Champions LG Result (1X2)", filter: b => ["cl_h", "cl_d", "cl_a"].includes(b.bet_type) },
     { label: "Champions LG BTTS", filter: b => b.bet_type === "cl_btts" },
     { label: "Champions LG Total Goals", filter: b => b.bet_type === "cl_total" },
@@ -3215,7 +3245,7 @@
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
-    { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") },
+    { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") },
   ];
 
   // Top "Hit Rates" group: Overall first, then MLB/NFL/CFB.
@@ -3450,7 +3480,7 @@
           <span>${b.batter_name}${(() => { const m = manualInfo(b); return m ? `<div class="settings-hint" id="mcat-${b.id}" style="margin:2px 0 0;">${m.sport} · ${m.type} · <span class="tracked-bet-remove" onclick="editManualCategory(${b.id}, '${m.sport.replace(/'/g, "")}')">change</span></div>` : ""; })()}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -3480,6 +3510,7 @@
                "J1 Result (1X2)", "J1 BTTS", "J1 Total Goals", "J1 Team Goals",
                "Serie A Result (1X2)", "Serie A BTTS", "Serie A Total Goals", "Serie A Team Goals",
                "Premier League Result (1X2)", "Premier League BTTS", "Premier League Total Goals", "Premier League Team Goals",
+               "La Liga Result (1X2)", "La Liga BTTS", "La Liga Total Goals", "La Liga Team Goals",
                "Champions LG Result (1X2)", "Champions LG BTTS", "Champions LG Total Goals", "Champions LG Team Goals"],
   };
   const MANUAL_ALIAS = { "NHL Period Goals": ["NHL 1st Period Goals", "NHL 2nd Period Goals", "NHL 3rd Period Goals"] };
@@ -5480,7 +5511,7 @@
   }
 
   function kalshiMarkets(sport, kind) {
-    if (marketBook !== "kalshi" || sport === "j1" || sport === "sa" || sport === "epl") return [];   // J1: no Kalshi series - Market boxes are typed   // another book selected: Market boxes are manual
+    if (marketBook !== "kalshi" || sport === "j1" || sport === "sa" || sport === "epl" || sport === "laliga") return [];   // J1: no Kalshi series - Market boxes are typed   // another book selected: Market boxes are manual
     kalshiNeed(sport, kind);
     const st = kalshiStore[sport];
     return st ? st.markets.filter(m => m.k === kind) : [];
@@ -5680,6 +5711,7 @@
       if (vis("tab-content-soccer") && typeof renderJ1 === "function") renderJ1();
       if (vis("tab-content-soccer") && typeof renderSa === "function") renderSa();
       if (vis("tab-content-soccer") && typeof renderEpl === "function") renderEpl();
+      if (vis("tab-content-soccer") && typeof renderLaLiga === "function") renderLaLiga();
       if (vis("tab-content-soccer") && typeof renderCl === "function") renderCl();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
@@ -5965,6 +5997,27 @@
           const group = (b.kind === "btts" ? "BTTS" : isLine ? (b.kind === "total" ? "Total Goals" : "Team Goals") : "Result");
           add("Soccer", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
             html: byBetsRowHtml("Premier League " + group, eplBetName(eplRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
+    // ---- Soccer: La Liga (the model's own backtest says it does not beat the closing market - judge these on the Scorecard) ----
+    if (laligaData && laligaData.events) {
+      for (const ev of laligaData.events) {
+        if (ev.state === "in") continue;
+        for (const b of laligaBetList(ev)) {
+          const key = laligaKey(ev, b);
+          laligaRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+          const c = laligaCalc(key);
+          const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
+          const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateLaLigaField(${k},'yn',this.value)`, `updateLaLigaField(${k},'market',this.value)`,
+            `updateLaLigaField(${k},'useKelly',this.checked)`, `updateLaLigaField(${k},'manualWager',this.value)`, "");
+          cells.ynHtml = `<select onchange="updateLaLigaField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${isLine ? "Over" : "Yes"}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${isLine ? "Under" : "No"}</option></select>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleLaLigaTrack(${k},this.checked)" />`;
+          const group = (b.kind === "btts" ? "BTTS" : isLine ? (b.kind === "total" ? "Total Goals" : "Team Goals") : "Result");
+          add("Soccer", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("La Liga " + group, laligaBetName(laligaRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
         }
       }
     }
@@ -6262,7 +6315,7 @@
     renderEdges();
     const jobs = [];
     if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
-    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), loadLaLigaTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
     // draw as soon as each sport arrives, not only when the slowest finishes
     jobs.forEach(j => j.then(renderEdges, renderEdges));
     await Promise.allSettled(jobs);
@@ -7855,7 +7908,7 @@
   }, 60000);
 
   function switchSoccerSub(sub) {
-    for (const k of ["bundesliga", "efl", "j1", "cl", "sa", "epl"]) {
+    for (const k of ["bundesliga", "efl", "j1", "cl", "sa", "epl", "laliga"]) {
       const box = document.getElementById("soccer-sub-" + k), btn = document.getElementById("soccer-sub-btn-" + k);
       if (box) box.style.display = sub === k ? "block" : "none";
       if (btn) btn.classList.toggle("active", sub === k);
@@ -7866,6 +7919,7 @@
     if (sub === "cl") loadClTab();
     if (sub === "sa") loadSaTab();
     if (sub === "epl") loadEplTab();
+    if (sub === "laliga") loadLaLigaTab();
   }
 
   // ======================================================================================================================
@@ -9186,6 +9240,336 @@
     const a = document.activeElement;
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadEplTab(true);
+  }, 60000);
+
+  // ======================================================================================================================
+  // SOCCER > LA LIGA (SPAIN): the player plus-minus goals model (laliga_platform.py). Per upcoming match: 1X2, both teams to score,
+  // total goals over 1.5-4.5 and each team's goals over 0.5-3.5, all with Market (live Kalshi ask by default), Edge, Kelly, Wager,
+  // Profit and Track. Tracked bets are graded on the final score (bet types laliga_h / laliga_d / laliga_a / laliga_btts / laliga_total / laliga_th / laliga_ta).
+  // The model's own backtest says it does NOT beat the closing market - the tab says so; the Scorecard is the live check.
+  // ======================================================================================================================
+  let laligaData = null;
+  let laligaRows = {};
+  let laligaDateChoice = null;
+  const laligaState = {};
+  const laligaTeamOpen = new Set();
+  const LALIGA_COLS = "minmax(120px, 1.4fr) 56px 38px 38px 56px 64px 52px 46px 30px 58px 54px 40px";
+  const LALIGA_TOTAL_LINES = ["1.5", "2.5", "3.5", "4.5"];
+  const LALIGA_TEAM_LINES = ["0.5", "1.5", "2.5", "3.5"];
+
+  const laligaTotalLine = {};
+  function laligaPoissonOver(mu, line) {
+    const n = Math.floor(parseFloat(line));
+    let term = Math.exp(-mu), cdf = term;
+    for (let i = 1; i <= n; i++) { term *= mu / i; cdf += term; }
+    return Math.max(0, Math.min(1, 1 - cdf));
+  }
+  // probability total goals go over `line`: the model's own number for 1.5-4.5, Poisson on the expected total for any other line
+  function laligaTotalOverProb(ev, line) {
+    const m = ev.total_over && ev.total_over[String(line)];
+    if (m != null) return m;
+    const xg = ev.expected_goals || {};
+    const mu = xg.total != null ? xg.total : (xg.home != null ? xg.home + xg.away : null);
+    return mu == null ? null : laligaPoissonOver(mu, line);
+  }
+  function setLaLigaTotalLine(id, v) {
+    let x = parseFloat(v);
+    if (isNaN(x)) return;
+    x = Math.max(0.5, Math.min(8.5, Math.floor(x) + 0.5));
+    laligaTotalLine[id] = x.toFixed(1);
+    renderLaLiga();
+  }
+
+  function laligaKickoffDate(ev) { return kEtDate(ev.kickoff); }
+
+  // the Kalshi market object for one bet row, or null
+  function laligaKalshiMkt(row, yn) {
+    const ev = row.ev, d = laligaKickoffDate(ev);
+    if (row.kind === "h" || row.kind === "a") {
+      const f = kFindGame("laliga", "game", ev.home, ev.away, d);
+      return f ? (row.kind === "h" ? f.home : f.away) : null;
+    }
+    if (row.kind === "d") {
+      const f = kFindGame("laliga", "game", ev.home, ev.away, d);
+      return f ? (f.ev.ms.find(m => /^(tie|draw)/i.test(String(m.ys || "").trim())) || null) : null;
+    }
+    if (row.kind === "btts") {
+      const th = kTeamTokens("laliga", ev.home).filter(t => t.length >= 3), ta = kTeamTokens("laliga", ev.away).filter(t => t.length >= 3);
+      const hit = kalshiMarkets("laliga", "btts").filter(m => {
+        if (d && m.d && kDayDiff(m.d, d) > 1) return false;
+        const text = kNorm((m.ti || "") + " " + (m.ys || ""));
+        return th.some(t => text.includes(t)) && ta.some(t => text.includes(t));
+      });
+      return hit.length === 1 ? hit[0] : (hit.find(m => /^yes/i.test(String(m.ys || "").trim())) || null);
+    }
+    const n = Math.floor(parseFloat(row.line)) + 1;
+    if (row.kind === "total") return kTotalMkts("laliga", ev.home, ev.away, d).find(m => kNOf(m) === n) || null;
+    if (row.kind === "th" || row.kind === "ta") {
+      const hits = kTeamMkts("laliga", row.kind === "th" ? ev.home : ev.away, d).filter(m => kNOf(m) === n);
+      return hits.length === 1 ? hits[0] : null;
+    }
+    return null;
+  }
+
+  function getLaLigaState(key) {
+    if (!laligaState[key]) laligaState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return liveMarket(laligaState[key], s => { const row = laligaRows[key]; return row ? kPct(laligaKalshiMkt(row, s.yn), s.yn) : null; });
+  }
+
+  function laligaBetList(ev, forCard) {
+    const pr = ev.probabilities || {}, out = [];
+    const nm = ev.home;
+    out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
+    out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
+    out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
+    if (forCard) {
+      const l = laligaTotalLine[ev.id] || "2.5";
+      out.push({ kind: "total", line: l, label: "Total goals", p: laligaTotalOverProb(ev, l), group: "Total", adjustable: true });
+    } else LALIGA_TOTAL_LINES.forEach(l => { if (ev.total_over && ev.total_over[l] != null) out.push({ kind: "total", line: l, label: "Total goals", p: ev.total_over[l], group: "Total" }); });
+    for (const side of ["home", "away"]) {
+      LALIGA_TEAM_LINES.forEach(l => {
+        const v = ev.team_over && ev.team_over[side] ? ev.team_over[side][l] : null;
+        if (v != null) out.push({ kind: side === "home" ? "th" : "ta", line: l, label: `${side === "home" ? ev.home : ev.away} goals`, p: v, group: "Team" });
+      });
+    }
+    return out.filter(b => b.p != null);
+  }
+
+  function laligaKey(ev, b) { return `${ev.id}|${b.kind}|${b.line}`; }
+
+  function laligaCalc(key) {
+    const row = laligaRows[key];
+    if (!row) return null;
+    const st = getLaLigaState(key);
+    const modelProb = st.yn === "yes" ? row.p : 1 - row.p;
+    const market = st.market;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function laligaBetType(kind) { return { h: "laliga_h", d: "laliga_d", a: "laliga_a", btts: "laliga_btts", total: "laliga_total", th: "laliga_th", ta: "laliga_ta" }[kind]; }
+  function laligaBetName(row) {
+    const ev = row.ev;
+    if (row.kind === "h") return `${ev.home} to win`;
+    if (row.kind === "a") return `${ev.away} to win`;
+    if (row.kind === "d") return "Draw";
+    if (row.kind === "btts") return "Both teams to score";
+    if (row.kind === "total") return `Total goals Over ${row.line}`;
+    return `${row.kind === "th" ? ev.home : ev.away} goals Over ${row.line}`;
+  }
+
+  function updateLaLigaField(key, field, value) {
+    const st = getLaLigaState(key);
+    if (field === "market") st.market = (value === "" || isNaN(parseFloat(value))) ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderLaLiga();
+  }
+
+  async function toggleLaLigaTrack(key, checked) {
+    const c = laligaCalc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: laligaBetType(row.kind), external_player_id: String(row.ev.id), batter_name: laligaBetName(row),
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: st.yn,
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; } else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderLaLiga();
+  }
+
+  function laligaQuoteCell(row, st) {
+    const m = laligaKalshiMkt(row, st.yn);
+    if (!m) return `<span class="hits-index" title="No Kalshi market found for this bet">–</span>`;
+    const ask = st.yn === "yes" ? m.ya : m.na;
+    const bid = st.yn === "yes" ? m.yb : m.nb;
+    const c = x => x == null ? "–" : Math.round(x * 100) + "¢";
+    return `<span class="hits-index" title="Kalshi ${st.yn === "yes" ? "YES" : "NO"}: bid ${c(bid)} / ask ${c(ask)}${m.v != null ? " · vol " + Math.round(m.v) : ""}">${c(bid)}/${c(ask)}</span>`;
+  }
+
+  function laligaRowHtml(ev, b) {
+    const key = laligaKey(ev, b);
+    laligaRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label };
+    const c = laligaCalc(key);
+    const { st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const isLine = b.line !== "";
+    const yesPct = b.p * 100, noPct = 100 - yesPct;
+    const live = !st.isManual && market != null;
+    const wagerCell = st.useKelly ? `<span>$${wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateLaLigaField(${k},'manualWager',this.value)" />`;
+    const yes = isLine ? "Over" : "Yes", no = isLine ? "Under" : "No";
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${LALIGA_COLS};">
+        <span style="font-size:0.8rem;">${b.label}</span>
+        ${b.adjustable ? `<input type="number" step="1" min="0.5" max="8.5" value="${b.line}" title="Type or step the total goals line (x.5)" onchange="setLaLigaTotalLine('${ev.id}',this.value)" />` : `<span style="text-align:center;">${isLine ? b.line : "—"}</span>`}
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="updateLaLigaField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
+        ${laligaQuoteCell(laligaRows[key], st)}
+        <input type="number" step="0.1" min="0" max="100" value="${market != null ? market : ""}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Live Kalshi price - type to override, clear to go back to live" : "No Kalshi price found - type your market price"}" onchange="updateLaLigaField(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateLaLigaField(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleLaLigaTrack(${k},this.checked)" />
+      </div>`;
+  }
+
+  function laligaHeaderHtml() {
+    return `<div class="hits-batter hits-batter-header" style="grid-template-columns: ${LALIGA_COLS};"><span>Bet</span><span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Quote</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function laligaFmtKickoff(ev) {
+    if (!ev.kickoff) return "Kickoff TBD";
+    const dt = new Date(ev.kickoff);
+    if (isNaN(dt.getTime())) return "Kickoff TBD";
+    return dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }) + " PT";
+  }
+
+  function toggleLaLigaTeam(id) { if (laligaTeamOpen.has(id)) laligaTeamOpen.delete(id); else laligaTeamOpen.add(id); renderLaLiga(); }
+
+  function laligaEventCardHtml(ev) {
+    const bets = laligaBetList(ev, true);
+    const pc = x => x == null ? "–" : Math.round(x * 100) + "%";
+    const mk = ev.market;
+    const fd = mk && mk.H != null ? `football-data: H ${pc(mk.H)} · D ${pc(mk.D)} · A ${pc(mk.A)}${mk.o25 != null ? " · O2.5 " + pc(mk.o25) : ""}` : "";
+    const ix = ev.indices || {};
+    const idx = ix.home_attack != null ? `attack/defence idx: ${ev.home} ${ix.home_attack.toFixed(2)}/${ix.home_defence.toFixed(2)} · ${ev.away} ${ix.away_attack.toFixed(2)}/${ix.away_defence.toFixed(2)}` : "";
+    const lu = (ev.lineup && ev.lineup.source) === "confirmed" ? "confirmed lineups" : "previous XIs";
+    const xg = ev.expected_goals || {};
+    const scores = (ev.likeliest_scores || []).slice(0, 4).map(s => `${s.score} (${Math.round(s.p * 100)}%)`).join(" · ");
+    const main = bets.filter(b => b.group !== "Team"), team = bets.filter(b => b.group === "Team");
+    const open = laligaTeamOpen.has(ev.id);
+    return `
+      <div class="card">
+        <div class="meta">${laligaFmtKickoff(ev)}${ev.state === "in" ? " · <b>in play</b> (pre-match numbers)" : ""} · ${lu}</div>
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${xg.home != null ? Math.round(xg.home) + " - " + Math.round(xg.away) : ""}</span></div>
+        <div class="meta">predicted score · ${scores ? "likeliest: " + scores : ""}</div>
+        <div class="meta">${[fd, idx].filter(Boolean).join(" · ")}</div>
+        ${(ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("")}
+        ${laligaHeaderHtml()}
+        ${main.map(b => laligaRowHtml(ev, b)).join("")}
+        ${team.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">Team goals</div>${team.map(b => laligaRowHtml(ev, b)).join("")}` : ""}
+      </div>`;
+  }
+
+  function setLaLigaDate(v) { laligaDateChoice = v; renderLaLiga(); }
+
+  function renderLaLiga() {
+    if (deferIfTabHidden("tab-content-soccer", renderLaLiga)) return;
+    const container = document.getElementById("laliga-content");
+    if (!container || !laligaData) return;
+    const statusEl = document.getElementById("laliga-status");
+    const d = laligaData;
+    if (d.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || ["La Liga data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    if (!all.length) {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || []).join(" ") || "No upcoming La Liga matches right now."}${d.needs_bootstrap ? " The first start downloads about three seasons of ESPN data (roughly 15 minutes) - this page fills in by itself." : ""}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const dateKey = ev => (ev.kickoff ? kEtDate(ev.kickoff) : "") || "";
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (laligaDateChoice === null) laligaDateChoice = "";
+    const sel = document.getElementById("laliga-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All upcoming matches (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === laligaDateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      sel.value = laligaDateChoice;
+    }
+    const shown = laligaDateChoice ? all.filter(e => dateKey(e) === laligaDateChoice) : all;
+    laligaRows = {};
+    if (statusEl) {
+      const age = d.fixtures_age_minutes != null ? `fixtures ${Math.round(d.fixtures_age_minutes)} min old` : "";
+      const through = d.data_through ? `results through ${d.data_through}` : "";
+      const warns = (d.warnings || []).filter(w => !/^Reference display/.test(w));
+      statusEl.textContent = [age, through, ...warns].filter(Boolean).join(" · ");
+    }
+    container.innerHTML = `<div class="grid">${shown.map(laligaEventCardHtml).join("")}</div>`;
+  }
+
+  async function loadLaLigaTab(silent) {
+    const container = document.getElementById("laliga-content");
+    if (!silent && !laligaData && container) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/laliga/slate`);
+      laligaData = await res.json();
+      renderLaLiga();
+    } catch (e) {
+      if (!silent && container) container.innerHTML = `<div class="settings-hint">Couldn't load the La Liga matches.</div>`;
+    }
+  }
+
+  // the platform's own record (live, logged before kickoff; and walk-forward season-to-date vs the closing market) under the shadow card
+  async function loadLaLigaPlatformScorecard() {
+    const el = document.getElementById("laliga-platform-scorecard");
+    if (!el) return;
+    el.innerHTML = `<div class="settings-hint">Loading the platform record...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/laliga/scorecard`);
+      const d = await res.json();
+      if (d.status !== "ok") { el.innerHTML = `<div class="settings-hint">Platform record unavailable: ${(d.warnings || ["error"])[0]}</div>`; return; }
+      const f3 = x => x == null ? "–" : Number(x).toFixed(3), f2 = x => x == null ? "–" : Number(x).toFixed(2), pc = x => x == null ? "–" : (x * 100).toFixed(1) + "%";
+      const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;", td = "text-align:right; padding:3px 8px;";
+      const block = (title, r) => {
+        if (!r || !r.n) return `<h3 style="margin:14px 0 4px;">${title}</h3><div class="settings-hint">No settled matches yet.</div>`;
+        const x = r.x12, g = r.goals, o = r.total_over && r.total_over["2.5"];
+        let h = `<h3 style="margin:14px 0 4px;">${title} <span class="settings-hint">(${r.n} matches)</span></h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><th style="${th}"></th><th style="${th}">Model</th><th style="${th}">League avg</th></tr>
+            <tr><td style="${td}">1X2 log loss (lower is better)</td><td style="${td}">${f3(x.logloss)}</td><td style="${td}">${f3(x.logloss_league_avg)}</td></tr>
+            <tr><td style="${td}">1X2 Brier</td><td style="${td}">${f3(x.brier)}</td><td style="${td}">${f3(x.brier_league_avg)}</td></tr>
+            <tr><td style="${td}">Total goals error (MAE)</td><td style="${td}">${f2(g.mae_total)}</td><td style="${td}">${f2(g.mae_total_league_avg)}</td></tr>
+            ${o ? `<tr><td style="${td}">Over 2.5 Brier</td><td style="${td}">${f3(o.brier)}</td><td style="${td}">${f3(o.brier_league_avg)}</td></tr>` : ""}
+            <tr><td style="${td}">Home win: said / happened</td><td style="${td}">${pc(x.home_pred)}</td><td style="${td}">${pc(x.home_rate)}</td></tr>
+            <tr><td style="${td}">Draw: said / happened</td><td style="${td}">${pc(x.draw_pred)}</td><td style="${td}">${pc(x.draw_rate)}</td></tr>
+          </table>`;
+        const vm = r.vs_market_1x2, vo = r.vs_market_ou25;
+        if (vm) h += `<div class="settings-hint" style="margin-top:6px;">vs closing 1X2 market (${vm.n} matches): Brier model ${f3(vm.brier_model)} vs market ${f3(vm.brier_market)} (model minus market ${f3(vm.model_minus_market_brier)} ± ${f3(vm.se)}; negative = model better, only trust beyond 2 se).</div>`;
+        if (vo) h += `<div class="settings-hint">vs closing over/under 2.5 (${vo.n} matches): Brier model ${f3(vo.brier_model)} vs market ${f3(vo.brier_market)} (difference ${f3(vo.model_minus_market_brier)} ± ${f3(vo.se)}).</div>`;
+        return h;
+      };
+      const recent = (d.live_recent || []).map(r => `<tr><td style="${td}">${r.date}</td><td style="text-align:left; padding:3px 8px;">${r.match}</td><td style="${td}">${pc(r.p_home)}</td><td style="${td}">${pc(r.p_draw)}</td><td style="${td}">${pc(r.p_away)}</td><td style="${td}">${pc(r.p_over_2_5)}</td><td style="${td}">${r.result}</td></tr>`).join("");
+      el.innerHTML = `<h2 style="margin-top:22px;">Platform record</h2>
+        <div class="settings-hint">${(d.warnings || []).join(" ")}</div>
+        <div class="settings-hint">${d.logged_predictions || 0} pre-match predictions logged.</div>
+        ${block("Live (logged before kickoff)", d.live)}
+        ${block("Walk-forward season-to-date" + (d.retrospective && d.retrospective.label ? "" : ""), d.retrospective)}
+        ${recent ? `<h3 style="margin:14px 0 4px;">Recent settled matches</h3><table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Date</th><th style="${th}; text-align:left;">Match</th><th style="${th}">Home</th><th style="${th}">Draw</th><th style="${th}">Away</th><th style="${th}">O2.5</th><th style="${th}">Result</th></tr>${recent}</table>` : ""}`;
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the platform record.</div>`;
+    }
+  }
+
+  // re-read the slate every 60 s while the La Liga tab is open (skipped while the viewer is typing); Kalshi prices ride the 60 s Kalshi poll
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-soccer");
+    if (!tab || tab.style.display === "none") return;
+    const sub = document.getElementById("soccer-sub-laliga");
+    if (!sub || sub.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadLaLigaTab(true);
   }, 60000);
 
   // ======================================================================================================================

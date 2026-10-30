@@ -1059,6 +1059,14 @@ def make_epl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
                   "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
 
 
+def make_laliga_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """La Liga (Spain): same markets, same grading (final score) as the Bundesliga card."""
+    return make_bundesliga_adapter(
+        get_events, get_score, sport="laliga", label="La Liga",
+        benchmark="Research model, NOT yet backtested on La Liga data here. Football-data.co.uk lists closing 1X2 and over/under 2.5 prices for La Liga, so the Scorecard compares with them once results are in. "
+                  "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
+
+
 def make_cl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
     """UEFA Champions League: same markets, same grading (regulation score) as the Bundesliga card."""
     return make_bundesliga_adapter(
