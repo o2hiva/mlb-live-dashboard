@@ -625,6 +625,12 @@ class CfbTeamPointsStat(Base):
     games = Column(Integer, default=0)
     points_scored_sum = Column(Integer, default=0)
     points_allowed_sum = Column(Integer, default=0)
+    h_games = Column(Integer, nullable=True)      # home-only split (NULL = row predates the split)
+    h_scored = Column(Integer, nullable=True)
+    h_allowed = Column(Integer, nullable=True)
+    a_games = Column(Integer, nullable=True)      # away-only split
+    a_scored = Column(Integer, nullable=True)
+    a_allowed = Column(Integer, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -646,6 +652,12 @@ class CfbWeekTeamStat(Base):
     games = Column(Integer, default=0)
     points_scored = Column(Integer, default=0)
     points_allowed = Column(Integer, default=0)
+    h_games = Column(Integer, nullable=True)      # home-only split (NULL = row predates the split)
+    h_scored = Column(Integer, nullable=True)
+    h_allowed = Column(Integer, nullable=True)
+    a_games = Column(Integer, nullable=True)      # away-only split
+    a_scored = Column(Integer, nullable=True)
+    a_allowed = Column(Integer, nullable=True)
 
 
 class CfbGame(Base):

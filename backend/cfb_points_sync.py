@@ -348,7 +348,8 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
 
         cached_weeks = {
             w for (w,) in db.query(CfbWeekTeamStat.week)
-                            .filter(CfbWeekTeamStat.season == season, CfbWeekTeamStat.week < current_week)
+                            .filter(CfbWeekTeamStat.season == season, CfbWeekTeamStat.week < current_week,
+                                    CfbWeekTeamStat.h_games.isnot(None))   # rows from before the home/away split are re-fetched once
                             .distinct().all()
         }
 
@@ -358,11 +359,12 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
             if not is_current and week in cached_weeks:
                 weeks_from_cache += 1
                 for row in db.query(CfbWeekTeamStat).filter_by(season=season, week=week).all():
-                    totals = team_totals.setdefault(
-                        row.team, {"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0})
+                    totals = team_totals.setdefault(row.team, dict({"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0, "h_games": 0, "h_scored": 0, "h_allowed": 0, "a_games": 0, "a_scored": 0, "a_allowed": 0}))
                     totals["games"] += row.games
                     totals["points_scored_sum"] += row.points_scored
                     totals["points_allowed_sum"] += row.points_allowed
+                    for _k in ("h_games", "h_scored", "h_allowed", "a_games", "a_scored", "a_allowed"):
+                        totals[_k] += getattr(row, _k) or 0
                 continue
 
             try:
@@ -387,16 +389,23 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 home, away = game["homeTeam"], game["awayTeam"]
                 home_pts, away_pts = game["homePoints"], game["awayPoints"]
 
-                for team, pts, allowed_pts in ((home, home_pts, away_pts), (away, away_pts, home_pts)):
-                    totals = team_totals.setdefault(
-                        team, {"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0})
+                for team, pts, allowed_pts, side in ((home, home_pts, away_pts, "h"), (away, away_pts, home_pts, "a")):
+                    totals = team_totals.setdefault(team, dict({"games": 0, "points_scored_sum": 0, "points_allowed_sum": 0, "h_games": 0, "h_scored": 0, "h_allowed": 0, "a_games": 0, "a_scored": 0, "a_allowed": 0}))
                     totals["games"] += 1
                     totals["points_scored_sum"] += pts
                     totals["points_allowed_sum"] += allowed_pts
-                    wrow = week_rows.setdefault(team, {"games": 0, "points_scored": 0, "points_allowed": 0})
+                    totals[side + "_games"] += 1
+                    totals[side + "_scored"] += pts
+                    totals[side + "_allowed"] += allowed_pts
+                    wrow = week_rows.setdefault(team, {"games": 0, "points_scored": 0, "points_allowed": 0,
+                                                       "h_games": 0, "h_scored": 0, "h_allowed": 0,
+                                                       "a_games": 0, "a_scored": 0, "a_allowed": 0})
                     wrow["games"] += 1
                     wrow["points_scored"] += pts
                     wrow["points_allowed"] += allowed_pts
+                    wrow[side + "_games"] += 1
+                    wrow[side + "_scored"] += pts
+                    wrow[side + "_allowed"] += allowed_pts
 
             if not is_current:
                 # A past week that fetched successfully for the first time -
@@ -412,6 +421,8 @@ def refresh_cfb_points_stats(season: int, current_week: int) -> dict:
                 team=team, games=totals["games"],
                 points_scored_sum=totals["points_scored_sum"],
                 points_allowed_sum=totals["points_allowed_sum"],
+                h_games=totals["h_games"], h_scored=totals["h_scored"], h_allowed=totals["h_allowed"],
+                a_games=totals["a_games"], a_scored=totals["a_scored"], a_allowed=totals["a_allowed"],
             ))
 
         # Current week's real matchups (may include not-yet-played games -

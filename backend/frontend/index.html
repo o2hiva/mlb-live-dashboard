@@ -387,7 +387,23 @@
   <div id="tab-content-cfb" style="display:none;">
     <div class="tabs">
       <span id="subtab-btn-cfb-points" class="tab-btn active" onclick="switchCfbSubTab('points')">Team Points</span>
+      <span id="subtab-btn-cfb-stats" class="tab-btn" onclick="switchCfbSubTab('stats')">Stats</span>
       <span id="subtab-btn-cfb-scorecard" class="tab-btn" onclick="switchCfbSubTab('scorecard')">Scorecard</span>
+    </div>
+
+    <div id="subtab-content-cfb-stats" style="display:none;">
+      <div class="sub">CFB Stats - points scored / points allowed INDEXES (1.00 = league average; shrunk toward average for small samples). Allowed: higher = leakier defense.</div>
+      <div id="cfb-stats-status" class="settings-hint"></div>
+      <div style="border:1px solid rgba(255,255,255,0.15); border-radius:10px; padding:12px; margin:10px 0; background:var(--card);">
+        <div style="font-weight:600; margin-bottom:8px;">Compare: Away vs Home</div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+          <div><label style="font-size:0.8rem; color:var(--muted); display:block;">Away team</label><select id="cfb-stats-away" onchange="renderCfbStatsCompare()" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; min-width:200px;"></select></div>
+          <div><label style="font-size:0.8rem; color:var(--muted); display:block;">Home team</label><select id="cfb-stats-home" onchange="renderCfbStatsCompare()" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; min-width:200px;"></select></div>
+        </div>
+        <div id="cfb-stats-compare" class="settings-hint">Pick two teams.</div>
+      </div>
+      <input id="cfb-stats-filter" placeholder="Filter teams..." oninput="renderCfbStatsTable()" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; margin-bottom:8px;" />
+      <div id="cfb-stats-table" style="overflow-x:auto;">Open this tab to load.</div>
     </div>
 
     <div id="subtab-content-cfb-scorecard" style="display:none;">
@@ -3013,9 +3029,94 @@
     }
   }
 
+  // ---- CFB Stats tab: indexes (overall / home / away) + away-vs-home compare box
+  let cfbStatsData = null;
+  let cfbStatsSort = { key: "team", dir: 1 };
+  async function loadCfbStats() {
+    const st = document.getElementById("cfb-stats-status");
+    try {
+      const r = await fetch("/api/cfb/stats");
+      cfbStatsData = await r.json();
+    } catch (e) { st.textContent = "Failed to load: " + e; return; }
+    const teams = cfbStatsData.teams || [];
+    const noSplit = teams.length && teams.every(t => t.home.games === null);
+    st.textContent = teams.length ? ("League avg " + (cfbStatsData.league_avg_points || 0).toFixed(1) + " pts/team/game." +
+      (noSplit ? " Home/away splits are empty - press Refresh Stats on the Team Points tab once to build them." : ""))
+      : "No data yet - press Refresh Stats on the Team Points tab.";
+    const opts = '<option value="">-- select --</option>' + teams.map(t => '<option value="' + t.team.replace(/"/g, "&quot;") + '">' + t.team + '</option>').join("");
+    for (const id of ["cfb-stats-away", "cfb-stats-home"]) {
+      const el = document.getElementById(id), prev = el.value;
+      el.innerHTML = opts; el.value = prev;
+    }
+    renderCfbStatsTable(); renderCfbStatsCompare();
+  }
+  function cfbIdxCell(v) {
+    if (v === null || v === undefined) return '<td style="text-align:right; color:var(--muted);">-</td>';
+    const col = v >= 1.1 ? "#4ade80" : v <= 0.9 ? "#f87171" : "inherit";
+    return '<td style="text-align:right; color:' + col + ';">' + v.toFixed(2) + '</td>';
+  }
+  function cfbStatsVal(t, key) {
+    if (key === "team") return t.team.toLowerCase();
+    const [scope, f] = key.split(".");
+    const v = t[scope][f];
+    return v === null ? -Infinity : v;
+  }
+  function sortCfbStats(key) {
+    cfbStatsSort = { key, dir: cfbStatsSort.key === key ? -cfbStatsSort.dir : (key === "team" ? 1 : -1) };
+    renderCfbStatsTable();
+  }
+  function renderCfbStatsTable() {
+    const el = document.getElementById("cfb-stats-table");
+    if (!cfbStatsData) return;
+    const q = (document.getElementById("cfb-stats-filter").value || "").toLowerCase();
+    const rows = (cfbStatsData.teams || []).filter(t => t.team.toLowerCase().includes(q));
+    const { key, dir } = cfbStatsSort;
+    rows.sort((a, b) => { const x = cfbStatsVal(a, key), y = cfbStatsVal(b, key); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
+    const th = (label, k) => '<th style="cursor:pointer; text-align:' + (k === "team" ? "left" : "right") + '; padding:4px 8px;" onclick="sortCfbStats(\'' + k + '\')">' + label + (cfbStatsSort.key === k ? (dir > 0 ? " ▲" : " ▼") : "") + '</th>';
+    let html = '<table style="width:100%; border-collapse:collapse; font-size:0.85rem;"><thead>' +
+      '<tr><th></th><th colspan="3" style="text-align:center;">Overall</th><th colspan="3" style="text-align:center;">Home</th><th colspan="3" style="text-align:center;">Away</th></tr><tr>' +
+      th("Team", "team") +
+      th("GP", "overall.games") + th("Scored", "overall.scored_index") + th("Allowed", "overall.allowed_index") +
+      th("GP", "home.games") + th("Scored", "home.scored_index") + th("Allowed", "home.allowed_index") +
+      th("GP", "away.games") + th("Scored", "away.scored_index") + th("Allowed", "away.allowed_index") +
+      '</tr></thead><tbody>';
+    for (const t of rows) {
+      html += '<tr style="border-top:1px solid rgba(255,255,255,0.08);"><td style="padding:4px 8px;">' + t.team + '</td>';
+      for (const s of ["overall", "home", "away"]) {
+        const p = t[s];
+        html += '<td style="text-align:right; color:var(--muted);">' + (p.games === null ? "-" : p.games) + '</td>' + cfbIdxCell(p.scored_index) + cfbIdxCell(p.allowed_index);
+      }
+      html += '</tr>';
+    }
+    el.innerHTML = html + '</tbody></table>';
+  }
+  function renderCfbStatsCompare() {
+    const el = document.getElementById("cfb-stats-compare");
+    if (!cfbStatsData) return;
+    const a = (cfbStatsData.teams || []).find(t => t.team === document.getElementById("cfb-stats-away").value);
+    const h = (cfbStatsData.teams || []).find(t => t.team === document.getElementById("cfb-stats-home").value);
+    if (!a || !h) { el.textContent = "Pick two teams."; return; }
+    const f = v => (v === null || v === undefined) ? "-" : v.toFixed(2);
+    // Away team's road indexes vs home team's home indexes; cross rows are the matchup (offense index x opposing defense index)
+    const lg = cfbStatsData.league_avg_points || 0;
+    const proj = (off, def) => (off === null || def === null) ? "-" : (off * def * lg).toFixed(1);
+    const row = (label, x, y) => '<tr style="border-top:1px solid rgba(255,255,255,0.08);"><td style="padding:4px 8px;">' + label + '</td><td style="text-align:right;">' + x + '</td><td style="text-align:right;">' + y + '</td></tr>';
+    el.innerHTML = '<table style="width:100%; max-width:560px; border-collapse:collapse; font-size:0.9rem;"><thead><tr><th></th><th style="text-align:right; padding:4px 8px;">' + a.team + ' (away)</th><th style="text-align:right; padding:4px 8px;">' + h.team + ' (home)</th></tr></thead><tbody>' +
+      row("Games (road / home)", a.away.games ?? "-", h.home.games ?? "-") +
+      row("Points scored index - road / home", f(a.away.scored_index), f(h.home.scored_index)) +
+      row("Points allowed index - road / home", f(a.away.allowed_index), f(h.home.allowed_index)) +
+      row("Scored index - overall", f(a.overall.scored_index), f(h.overall.scored_index)) +
+      row("Allowed index - overall", f(a.overall.allowed_index), f(h.overall.allowed_index)) +
+      row("Projected points (split-based)", proj(a.away.scored_index, h.home.allowed_index), proj(h.home.scored_index, a.away.allowed_index)) +
+      '</tbody></table><div class="settings-hint" style="margin-top:6px;">Projected = own scoring index x opponent allowed index x league avg, using away indexes for the visitor and home indexes for the host. Informational; the Team Points tab uses overall indexes.</div>';
+  }
+
   function switchCfbSubTab(subtab) {
     document.getElementById("subtab-content-cfb-points").style.display = subtab === "points" ? "block" : "none";
     document.getElementById("subtab-btn-cfb-points").classList.toggle("active", subtab === "points");
+    document.getElementById("subtab-content-cfb-stats").style.display = subtab === "stats" ? "block" : "none";
+    document.getElementById("subtab-btn-cfb-stats").classList.toggle("active", subtab === "stats");
+    if (subtab === "stats") loadCfbStats();
     document.getElementById("subtab-content-cfb-scorecard").style.display = subtab === "scorecard" ? "block" : "none";
     document.getElementById("subtab-btn-cfb-scorecard").classList.toggle("active", subtab === "scorecard");
     if (subtab === "scorecard") loadShadowScorecard("cfb", "shadow-scorecard-cfb", false);

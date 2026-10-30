@@ -73,6 +73,18 @@ _ensure_column("tracked_bets", "cfb_week", "INTEGER")
 _ensure_column("tracked_bets", "spread_line", "FLOAT")
 _ensure_column("tracked_bets", "nfl_season", "INTEGER")
 _ensure_column("tracked_bets", "nfl_week", "INTEGER")
+_ensure_column("cfb_team_points_stats", "h_games", "INTEGER")
+_ensure_column("cfb_team_points_stats", "h_scored", "INTEGER")
+_ensure_column("cfb_team_points_stats", "h_allowed", "INTEGER")
+_ensure_column("cfb_team_points_stats", "a_games", "INTEGER")
+_ensure_column("cfb_team_points_stats", "a_scored", "INTEGER")
+_ensure_column("cfb_team_points_stats", "a_allowed", "INTEGER")
+_ensure_column("cfb_week_team_stats", "h_games", "INTEGER")
+_ensure_column("cfb_week_team_stats", "h_scored", "INTEGER")
+_ensure_column("cfb_week_team_stats", "h_allowed", "INTEGER")
+_ensure_column("cfb_week_team_stats", "a_games", "INTEGER")
+_ensure_column("cfb_week_team_stats", "a_scored", "INTEGER")
+_ensure_column("cfb_week_team_stats", "a_allowed", "INTEGER")
 _ensure_column("nfl_qb_defense_prop_stats", "passing_completions_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_qb_defense_prop_stats", "passing_attempts_sum", "INTEGER DEFAULT 0")
 _ensure_column("nfl_qb_defense_prop_stats", "rushing_attempts_sum", "INTEGER DEFAULT 0")
@@ -1531,6 +1543,37 @@ def manual_refresh_cfb_stats(season: int, week: int):
         logging.getLogger("main").exception("CFB refresh failed")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
     return {"status": "refreshed", "season": season, "week": week, **summary}
+
+
+@app.get("/api/cfb/stats")
+def cfb_stats(db: Session = Depends(get_db)):
+    """Per-team points-scored / points-allowed INDEXES (same shrunk-vs-league-average
+    formula the Team Points prediction uses), overall plus home-only and away-only.
+    index > 1.00 = above league average. For allowed, >1.00 = leakier defense.
+    Home/away values are null until Refresh Stats has run once after the split columns were added."""
+    from models_db import CfbTeamPointsStat
+    import cfb_points_sync as cps
+    league_avg = cps.get_league_avg_points(db)
+    k = cps.DEFAULT_POINTS_SHRINKAGE_K
+
+    def idx(total, n):
+        return round(cps._shrunk_avg(total, n, k, league_avg) / league_avg, 3)
+
+    def pair(n, sc, al):
+        if n is None:
+            return {"games": None, "scored_index": None, "allowed_index": None}
+        return {"games": n, "scored_index": idx(sc or 0, n), "allowed_index": idx(al or 0, n)}
+
+    teams = []
+    for r in db.query(CfbTeamPointsStat).all():
+        teams.append({
+            "team": r.team,
+            "overall": pair(r.games or 0, r.points_scored_sum, r.points_allowed_sum),
+            "home": pair(r.h_games, r.h_scored, r.h_allowed),
+            "away": pair(r.a_games, r.a_scored, r.a_allowed),
+        })
+    teams.sort(key=lambda t: t["team"])
+    return {"league_avg_points": league_avg, "teams": teams}
 
 
 @app.get("/api/cfb/games")
