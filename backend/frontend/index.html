@@ -599,7 +599,7 @@
         <span id="j1-view-btn-scorecard" class="tab-btn" onclick="switchSportView('j1','scorecard')">Scorecard</span>
       </div>
       <div id="j1-games-wrap">
-        <div class="sub">J1 League (Japan) - the player plus-minus goals model for every upcoming match: home / draw / away, both teams to score, total goals and each team's goals, with Edge, Kelly and Wager. There is no Kalshi J1 series, so type each price in the Market box (percent, or American odds like -150 / +130). The model has not been backtested on J1 data yet - judge it on the Scorecard.</div>
+        <div class="sub">J1 League (Japan) - the player plus-minus goals model for every upcoming match: home / draw / away, both teams to score, total goals and each team's goals, with Edge, Kelly and Wager. Home / draw / away Market boxes fill from the stored price when one is posted (refreshed every 15 minutes); for every other bet type the price in the Market box (percent, or American odds like -150 / +130). The model has not been backtested on J1 data yet - judge it on the Scorecard.</div>
         <div style="display:flex; align-items:flex-end; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
           <div>
             <label for="j1-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
@@ -7808,9 +7808,9 @@
   function blBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = blTotalLine[ev.id] || "2.5";
@@ -8154,9 +8154,9 @@
   function eflBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = eflTotalLine[ev.id] || "2.5";
@@ -8478,15 +8478,15 @@
 
   function getJ1State(key) {
     if (!j1State[key]) j1State[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
-    return liveMarket(j1State[key], s => { const row = j1Rows[key]; return row ? kPct(j1KalshiMkt(row, s.yn), s.yn) : null; });
+    return liveMarket(j1State[key], s => { const row = j1Rows[key]; if (!row) return null; const sp = j1ServerPct(row, s.yn); return sp != null ? sp : kPct(j1KalshiMkt(row, s.yn), s.yn); });
   }
 
   function j1BetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = j1TotalLine[ev.id] || "2.5";
@@ -8559,7 +8559,17 @@
     renderJ1();
   }
 
+  // The server stores the J1 Kalshi win/draw/loss prices (refreshed every 15 min, normalised to sum to 1) and puts the market on each slate event as ev.market.
+  function j1ServerPct(row, yn) {
+    if (marketBook !== "kalshi" || !["h", "d", "a"].includes(row.kind)) return null;
+    const mk = row.ev && row.ev.market, p = mk ? mk[row.kind.toUpperCase()] : null;
+    if (p == null || p <= 0 || p >= 1) return null;
+    return Math.round((yn === "no" ? 1 - p : p) * 1000) / 10;
+  }
+
   function j1QuoteCell(row, st) {
+    const sp = j1ServerPct(row, st.yn);
+    if (sp != null) return `<span class="hits-index" title="Market price from the server (${(row.ev.market && row.ev.market.src) || "stored"} snapshot)">${sp.toFixed(1)}%</span>`;
     const m = j1KalshiMkt(row, st.yn);
     if (!m) return `<span class="hits-index" title="No Kalshi market found for this bet">–</span>`;
     const ask = st.yn === "yes" ? m.ya : m.na;
@@ -8814,9 +8824,9 @@
   function saBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = saTotalLine[ev.id] || "2.5";
@@ -9144,9 +9154,9 @@
   function eplBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = eplTotalLine[ev.id] || "2.5";
@@ -9474,9 +9484,9 @@
   function laligaBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = laligaTotalLine[ev.id] || "2.5";
@@ -9805,9 +9815,9 @@
   function aleagueBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = aleagueTotalLine[ev.id] || "2.5";
@@ -10133,9 +10143,9 @@
   function clBetList(ev, forCard) {
     const pr = ev.probabilities || {}, out = [];
     const nm = ev.home;
+    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "h", line: "", label: `${ev.home} win`, p: pr.home, group: "1X2" });
     out.push({ kind: "d", line: "", label: "Draw", p: pr.draw, group: "1X2" });
-    out.push({ kind: "a", line: "", label: `${ev.away} win`, p: pr.away, group: "1X2" });
     out.push({ kind: "btts", line: "", label: "Both teams score", p: pr.btts, group: "BTTS" });
     if (forCard) {
       const l = clTotalLine[ev.id] || "2.5";
