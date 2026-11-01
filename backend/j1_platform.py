@@ -1116,7 +1116,9 @@ ALIAS = {"urawa reds": "urawa red diamonds", "urawa": "urawa red diamonds", "yok
          "hiroshima": "sanfrecce hiroshima", "nagoya": "nagoya grampus", "tokyo": "fc tokyo", "verdy": "tokyo verdy", "machida": "machida zelvia",
          "kyoto": "kyoto sanga", "fukuoka": "avispa fukuoka", "shonan": "shonan bellmare", "niigata": "albirex niigata", "kashiwa": "kashiwa reysol",
          "tosu": "sagan tosu", "iwata": "jubilo iwata", "okayama": "fagiano okayama", "nagasaki": "v varen nagasaki", "mito": "mito hollyhock",
-         "chiba": "jef united chiba", "shimizu": "shimizu s pulse", "oita": "oita trinita", "tokushima": "tokushima vortis", "kofu": "ventforet kofu"}
+         "chiba": "jef united chiba", "shimizu": "shimizu s pulse", "oita": "oita trinita", "tokushima": "tokushima vortis", "kofu": "ventforet kofu",
+         "vvaren": "v varen nagasaki", "vvaren nagasaki": "v varen nagasaki", "avispa": "avispa fukuoka", "frontale": "kawasaki frontale", "machida z": "machida zelvia",
+         "mito h": "mito hollyhock", "united chiba": "jef united chiba", "jef united": "jef united chiba", "yokohama fm": "yokohama f marinos", "yokohama fc": "yokohama fc"}
 
 
 def nsim(a, b):
@@ -1566,7 +1568,7 @@ def _stat_key(*paths):
 
 
 def _http_bytes(url, timeout=60):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (sports-hub-j1)", "Accept": "text/csv,*/*"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (sports-hub-j1)", "Accept": "text/csv,application/json,*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -1627,6 +1629,90 @@ def _se(xs):
         return None
     m = sum(xs) / n
     return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1) / n)
+
+
+KALSHI_BASE = os.environ.get("J1_KALSHI_BASE", "https://api.elections.kalshi.com/trade-api/v2")
+KALSHI_SERIES = "KXJLEAGUEGAME"
+KALSHI_FILE, KALSHI_SNAP = "j1_kalshi.json", "j1_kalshi_snapshots.jsonl"
+KALSHI_MAX_AGE_H = 24.0          # a stored Kalshi pull older than this is not shown or logged
+KALSHI_WIDE_SPREAD = 0.15        # bid/ask gap above which a price is flagged as soft
+KALSHI_MAX_SPREAD = 0.30         # a book wider than this is placeholder quotes, not a price (e.g. 0.06 / 0.80 on a newly listed match)
+
+
+def _kf(x):
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def kalshi_quote(m):
+    """One Kalshi yes-market -> (probability, bid/ask spread or None).
+    Uses the bid/ask midpoint when both sides are quoted; falls back to the last trade; None if neither exists."""
+    b, a, last = _kf(m.get("yes_bid_dollars")), _kf(m.get("yes_ask_dollars")), _kf(m.get("last_price_dollars"))
+    if b is not None and a is not None and 0.0 < b <= a < 1.0 and (a - b) <= KALSHI_MAX_SPREAD:
+        return (a + b) / 2.0, a - b
+    if last is not None and 0.0 < last < 1.0:
+        return last, None
+    return None, None
+
+
+def kalshi_parse(markets):
+    """Raw Kalshi markets (one series) -> {event_ticker: {teams:[a,b], p:{a,b,tie} (raw mids), spread, kickoff, asof}}.
+    Only events with BOTH team markets and the Tie market, all open and priced, are kept; the rest are listed in 'skipped'."""
+    by = {}
+    for m in markets:
+        if (m.get("status") or "active") not in ("active", "open"):
+            continue
+        by.setdefault(m.get("event_ticker"), []).append(m)
+    out, skipped = {}, []
+    for ev, ms in by.items():
+        tie = [m for m in ms if (m.get("yes_sub_title") or "").strip().lower() == "tie"]
+        teams = [m for m in ms if m not in tie]
+        if len(tie) != 1 or len(teams) != 2:
+            skipped.append(f"{ev}: {len(teams)} team markets, {len(tie)} tie markets")
+            continue
+        q = [kalshi_quote(m) for m in teams + tie]
+        if any(p is None for p, _ in q):
+            skipped.append(f"{ev}: a market has no bid/ask or last price")
+            continue
+        names = [m["yes_sub_title"].strip() for m in teams]
+        sp = [s for _, s in q if s is not None]
+        out[ev] = {"teams": names, "p": {names[0]: q[0][0], names[1]: q[1][0], "tie": q[2][0]},
+                   "spread": max(sp) if sp else None, "kickoff": teams[0].get("occurrence_datetime") or teams[0].get("expected_expiration_time"),
+                   "volume": sum(_kf(m.get("volume_fp")) or 0.0 for m in ms)}
+    return out, skipped
+
+
+def kalshi_match(ev, fixtures, hours=40, universe=()):
+    """Kalshi event -> (fixture, {H,D,A} normalised, flags) by team NAMES (Kalshi's team order is not trusted), or (None, None, reason)."""
+    ko = _parse_iso(ev.get("kickoff"))
+    a, b = ev["teams"]
+    best = None
+    uni = sorted(set(universe) | {n for f in fixtures for n in (f["home"]["name"], f["away"]["name"])})
+
+    def is_it(name, club):
+        """name belongs to this club only if no other club in the league is a better match for it."""
+        sc = bm.nsim(name, club)
+        return sc >= 0.78 and all(bm.nsim(name, u) <= sc + 1e-9 for u in uni if u != club)
+    for fx in fixtures:
+        kt = _parse_iso(fx.get("date"))
+        if not kt or (ko and abs((kt - ko).total_seconds()) > hours * 3600):
+            continue
+        h, w = fx["home"]["name"], fx["away"]["name"]
+        for swapped, (x, y) in ((False, (a, b)), (True, (b, a))):
+            if is_it(x, h) and is_it(y, w):
+                sc = bm.nsim(x, h) + bm.nsim(y, w)
+                if best is None or sc > best[0]:
+                    best = (sc, fx, swapped)
+    if best is None:
+        return None, None, f"no fixture within {hours}h matches '{a}' vs '{b}' (add the club to ALIAS if it is a naming difference)"
+    _, fx, swapped = best
+    ph, pa = (ev["p"][b], ev["p"][a]) if swapped else (ev["p"][a], ev["p"][b])
+    z = ph + pa + ev["p"]["tie"]
+    return fx, {"H": ph / z, "D": ev["p"]["tie"] / z, "A": pa / z, "overround": z - 1.0}, None
+
 
 
 def score_records(recs, draw_boost=1.0):
@@ -1909,8 +1995,13 @@ class J1Platform:
             row = self._odds_for({"id": fx["id"], "date": (_parse_iso(fx.get("date")) or datetime.datetime(2000, 1, 1)).date().isoformat(),
                                   "home": fx["home"]["name"], "away": fx["away"]["name"]})
             mk = market_from_row(row)
+            src = "football-data.co.uk (as of its last update; can be days old, usually closer to kickoff the better)"
+            if not mk:
+                mk = self._kalshi_mk(fx)
+                if mk:
+                    src = "Kalshi bid/ask midpoint, normalised to sum to 1 (as of " + str(mk["asof"])[:16] + "; thin books: treat wide-spread prices as soft)"
             if mk:
-                v["market"] = {"source": "football-data.co.uk (as of its last update; can be days old, usually closer to kickoff the better)", **mk}
+                v["market"] = {"source": src, **mk}
                 if mk.get("H") is not None:
                     v["market"]["model_minus_market"] = {"home": M["home"] - mk["H"], "draw": M["draw"] - mk["D"], "away": M["away"] - mk["A"]}
                 if mk.get("o25") is not None:
@@ -2199,7 +2290,7 @@ class J1Platform:
                     continue
                 M = _rec_markets(rec["xh"], rec["xa"], float(p["draw_boost"]))
                 row = self._odds_for({"id": fx["id"], "date": kt.date().isoformat(), "home": fx["home"]["name"], "away": fx["away"]["name"]})
-                mk = market_from_row(row)
+                mk = market_from_row(row) or self._kalshi_mk(fx)
                 sig = [round(rec["xh"], 3), round(rec["xa"], 3), rec.get("lineup_source"),
                        None if not mk else [round(mk.get("H") or 0, 3), round(mk.get("o25") or 0, 3)]]
                 if sigs.get(str(fx["id"])) == sig:
@@ -2216,6 +2307,98 @@ class J1Platform:
             return n
         finally:
             lock.release()
+
+    # ------------------------------------------------------------------ Kalshi market prices
+    def _kalshi_store(self):
+        try:
+            return load_json_retry(self._p(KALSHI_FILE), None)
+        except Exception:                                  # noqa: BLE001
+            return None
+
+    def refresh_kalshi(self):
+        """Pull the open J1 League 'game' markets from Kalshi's public API (no key), keep the latest in a file and
+        append a snapshot whenever a price moved (this builds the closing-price record the league otherwise lacks)."""
+        if self._busy.get("kalshi"):
+            return {"status": "ok", "warnings": ["a Kalshi refresh is already running"]}
+        self._busy["kalshi"] = True
+        warns, raw, cursor = [], [], None
+        try:
+            for _ in range(6):
+                url = f"{KALSHI_BASE}/markets?series_ticker={KALSHI_SERIES}&status=open&limit=1000" + (f"&cursor={cursor}" if cursor else "")
+                try:
+                    doc = json.loads(self._http(url).decode("utf-8", "replace"))
+                except Exception as e:                     # noqa: BLE001
+                    return {"status": "failed", "warnings": [f"Kalshi fetch failed: {type(e).__name__}: {e}"]}
+                raw += doc.get("markets") or []
+                cursor = doc.get("cursor")
+                if not cursor or not doc.get("markets"):
+                    break
+            events, skipped = kalshi_parse(raw)
+            warns += skipped
+            fb = self._fixtures_blob() or {}
+            fxs = [fx for fx in fb.get("events", []) if fx.get("state") == "pre"]
+            now = self._now()
+            if not fxs:
+                warns.append("no upcoming fixtures are loaded yet, so nothing can be matched: run `fixtures` (or `daily`) first")
+            keep, rows, unmatched = {}, [], []
+            for ev_t, ev in events.items():
+                fx, q, why = kalshi_match(ev, fxs, universe=self._club_names())
+                if fx is None:
+                    unmatched.append(why)
+                    continue
+                keep[str(fx["id"])] = {"event": ev_t, "home": fx["home"]["name"], "away": fx["away"]["name"], "kickoff": fx.get("date"),
+                                       "H": q["H"], "D": q["D"], "A": q["A"], "overround": q["overround"], "spread": ev["spread"], "volume": ev["volume"],
+                                       "wide": bool(ev["spread"] is not None and ev["spread"] > KALSHI_WIDE_SPREAD), "kalshi_names": ev["teams"]}
+                rows.append(keep[str(fx["id"])])
+            if fxs:
+                warns += unmatched
+            atomic_json_dump(self._p(KALSHI_FILE), clean({"fetched_at": now.isoformat(), "series": KALSHI_SERIES, "by_fixture": keep}))
+            sig_p = self._p(KALSHI_SNAP)
+            last = {}
+            if os.path.exists(sig_p):
+                with open(sig_p) as f:
+                    for line in f:
+                        try:
+                            r = json.loads(line)
+                            last[r["id"]] = (round(r["H"], 3), round(r["D"], 3))
+                        except (ValueError, KeyError):
+                            continue
+            new = [json.dumps(clean({"id": i, "at": now.isoformat(), **{k: v[k] for k in ("event", "home", "away", "kickoff", "H", "D", "A", "overround", "spread")}}))
+                   for i, v in keep.items() if last.get(i) != (round(v["H"], 3), round(v["D"], 3))]
+            if new:
+                with open(sig_p, "a") as f:
+                    f.write("\n".join(new) + "\n")
+            self._save_state(kalshi_at=now.isoformat(), kalshi_matched=len(keep))
+            logged = 0
+            try:
+                logged = self._log_slate() if (self._log_on and keep) else 0
+            except Exception as e:                         # noqa: BLE001
+                warns.append(f"log after Kalshi pull failed: {type(e).__name__}: {e}")
+            return {"status": "ok", "markets_read": len(raw), "events": len(events), "matched": len(keep), "unmatched": len(unmatched),
+                    "snapshots_added": len(new), "logged": logged, "warnings": warns,
+                    "table": [{"match": f"{r['home']} v {r['away']}", "kickoff": (r["kickoff"] or "")[:16], "H": r["H"], "D": r["D"], "A": r["A"],
+                               "spread": r["spread"], "wide": r["wide"]} for r in sorted(rows, key=lambda r: r["kickoff"] or "")]}
+        finally:
+            self._busy["kalshi"] = False
+
+    def _club_names(self):
+        try:
+            return sorted({n for m in self.matches() for n in (m["home"], m["away"])})
+        except Exception:                                  # noqa: BLE001
+            return []
+
+    def _kalshi_mk(self, fx):
+        """Latest stored Kalshi prices for this fixture as a market dict (H, D, A), or None if absent / stale / not for this match."""
+        st = self._kalshi_store()
+        if not st:
+            return None
+        at = _parse_iso(st.get("fetched_at"))
+        if not at or (self._now() - at).total_seconds() > KALSHI_MAX_AGE_H * 3600:
+            return None
+        r = (st.get("by_fixture") or {}).get(str(fx.get("id")))
+        if not r or r.get("H") is None:
+            return None
+        return {"H": r["H"], "D": r["D"], "A": r["A"], "odds": {}, "spread": r.get("spread"), "asof": st.get("fetched_at"), "wide": r.get("wide"), "src": "kalshi"}
 
     def refresh_results(self):
         """Settle logged predictions from stored match results (the data refresh stores every finished match)."""
@@ -2419,7 +2602,7 @@ class J1Platform:
             return {"status": "error", "warnings": [f"{type(e).__name__}: {e}"]}
 
     # ------------------------------------------------------------------ background loops
-    def start_background_refresh(self, data_s=3600, fixtures_s=900, odds_s=10800, results_s=3600, bootstrap=False):
+    def start_background_refresh(self, data_s=3600, fixtures_s=900, odds_s=10800, results_s=3600, bootstrap=False, kalshi_s=900):
         self._stop.clear()
 
         def dloop():
@@ -2441,12 +2624,18 @@ class J1Platform:
                 self.refresh_odds()
                 self._stop.wait(odds_s)
 
+        def kloop():
+            self._stop.wait(25)
+            while not self._stop.is_set():
+                self.refresh_kalshi()
+                self._stop.wait(kalshi_s)
+
         def rloop():
             self._stop.wait(180)
             while not self._stop.is_set():
                 self.refresh_results()
                 self._stop.wait(results_s)
-        for fn, name in ((dloop, "bl-data"), (floop, "bl-fixtures"), (oloop, "bl-odds"), (rloop, "bl-results")):
+        for fn, name in ((dloop, "bl-data"), (floop, "bl-fixtures"), (oloop, "bl-odds"), (rloop, "bl-results"), (kloop, "j1-kalshi")):
             threading.Thread(target=fn, name=name, daemon=True).start()
 
     def stop(self):
@@ -2487,7 +2676,7 @@ function card(e){
  (e.warnings||[]).forEach(w=>h+='<div class="w">⚠ '+w+'</div>');
  h+='<div class="meta">Expected goals '+n2(e.expected_goals.home)+' – '+n2(e.expected_goals.away)+' (total '+n2(e.expected_goals.total)+') · attack/defence index home '+n2(e.indices.home_attack)+' / '+n2(e.indices.home_defence)+', away '+n2(e.indices.away_attack)+' / '+n2(e.indices.away_defence)+'</div>';
  h+='<h3>Result probabilities (home · draw · away)</h3>'+bar(p);
- if(mk&&mk.H!=null)h+='<table><tr><th></th><th>Home</th><th>Draw</th><th>Away</th></tr><tr><td>Model</td><td>'+pc(p.home)+'</td><td>'+pc(p.draw)+'</td><td>'+pc(p.away)+'</td></tr><tr><td>Market (de-vigged)</td><td>'+pc(mk.H)+'</td><td>'+pc(mk.D)+'</td><td>'+pc(mk.A)+'</td></tr><tr><td>Model − market (pts)</td><td>'+sg(d.home)+'</td><td>'+sg(d.draw)+'</td><td>'+sg(d.away)+'</td></tr></table>';
+ if(mk&&mk.H!=null)h+='<table><tr><th></th><th>Home</th><th>Draw</th><th>Away</th></tr><tr><td>Model</td><td>'+pc(p.home)+'</td><td>'+pc(p.draw)+'</td><td>'+pc(p.away)+'</td></tr><tr><td>'+(mk.source&&mk.source.indexOf('Kalshi')===0?'Market (Kalshi mid)':'Market (de-vigged)')+'</td><td>'+pc(mk.H)+'</td><td>'+pc(mk.D)+'</td><td>'+pc(mk.A)+'</td></tr><tr><td>Model − market (pts)</td><td>'+sg(d.home)+'</td><td>'+sg(d.draw)+'</td><td>'+sg(d.away)+'</td></tr></table>';
  h+='<div class="two"><div><h3>Team totals · over</h3><table><tr><th>Line</th><th>'+e.home+'</th><th>'+e.away+'</th></tr>';
  Object.keys(e.team_over.home).forEach(l=>h+='<tr><td>'+l+'</td><td>'+pc(e.team_over.home[l])+'</td><td>'+pc(e.team_over.away[l])+'</td></tr>');
  h+='</table></div><div><h3>Total goals · over</h3><table><tr><th>Line</th><th>Over</th><th>Under</th><th>Market over</th></tr>';
@@ -2618,9 +2807,21 @@ def print_slate(s):
         print("   total over 1.5/2.5/3.5/4.5: " + " ".join(_pct(e['total_over'][k]) for k in ("1.5", "2.5", "3.5", "4.5")))
         mk = e.get("market")
         if mk and mk.get("H") is not None:
-            print(f"   market H {_pct(mk['H'])}  D {_pct(mk['D'])}  A {_pct(mk['A'])}" + (f"   over 2.5 {_pct(mk['o25'])}" if mk.get("o25") is not None else ""))
+            print(f"   market{' (Kalshi)' if 'Kalshi' in str(mk.get('source', '')) else ''} H {_pct(mk['H'])}  D {_pct(mk['D'])}  A {_pct(mk['A'])}" + (f"   over 2.5 {_pct(mk['o25'])}" if mk.get("o25") is not None else ""))
         for w in e.get("warnings", []):
             print("   !", w)
+
+
+def print_kalshi(r):
+    if r.get("status") != "ok":
+        print("KALSHI:", "; ".join(r.get("warnings", [])) or r)
+        return
+    print(f"Kalshi {KALSHI_SERIES}: {r['markets_read']} markets, {r['events']} complete events, {r['matched']} matched to fixtures, {r['unmatched']} unmatched, {r['snapshots_added']} new snapshot(s)")
+    for t in r["table"]:
+        sp = "n/a" if t["spread"] is None else f"{t['spread']:.2f}"
+        print(f"  {t['kickoff']}  {t['match']:<46} H {_pct(t['H'])}  D {_pct(t['D'])}  A {_pct(t['A'])}   worst bid/ask gap {sp}{'  SOFT' if t['wide'] else ''}")
+    for w in r.get("warnings", []):
+        print("  !", w)
 
 
 def print_backlog(b):
@@ -2656,7 +2857,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="J1 League player plus-minus model: data, predictions, odds, scorecard, service -- one file")
     ap.add_argument("--dir", default=os.environ.get("J1_DATA_DIR", "."), help="data folder (default: $J1_DATA_DIR or current)")
     sub = ap.add_subparsers(dest="cmd")
-    for name in ("daily", "slate", "refresh", "fixtures", "odds", "results", "track", "bootstrap"):
+    for name in ("daily", "slate", "refresh", "fixtures", "odds", "results", "track", "bootstrap", "kalshi"):
         sub.add_parser(name)
     bk = sub.add_parser("backlog", help="every match already played this season: walk-forward prediction vs result -> CSV + summary")
     bk.add_argument("--season", type=int, default=None, help="season start year (default: current)")
@@ -2671,6 +2872,7 @@ def main(argv=None):
     sv.add_argument("--bootstrap", action="store_true", help="if too little match data is on disk, download it in the background")
     sv.add_argument("--data-minutes", type=int, default=int(os.environ.get("J1_DATA_MINUTES", "60")))
     sv.add_argument("--fixtures-minutes", type=int, default=int(os.environ.get("J1_FIXTURES_MINUTES", "15")))
+    sv.add_argument("--kalshi-minutes", type=int, default=int(os.environ.get("J1_KALSHI_MINUTES", "15")))
     sv.add_argument("--odds-minutes", type=int, default=int(os.environ.get("J1_ODDS_MINUTES", "180")))
     r = sub.add_parser("run", help="run an embedded module's own command line")
     r.add_argument("module")
@@ -2716,6 +2918,8 @@ def main(argv=None):
         print(json.dumps(p.refresh_fixtures(), indent=2))
     elif args.cmd == "odds":
         print(json.dumps(p.refresh_odds(), indent=2))
+    elif args.cmd == "kalshi":
+        print_kalshi(p.refresh_kalshi())
     elif args.cmd == "results":
         print(json.dumps(p.refresh_results(), indent=2))
     elif args.cmd == "backlog":
@@ -2732,12 +2936,15 @@ def main(argv=None):
         if allow and not token and host != "127.0.0.1":
             print("WARNING: writes are enabled on a public address without J1_API_TOKEN: anyone who can reach it can trigger refreshes.", flush=True)
         p.start_background_refresh(max(1, args.data_minutes) * 60, max(1, args.fixtures_minutes) * 60, max(1, args.odds_minutes) * 60,
-                                   bootstrap=args.bootstrap or _env_flag("J1_BOOTSTRAP"))
+                                   bootstrap=args.bootstrap or _env_flag("J1_BOOTSTRAP"), kalshi_s=max(1, args.kalshi_minutes) * 60)
         serve(p, host, port, args.cors or _env_flag("J1_CORS"), allow, token)
     else:                                                  # daily / slate
         if args.cmd == "daily":
-            for fn in (p.refresh_data, p.refresh_odds, p.refresh_fixtures, p.refresh_results):
-                print(json.dumps(fn(), indent=2))
+            for fn in (p.refresh_data, p.refresh_odds, p.refresh_fixtures, p.refresh_kalshi, p.refresh_results):
+                r_ = fn()
+                if fn == p.refresh_kalshi:
+                    r_ = {k: v for k, v in r_.items() if k != "table"}
+                print(json.dumps(r_, indent=2))
         print_slate(p.get_slate())
 
 
