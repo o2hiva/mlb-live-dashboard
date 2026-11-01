@@ -181,6 +181,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("La Liga service failed to start")
     try:
+        import aleague_service
+        aleague_service.start_background()
+    except Exception:
+        # A-League is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("A-League service failed to start")
+    try:
         import cl_service
         cl_service.start_background()
     except Exception:
@@ -208,6 +215,7 @@ async def lifespan(app: FastAPI):
         shadow_scorecard.register(shadow_scorecard.make_sa_adapter(_sa_shadow_events, _sa_shadow_score))
         shadow_scorecard.register(shadow_scorecard.make_epl_adapter(_epl_shadow_events, _epl_shadow_score))
         shadow_scorecard.register(shadow_scorecard.make_laliga_adapter(_laliga_shadow_events, _laliga_shadow_score))
+        shadow_scorecard.register(shadow_scorecard.make_aleague_adapter(_aleague_shadow_events, _aleague_shadow_score))
         shadow_scorecard.register(shadow_scorecard.make_cl_adapter(_cl_shadow_events, _cl_shadow_score))
         shadow_scorecard.start_background()
     except Exception:
@@ -871,6 +879,17 @@ def _laliga_shadow_events(db):
 def _laliga_shadow_score(match_id):
     import laliga_service
     return laliga_service.get_service().final_score(match_id)
+
+
+def _aleague_shadow_events(db):
+    """Upcoming A-League matches with the model's probabilities (the same slate the Soccer > A-League tab shows)."""
+    import aleague_service
+    return (aleague_service.get_service().slate() or {}).get("events") or []
+
+
+def _aleague_shadow_score(match_id):
+    import aleague_service
+    return aleague_service.get_service().final_score(match_id)
 
 
 def _cl_shadow_events(db):
@@ -2471,6 +2490,64 @@ def refresh_laliga(what: str = "fixtures"):
     return svc.refresh_fixtures()
 
 
+@app.get("/api/aleague/slate")
+def aleague_slate():
+    """Upcoming A-League matches: expected goals, 1X2, BTTS, total and team goals, lineup used, football-data odds. See
+    aleague_service.py / aleague_platform.py."""
+    import aleague_service
+    return aleague_service.get_service().slate()
+
+
+@app.get("/api/aleague/health")
+def aleague_health():
+    import aleague_service
+    return aleague_service.get_service().health()
+
+
+@app.get("/api/aleague/scorecard")
+def aleague_scorecard():
+    """The platform's own record: live (logged before kickoff) and walk-forward season-to-date vs the closing market."""
+    import aleague_service
+    return aleague_service.get_service().get_scorecard()
+
+
+@app.get("/api/aleague/results")
+def aleague_results(n: int = 40):
+    import aleague_service
+    return aleague_service.get_service().get_results(n)
+
+
+@app.get("/api/aleague/predict")
+def aleague_predict(home: str, away: str):
+    import aleague_service
+    return aleague_service.get_service().predict(home, away)
+
+
+@app.get("/api/aleague/backlog")
+def aleague_backlog(season: int | None = None):
+    """Every A-League match already played this season: walk-forward prediction vs result (also saved as aleague_backlog_<season>.csv)."""
+    import aleague_service
+    return aleague_service.get_service().backlog(season)
+
+
+@app.get("/api/admin/refresh-aleague")
+def refresh_aleague(what: str = "fixtures"):
+    """Manual trigger: what = data | fixtures | odds | kalshi | results | bootstrap."""
+    import aleague_service
+    svc = aleague_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "kalshi":
+        return svc.refresh_kalshi()
+    if what == "odds":
+        return svc.refresh_odds()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_fixtures()
+
+
 @app.get("/api/cl/slate")
 def cl_slate():
     """Upcoming Champions League matches: expected goals, 1X2, BTTS, total and team goals, lineup used, Kalshi / DraftKings prices. See
@@ -2840,7 +2917,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("aleague_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

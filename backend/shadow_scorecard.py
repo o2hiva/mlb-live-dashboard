@@ -1067,6 +1067,14 @@ def make_laliga_adapter(get_events: Callable, get_score: Callable) -> Adapter:
                   "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
 
 
+def make_aleague_adapter(get_events: Callable, get_score: Callable) -> Adapter:
+    """A-League Men (Australia): same markets, same grading (final score) as the Bundesliga card."""
+    return make_bundesliga_adapter(
+        get_events, get_score, sport="aleague", label="A-League",
+        benchmark="Research model, NOT backtested on A-League data here, and there is no football-data odds archive for this league (only stored Kalshi win/draw/loss snapshots), so there is no closing-market benchmark. "
+                  "This card is the live out-of-sample check: every prediction is saved before kickoff and graded on the final score (90 minutes + stoppage). Calibration, not betting profit.")
+
+
 def make_cl_adapter(get_events: Callable, get_score: Callable) -> Adapter:
     """UEFA Champions League: same markets, same grading (regulation score) as the Bundesliga card."""
     return make_bundesliga_adapter(
