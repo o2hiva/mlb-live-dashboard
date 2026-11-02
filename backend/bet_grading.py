@@ -220,6 +220,7 @@ NO_MLB_GAME_BET_TYPES = {"nfl_passing_yards", "nfl_rushing_yards", "cfb_team_poi
                           "epl_h", "epl_d", "epl_a", "epl_btts", "epl_total", "epl_th", "epl_ta",
                           "laliga_h", "laliga_d", "laliga_a", "laliga_btts", "laliga_total", "laliga_th", "laliga_ta",
                           "aleague_h", "aleague_d", "aleague_a", "aleague_btts", "aleague_total", "aleague_th", "aleague_ta",
+                          "cbb_ml_h", "cbb_ml_a", "cbb_spread", "cbb_total", "cbb_th", "cbb_ta",
                           "cl_h", "cl_d", "cl_a", "cl_btts", "cl_total", "cl_th", "cl_ta"}
 
 BL_BET_TYPES = {"bl_h", "bl_d", "bl_a", "bl_btts", "bl_total", "bl_th", "bl_ta"}
@@ -228,6 +229,7 @@ J1_BET_TYPES = {"j1_h", "j1_d", "j1_a", "j1_btts", "j1_total", "j1_th", "j1_ta"}
 SA_BET_TYPES = {"sa_h", "sa_d", "sa_a", "sa_btts", "sa_total", "sa_th", "sa_ta"}
 EPL_BET_TYPES = {"epl_h", "epl_d", "epl_a", "epl_btts", "epl_total", "epl_th", "epl_ta"}
 LALIGA_BET_TYPES = {"laliga_h", "laliga_d", "laliga_a", "laliga_btts", "laliga_total", "laliga_th", "laliga_ta"}
+CBB_BET_TYPES = {"cbb_ml_h", "cbb_ml_a", "cbb_spread", "cbb_total", "cbb_th", "cbb_ta"}
 ALEAGUE_BET_TYPES = {"aleague_h", "aleague_d", "aleague_a", "aleague_btts", "aleague_total", "aleague_th", "aleague_ta"}
 CL_BET_TYPES = {"cl_h", "cl_d", "cl_a", "cl_btts", "cl_total", "cl_th", "cl_ta"}
 TENNIS_BET_TYPES = {"tennis_ml", "tennis_games", "tennis_sets"}
@@ -276,6 +278,39 @@ def _grade_bl_bet(bet: TrackedBet, service_module: str = "bundesliga_service", p
             return None
         goals = {"bl_total": hg + ag, "bl_th": hg, "bl_ta": ag}[t]
         happened, actual = goals > bet.line, float(goals)
+    return actual, ("win" if happened == (bet.yn == "yes") else "loss")
+
+
+def _grade_cbb_bet(bet: TrackedBet):
+    """College basketball bets from the CBB tab. The bet stores the ESPN game id in external_player_id. Final score includes overtime
+    (that is how totals settle). yn == "yes" wins when the outcome happens, "no" when it does not; an exact tie on a whole-number line is a push.
+      cbb_ml_h / cbb_ml_a   moneyline: home / away team wins
+      cbb_spread            line = HOME handicap (negative = home favoured); yes = home covers (home margin + handicap > 0)
+      cbb_total             total points over the line;  cbb_th / cbb_ta  home / away team points over the line
+    Returns None until the game is final, else (actual, result)."""
+    import cbb_service
+    if not bet.external_player_id:
+        return None
+    sc = cbb_service.get_service().final_score(bet.external_player_id)
+    if sc is None:
+        return None
+    hs, as_ = sc
+    t = bet.bet_type
+    if t == "cbb_ml_h":
+        happened, actual = hs > as_, float(hs - as_)
+    elif t == "cbb_ml_a":
+        happened, actual = as_ > hs, float(as_ - hs)
+    else:
+        if bet.line is None:
+            return None
+        if t == "cbb_spread":
+            actual, edge = float(hs - as_), (hs - as_) + bet.line
+        else:
+            actual = float({"cbb_total": hs + as_, "cbb_th": hs, "cbb_ta": as_}[t])
+            edge = actual - bet.line
+        if edge == 0:
+            return actual, "push"
+        happened = edge > 0
     return actual, ("win" if happened == (bet.yn == "yes") else "loss")
 
 
@@ -875,7 +910,7 @@ def grade_pending_bets() -> dict:
                     still_pending += 1
                     continue
 
-            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES or bet.bet_type in J1_BET_TYPES or bet.bet_type in SA_BET_TYPES or bet.bet_type in EPL_BET_TYPES or bet.bet_type in LALIGA_BET_TYPES or bet.bet_type in ALEAGUE_BET_TYPES or bet.bet_type in CL_BET_TYPES:
+            if bet.bet_type in NBA_BET_STATS or bet.bet_type in NHL_GOAL_BET_TYPES or bet.bet_type in TENNIS_BET_TYPES or bet.bet_type in BL_BET_TYPES or bet.bet_type in EFL_BET_TYPES or bet.bet_type in J1_BET_TYPES or bet.bet_type in SA_BET_TYPES or bet.bet_type in EPL_BET_TYPES or bet.bet_type in LALIGA_BET_TYPES or bet.bet_type in ALEAGUE_BET_TYPES or bet.bet_type in CBB_BET_TYPES or bet.bet_type in CL_BET_TYPES:
                 try:
                     if bet.bet_type in NBA_BET_STATS:
                         graded_nba = _grade_nba_prop(bet)
@@ -895,6 +930,8 @@ def grade_pending_bets() -> dict:
                         graded_nba = _grade_bl_bet(bet, "laliga_service", "laliga_")
                     elif bet.bet_type in ALEAGUE_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet, "aleague_service", "aleague_")
+                    elif bet.bet_type in CBB_BET_TYPES:
+                        graded_nba = _grade_cbb_bet(bet)
                     elif bet.bet_type in CL_BET_TYPES:
                         graded_nba = _grade_bl_bet(bet, "cl_service", "cl_")
                     else:

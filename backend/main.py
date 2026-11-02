@@ -188,6 +188,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("A-League service failed to start")
     try:
+        import cbb_service
+        cbb_service.start_background()
+    except Exception:
+        # college basketball is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("CBB service failed to start")
+    try:
         import cl_service
         cl_service.start_background()
     except Exception:
@@ -2308,13 +2315,15 @@ def j1_backlog(season: int | None = None):
 
 @app.get("/api/admin/refresh-j1")
 def refresh_j1(what: str = "fixtures"):
-    """Manual trigger: what = data | fixtures | odds | results | bootstrap."""
+    """Manual trigger: what = data | fixtures | odds | kalshi | results | bootstrap."""
     import j1_service
     svc = j1_service.get_service()
     if what == "data":
         return svc.refresh_data()
     if what == "bootstrap":
         return svc.bootstrap()
+    if what == "kalshi":
+        return svc.refresh_kalshi()
     if what == "odds":
         return svc.refresh_odds()
     if what == "results":
@@ -2546,6 +2555,60 @@ def refresh_aleague(what: str = "fixtures"):
     if what == "results":
         return svc.refresh_results()
     return svc.refresh_fixtures()
+
+
+@app.get("/api/cbb/slate")
+def cbb_slate():
+    """Upcoming Division I men's basketball games: projected score, moneyline, spread / total / team-total ladders, Kalshi prices.
+    See cbb_service.py / cbb_platform.py."""
+    import cbb_service
+    return cbb_service.get_service().slate()
+
+
+@app.get("/api/cbb/health")
+def cbb_health():
+    import cbb_service
+    return cbb_service.get_service().health()
+
+
+@app.get("/api/cbb/scorecard")
+def cbb_scorecard():
+    """Live record of the logged pre-game predictions (vs Kalshi where priced) + the saved backtest summary."""
+    import cbb_service
+    return cbb_service.get_service().get_scorecard()
+
+
+@app.get("/api/cbb/results")
+def cbb_results(n: int = 60):
+    import cbb_service
+    return cbb_service.get_service().get_results(n)
+
+
+@app.get("/api/cbb/teams")
+def cbb_teams():
+    import cbb_service
+    return {"status": "ok", "warnings": [], "teams": cbb_service.get_service().teams()}
+
+
+@app.get("/api/cbb/predict")
+def cbb_predict(home: str, away: str, neutral: bool = False, conference: bool = False, spread: float | None = None,
+                total_line: float | None = None, home_line: float | None = None, away_line: float | None = None):
+    import cbb_service
+    return cbb_service.get_service().predict(home, away, neutral, conference, spread, total_line, home_line, away_line)
+
+
+@app.get("/api/admin/refresh-cbb")
+def refresh_cbb(what: str = "slate"):
+    """Manual trigger: what = data | slate | kalshi | results | bootstrap."""
+    import cbb_service
+    svc = cbb_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_slate(kalshi=True)
 
 
 @app.get("/api/cl/slate")
@@ -2917,7 +2980,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("aleague_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("aleague_") or (r.bet_type or "").startswith("cbb_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

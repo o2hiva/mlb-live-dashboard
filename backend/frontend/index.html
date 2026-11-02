@@ -185,6 +185,7 @@
     <span id="tab-btn-cfb" class="tab-btn" onclick="switchTab('cfb')">CFB</span>
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
+    <span id="tab-btn-cbb" class="tab-btn" onclick="switchTab('cbb')">CBB</span>
     <span id="tab-btn-tennis" class="tab-btn" onclick="switchTab('tennis')">Tennis</span>
     <span id="tab-btn-soccer" class="tab-btn" onclick="switchTab('soccer')">Soccer</span>
     <span id="tab-btn-edges" class="tab-btn" onclick="switchTab('edges')">Edges</span>
@@ -505,6 +506,30 @@
       <div class="sub">NBA Shadow Scorecard - player points, rebounds, assists and PRA projections are saved automatically once lineups are announced (before tip-off) and graded against the real box score. Players who did not play are voided. No bets are placed.</div>
       <button class="tab-btn" onclick="loadShadowScorecard('nba','shadow-scorecard-nba',true)" style="margin-bottom:10px;">Refresh</button>
       <div id="shadow-scorecard-nba"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
+  <div id="tab-content-cbb" style="display:none;">
+    <div class="tabs">
+      <span id="cbb-view-btn-games" class="tab-btn active" onclick="switchCbbView('games')">Games</span>
+      <span id="cbb-view-btn-scorecard" class="tab-btn" onclick="switchCbbView('scorecard')">Scorecard</span>
+    </div>
+    <div id="cbb-games-wrap">
+      <div class="sub">College basketball (men's Division I) - projected score = home points-scored index x away points-allowed index x league average (mirror for the away team), with moneyline, spread, total and team-total probabilities. Home / away Market boxes fill from the stored Kalshi price (refreshed every 15 minutes) and so do spread / total / team-total lines Kalshi has a real book on; type any other price in the Market box (percent, or American odds like -150 / +130). Judge the model on the Scorecard.</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label for="cbb-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+          <select id="cbb-date-select" onchange="setCbbDate(this.value)" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; min-width:200px;"></select>
+        </div>
+        <span class="hits-toggle" onclick="loadCbbTab()" style="padding:6px 14px;">Refresh</span>
+      </div>
+      <div id="cbb-status" class="settings-hint"></div>
+      <div id="cbb-content">Loading...</div>
+    </div>
+    <div id="cbb-scorecard-wrap" style="display:none;">
+      <div class="sub">College basketball scorecard - every pre-game prediction is saved automatically and graded against the real final (overtime included). No bets are placed from it; it shows whether the model can be trusted, and how it compares with the Kalshi price.</div>
+      <button class="tab-btn" onclick="loadCbbScorecard()" style="margin-bottom:10px;">Refresh</button>
+      <div id="cbb-scorecard"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
   </div>
 
@@ -2952,6 +2977,7 @@
     document.getElementById("tab-content-cfb").style.display = tab === "cfb" ? "block" : "none";
     document.getElementById("tab-content-nhl").style.display = tab === "nhl" ? "block" : "none";
     document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
+    document.getElementById("tab-content-cbb").style.display = tab === "cbb" ? "block" : "none";
     document.getElementById("tab-content-tennis").style.display = tab === "tennis" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-content-edges").style.display = tab === "edges" ? "block" : "none";
@@ -2963,6 +2989,7 @@
     document.getElementById("tab-btn-cfb").classList.toggle("active", tab === "cfb");
     document.getElementById("tab-btn-nhl").classList.toggle("active", tab === "nhl");
     document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
+    document.getElementById("tab-btn-cbb").classList.toggle("active", tab === "cbb");
     document.getElementById("tab-btn-tennis").classList.toggle("active", tab === "tennis");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
@@ -2987,6 +3014,8 @@
       loadNhlGamesTab();
     } else if (tab === "nba") {
       loadNbaTab();
+    } else if (tab === "cbb") {
+      loadCbbTab();
     } else if (tab === "tennis") {
       loadTennisTab();
     }
@@ -3310,6 +3339,10 @@
     { label: "A-League BTTS", filter: b => b.bet_type === "aleague_btts" },
     { label: "A-League Total Goals", filter: b => b.bet_type === "aleague_total" },
     { label: "A-League Team Goals", filter: b => b.bet_type === "aleague_th" || b.bet_type === "aleague_ta" },
+    { label: "CBB Moneyline", filter: b => b.bet_type === "cbb_ml_h" || b.bet_type === "cbb_ml_a" },
+    { label: "CBB Spread", filter: b => b.bet_type === "cbb_spread" },
+    { label: "CBB Total Points", filter: b => b.bet_type === "cbb_total" },
+    { label: "CBB Team Points", filter: b => b.bet_type === "cbb_th" || b.bet_type === "cbb_ta" },
     { label: "Champions LG Result (1X2)", filter: b => ["cl_h", "cl_d", "cl_a"].includes(b.bet_type) },
     { label: "Champions LG BTTS", filter: b => b.bet_type === "cl_btts" },
     { label: "Champions LG Total Goals", filter: b => b.bet_type === "cl_total" },
@@ -3375,6 +3408,7 @@
     { label: "NHL", filter: b => b.bet_type.startsWith("nhl_") },
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
+    { label: "CBB", filter: b => b.bet_type.startsWith("cbb_") },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
     { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") },
   ];
@@ -3611,7 +3645,7 @@
           <span>${b.batter_name}${(() => { const m = manualInfo(b); return m ? `<div class="settings-hint" id="mcat-${b.id}" style="margin:2px 0 0;">${m.sport} · ${m.type} · <span class="tracked-bet-remove" onclick="editManualCategory(${b.id}, '${m.sport.replace(/'/g, "")}')">change</span></div>` : ""; })()}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cbb_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -3635,6 +3669,7 @@
     "NHL": ["NHL Moneyline", "NHL Team Goals", "NHL Total Goals", "NHL 1st Period Goals", "NHL 2nd Period Goals", "NHL 3rd Period Goals", "NHL Goalie Saves", "NHL Player Props"],
     "NBA": ["NBA Points", "NBA Rebounds", "NBA Assists", "NBA PRA", "NBA Spread", "NBA Total", "NBA Moneyline"],
     "NPB": ["NPB YRFI", "NPB NRFI"],
+    "CBB": ["CBB Moneyline", "CBB Spread", "CBB Total", "CBB Team Total"],
     "Tennis": ["Tennis Moneyline", "Tennis Total Games", "Tennis Total Sets"],
     "Soccer": ["Bundesliga Result (1X2)", "Bundesliga BTTS", "Bundesliga Total Goals", "Bundesliga Team Goals",
                "Championship Result (1X2)", "Championship BTTS", "Championship Total Goals", "Championship Team Goals",
@@ -5845,6 +5880,7 @@
       if (vis("tab-content-soccer") && typeof renderEpl === "function") renderEpl();
       if (vis("tab-content-soccer") && typeof renderLaLiga === "function") renderLaLiga();
       if (vis("tab-content-soccer") && typeof renderALeague === "function") renderALeague();
+      if (vis("tab-content-cbb") && typeof renderCbb === "function") renderCbb();
       if (vis("tab-content-soccer") && typeof renderCl === "function") renderCl();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
@@ -6176,6 +6212,28 @@
       }
     }
 
+    // ---- CBB: men's college basketball (judge these on the CBB Scorecard) ----
+    if (cbbData && cbbData.events) {
+      for (const ev of cbbData.events) {
+        if (ev.ph == null) continue;
+        for (const b of cbbBetList(ev)) {
+          const key = cbbKey(ev, b);
+          cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt };
+          const c = cbbCalc(key);
+          const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
+          const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateCbbField(${k},'yn',this.value)`, `updateCbbField(${k},'market',this.value)`,
+            `updateCbbField(${k},'useKelly',this.checked)`, `updateCbbField(${k},'manualWager',this.value)`, "");
+          const [yl, nl] = cbbYnLabels(b.kind);
+          cells.ynHtml = `<select onchange="updateCbbField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yl}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${nl}</option></select>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleCbbTrack(${k},this.checked)" />`;
+          const group = b.group === "Moneyline" ? "Moneyline" : b.group === "Spread" ? "Spread" : b.group === "Total" ? "Total Points" : "Team Points";
+          add("CBB", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("CBB " + group, cbbBetName(cbbRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
     // ---- Soccer: Champions League (the model's own backtest says it does not beat the closing market - judge these on the Scorecard) ----
     if (clData && clData.events) {
       for (const ev of clData.events) {
@@ -6448,7 +6506,7 @@
       <div class="settings-row" style="gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
         <label class="settings-hint" style="margin:0;">Min edge (pts) <input type="number" step="0.5" value="${edgesMinEdge}" style="width:70px;" onchange="edgesSetMin(this.value)" /></label>
         <label class="settings-hint" style="margin:0;">Sport
-          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","Tennis","Soccer"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","CBB","Tennis","Soccer"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <span class="settings-hint" style="margin:0;">${shown.length} edge${shown.length === 1 ? "" : "s"} of ${priced.length} priced bets (${items.length} bets scanned${edgesLoading ? " - still loading..." : ""})</span>
       </div>`;
     if (!shown.length) {
@@ -6469,7 +6527,7 @@
     renderEdges();
     const jobs = [];
     if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
-    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), loadLaLigaTab(true), loadALeagueTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), loadLaLigaTab(true), loadALeagueTab(true), loadCbbTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
     // draw as soon as each sport arrives, not only when the slowest finishes
     jobs.forEach(j => j.then(renderEdges, renderEdges));
     await Promise.allSettled(jobs);
@@ -8059,6 +8117,347 @@
     const a = document.activeElement;
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadBlTab(true);
+  }, 60000);
+
+  // ======================================================================================================================
+  // CBB: men's college basketball (cbb_platform.py). Per upcoming game: moneyline (home / away), spread, total points, each team's points -
+  // all with Market (the stored Kalshi price where one exists), Edge, Kelly, Wager, Profit and Track. Tracked bets are graded on the final
+  // score, overtime included (bet types cbb_ml_h / cbb_ml_a / cbb_spread / cbb_total / cbb_th / cbb_ta). Spread bets store the HOME handicap
+  // as the line (negative = home favoured) and "Yes" = the home team covers.
+  // ======================================================================================================================
+  let cbbData = null;
+  let cbbRows = {};
+  let cbbDateChoice = null;
+  const cbbState = {};
+  const cbbCustomLine = {};     // `${id}|total` / `${id}|spread` -> typed line
+  const CBB_COLS = "minmax(140px, 1.5fr) 62px 38px 38px 64px 64px 52px 46px 30px 58px 54px 40px";
+
+  function cbbNcdf(x) {   // standard normal CDF (Abramowitz-Stegun erf approximation)
+    const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x / 2);
+    return x >= 0 ? 0.5 * (1 + y) : 0.5 * (1 - y);
+  }
+  function cbbPover(mu, sd, line) { return 1 - cbbNcdf((line - mu) / sd); }
+  function cbbRound5(x) { return Math.floor(x) + 0.5; }
+
+  // market price (a fraction) for a ladder line, from the server's market_rows: {kind: [[line, market p, model p]]}
+  function cbbLadderMarket(ev, kind, line) {
+    const r = ((ev.market_rows || {})[kind] || []).find(x => Math.abs(x[0] - line) < 1e-6);
+    return r ? r[1] : null;
+  }
+
+  function cbbBetList(ev) {
+    if (ev.ph == null) return [];
+    const sp = (cbbData && cbbData.spreads) || { sd_margin: 11.9, sd_total: 16.9, sd_team: 10.4 };
+    const out = [];
+    out.push({ kind: "mlh", line: "", label: `${ev.home} to win`, p: ev.home_win, group: "Moneyline", mkt: ev.market ? ev.market.home : null });
+    out.push({ kind: "mla", line: "", label: `${ev.away} to win`, p: 1 - ev.home_win, group: "Moneyline", mkt: ev.market ? ev.market.away : null });
+    const lines = ev.lines || {};
+    const add = (kind, group, labelFn, xs, pFn, mFn) => {
+      const seen = new Set();
+      for (const x of xs) {
+        if (seen.has(x)) continue;
+        seen.add(x);
+        out.push({ kind, line: String(x), label: labelFn(x), p: pFn(x), group, mkt: mFn(x) });
+      }
+    };
+    // spread: line = HOME handicap (negative = home favoured), Yes = home covers
+    const spreadXs = new Set((lines.spread || []).map(r => r[0]));
+    ((ev.market_rows || {}).spread || []).forEach(r => spreadXs.add(r[0]));
+    const cs = cbbCustomLine[ev.id + "|spread"];
+    if (cs != null) spreadXs.add(cs);
+    add("spread", "Spread", x => `${ev.home} ${x > 0 ? "+" : ""}${x}`, [...spreadXs].sort((a, b) => a - b),
+        x => cbbPover(ev.ph - ev.pa, sp.sd_margin, -x), x => cbbLadderMarket(ev, "spread", x));
+    const totalXs = new Set((lines.total || []).map(r => r[0]));
+    ((ev.market_rows || {}).total || []).forEach(r => totalXs.add(r[0]));
+    const ct = cbbCustomLine[ev.id + "|total"];
+    if (ct != null) totalXs.add(ct);
+    add("total", "Total", x => "Total points", [...totalXs].sort((a, b) => a - b),
+        x => cbbPover(ev.ph + ev.pa, sp.sd_total, x), x => cbbLadderMarket(ev, "total", x));
+    for (const side of ["home", "away"]) {
+      const xs = new Set((lines[side] || []).map(r => r[0]));
+      ((ev.market_rows || {})[side] || []).forEach(r => xs.add(r[0]));
+      const mu = side === "home" ? ev.ph : ev.pa;
+      add(side === "home" ? "th" : "ta", "Team", x => `${side === "home" ? ev.home : ev.away} points`, [...xs].sort((a, b) => a - b),
+          x => cbbPover(mu, sp.sd_team, x), x => cbbLadderMarket(ev, side, x));
+    }
+    return out.filter(b => b.p != null);
+  }
+
+  function cbbKey(ev, b) { return `${ev.id}|${b.kind}|${b.line}`; }
+
+  function cbbServerPct(row, yn) {
+    const p = row.mkt;
+    if (marketBook !== "kalshi" || p == null || p <= 0 || p >= 1) return null;
+    return Math.round((yn === "no" ? 1 - p : p) * 1000) / 10;
+  }
+
+  function getCbbState(key) {
+    if (!cbbState[key]) cbbState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return liveMarket(cbbState[key], s => { const row = cbbRows[key]; return row ? cbbServerPct(row, s.yn) : null; });
+  }
+
+  function cbbCalc(key) {
+    const row = cbbRows[key];
+    if (!row) return null;
+    const st = getCbbState(key);
+    const modelProb = st.yn === "yes" ? row.p : 1 - row.p;
+    const market = st.market;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function cbbBetType(kind) { return { mlh: "cbb_ml_h", mla: "cbb_ml_a", spread: "cbb_spread", total: "cbb_total", th: "cbb_th", ta: "cbb_ta" }[kind]; }
+  function cbbBetName(row) {
+    const ev = row.ev, ln = parseFloat(row.line);
+    if (row.kind === "mlh") return `${ev.home} to win`;
+    if (row.kind === "mla") return `${ev.away} to win`;
+    if (row.kind === "spread") return `${ev.home} ${ln > 0 ? "+" : ""}${row.line} (home covers)`;
+    if (row.kind === "total") return `Total points Over ${row.line}`;
+    return `${row.kind === "th" ? ev.home : ev.away} points Over ${row.line}`;
+  }
+  function cbbYnLabels(kind) {
+    if (kind === "mlh" || kind === "mla") return ["Yes", "No"];
+    if (kind === "spread") return ["Home covers", "Away covers"];
+    return ["Over", "Under"];
+  }
+
+  function updateCbbField(key, field, value) {
+    const st = getCbbState(key);
+    if (field === "market") st.market = (value === "" || isNaN(parseFloat(value))) ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderCbb();
+  }
+
+  function setCbbCustomLine(id, which, v) {
+    let x = parseFloat(v);
+    if (isNaN(x)) { delete cbbCustomLine[id + "|" + which]; renderCbb(); return; }
+    cbbCustomLine[id + "|" + which] = x;   // typed as-is (a whole number can push; the grader handles it)
+    renderCbb();
+  }
+
+  async function toggleCbbTrack(key, checked) {
+    const c = cbbCalc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: cbbBetType(row.kind), external_player_id: String(row.ev.id), batter_name: cbbBetName(row),
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: st.yn,
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; } else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderCbb();
+  }
+
+  function cbbQuoteCell(row, st) {
+    const sp = cbbServerPct(row, st.yn);
+    if (sp != null) return `<span class="hits-index" title="Kalshi midpoint (server snapshot)">${sp.toFixed(1)}%</span>`;
+    return `<span class="hits-index" title="No Kalshi price stored for this bet">–</span>`;
+  }
+
+  function cbbRowHtml(ev, b) {
+    const key = cbbKey(ev, b);
+    cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt };
+    const c = cbbCalc(key);
+    const { st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const isLine = b.line !== "";
+    const yesPct = b.p * 100, noPct = 100 - yesPct;
+    const live = !st.isManual && market != null;
+    const wagerCell = st.useKelly ? `<span>$${wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateCbbField(${k},'manualWager',this.value)" />`;
+    const [yes, no] = cbbYnLabels(b.kind);
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${CBB_COLS};">
+        <span style="font-size:0.8rem;">${b.label}</span>
+        <span style="text-align:center;">${isLine ? b.line : "—"}</span>
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="updateCbbField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
+        ${cbbQuoteCell(cbbRows[key], st)}
+        <input type="number" step="0.1" min="0" max="100" value="${market != null ? market : ""}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Stored Kalshi price - type to override, clear to go back to it" : "No Kalshi price stored - type your market price"}" onchange="updateCbbField(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateCbbField(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleCbbTrack(${k},this.checked)" />
+      </div>`;
+  }
+
+  function cbbHeaderHtml() {
+    return `<div class="hits-batter hits-batter-header" style="grid-template-columns: ${CBB_COLS};"><span>Bet</span><span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Quote</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function cbbFmtKickoff(ev) {
+    if (!ev.kickoff) return "Tip-off TBD";
+    const dt = new Date(ev.kickoff);
+    if (isNaN(dt.getTime())) return "Tip-off TBD";
+    return dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }) + " PT";
+  }
+
+  function cbbEventCardHtml(ev) {
+    const warns = (ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("");
+    const head = `<div class="meta">${cbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
+    if (ev.ph == null) {
+      return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span></div>${warns}</div>`;
+    }
+    const bets = cbbBetList(ev);
+    const mlg = bets.filter(b => b.group === "Moneyline"), spr = bets.filter(b => b.group === "Spread"), tot = bets.filter(b => b.group === "Total"), team = bets.filter(b => b.group === "Team");
+    const mk = ev.market, pc = x => x == null ? "–" : (x * 100).toFixed(0) + "%";
+    const kl = mk ? `Kalshi: ${ev.home} ${pc(mk.home)} · ${ev.away} ${pc(mk.away)}${mk.soft ? " (thin book)" : ""}` : "";
+    const ml = ev.market_lines || {};
+    const klines = [ml.spread != null ? `spread ${Number(ml.spread).toFixed(1)}` : "", ml.total != null ? `total ${Number(ml.total).toFixed(1)}` : ""].filter(Boolean).join(" · ");
+    const cs = cbbCustomLine[ev.id + "|spread"], ct = cbbCustomLine[ev.id + "|total"];
+    const inp = "width:70px; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:2px 6px;";
+    const customHtml = `<div class="settings-hint" style="margin:8px 0 2px;">Add a line: spread (${ev.home} handicap, e.g. -4.5) <input type="number" step="0.5" style="${inp}" value="${cs != null ? cs : ""}" onchange="setCbbCustomLine('${ev.id}','spread',this.value)" /> &nbsp; total <input type="number" step="0.5" style="${inp}" value="${ct != null ? ct : ""}" onchange="setCbbCustomLine('${ev.id}','total',this.value)" /></div>`;
+    const sect = (title, rows) => rows.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">${title}</div>${rows.map(b => cbbRowHtml(ev, b)).join("")}` : "";
+    return `
+      <div class="card">
+        ${head}
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${Math.round(ev.ph)} - ${Math.round(ev.pa)}</span></div>
+        <div class="meta">projected ${ev.ph.toFixed(1)} - ${ev.pa.toFixed(1)} · total ${ev.total.toFixed(1)} · ${ev.margin >= 0 ? ev.home : ev.away} by ${Math.abs(ev.margin).toFixed(1)}</div>
+        <div class="meta">${[kl, klines ? "Kalshi 50% lines: " + klines : ""].filter(Boolean).join(" · ")}</div>
+        ${warns}
+        ${cbbHeaderHtml()}
+        ${mlg.map(b => cbbRowHtml(ev, b)).join("")}
+        ${sect("Spread (line = " + ev.home + " handicap; Yes = " + ev.home + " covers)", spr)}
+        ${sect("Total points", tot)}
+        ${sect("Team points", team)}
+        ${customHtml}
+      </div>`;
+  }
+
+  function setCbbDate(v) { cbbDateChoice = v; renderCbb(); }
+
+  function renderCbb() {
+    if (deferIfTabHidden("tab-content-cbb", renderCbb)) return;
+    const container = document.getElementById("cbb-content");
+    if (!container || !cbbData) return;
+    const statusEl = document.getElementById("cbb-status");
+    const d = cbbData;
+    if (d.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || ["College basketball data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    if (!all.length) {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || []).join(" ") || "No upcoming college basketball games right now."}${d.needs_bootstrap ? " The first start downloads about six seasons of ESPN data and runs the backtest (roughly 15-30 minutes) - this page fills in by itself." : ""}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const dateKey = ev => (ev.kickoff ? kEtDate(ev.kickoff) : "") || "";
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (cbbDateChoice === null) cbbDateChoice = "";
+    const sel = document.getElementById("cbb-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All upcoming games (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === cbbDateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      sel.value = cbbDateChoice;
+    }
+    const shown = cbbDateChoice ? all.filter(e => dateKey(e) === cbbDateChoice) : all;
+    cbbRows = {};
+    if (statusEl) {
+      const age = d.fixtures_age_minutes != null ? `slate ${Math.round(d.fixtures_age_minutes)} min old` : "";
+      const through = d.data_through ? `results through ${d.data_through}` : "";
+      const priced = d.n_with_market != null ? `${d.n_with_market} of ${d.n_events} games priced on Kalshi` : "";
+      statusEl.textContent = [age, through, priced, ...(d.warnings || [])].filter(Boolean).join(" · ");
+    }
+    container.innerHTML = `<div class="grid">${shown.map(cbbEventCardHtml).join("")}</div>`;
+  }
+
+  async function loadCbbTab(silent) {
+    const container = document.getElementById("cbb-content");
+    if (!silent && !cbbData && container) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/cbb/slate`);
+      cbbData = await res.json();
+      renderCbb();
+    } catch (e) {
+      if (!silent && container) container.innerHTML = `<div class="settings-hint">Couldn't load the college basketball games.</div>`;
+    }
+  }
+
+  function switchCbbView(view) {
+    document.getElementById("cbb-games-wrap").style.display = view === "games" ? "block" : "none";
+    document.getElementById("cbb-scorecard-wrap").style.display = view === "scorecard" ? "block" : "none";
+    document.getElementById("cbb-view-btn-games").classList.toggle("active", view === "games");
+    document.getElementById("cbb-view-btn-scorecard").classList.toggle("active", view === "scorecard");
+    if (view === "scorecard") loadCbbScorecard();
+  }
+
+  async function loadCbbScorecard() {
+    const el = document.getElementById("cbb-scorecard");
+    if (!el) return;
+    el.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const [sr, rr] = await Promise.all([fetch(`${API_BASE}/api/cbb/scorecard`), fetch(`${API_BASE}/api/cbb/results?n=30`)]);
+      const d = await sr.json(), r = await rr.json();
+      if (d.status !== "ok") { el.innerHTML = `<div class="settings-hint">Scorecard unavailable: ${(d.warnings || ["error"])[0]}</div>`; return; }
+      const f3 = x => x == null ? "–" : Number(x).toFixed(3), f2 = x => x == null ? "–" : Number(x).toFixed(2), pc = x => x == null ? "–" : (x * 100).toFixed(1) + "%";
+      const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;", td = "text-align:right; padding:3px 8px;";
+      const live = d.live, retro = d.retrospective;
+      let h = `<div class="settings-hint">${(d.warnings || []).join(" ")}</div><div class="settings-hint">${d.logged_predictions || 0} pre-game predictions logged.</div>`;
+      if (!live) {
+        h += `<h3 style="margin:14px 0 4px;">Live record</h3><div class="settings-hint">No settled games yet - predictions are logged before tip-off and settle once the final is in.</div>`;
+      } else {
+        const s = live.score || {};
+        h += `<h3 style="margin:14px 0 4px;">Live record <span class="settings-hint">(${s.n != null ? s.n : ""} settled games)</span></h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><td style="${td}">Win log loss (lower is better)</td><td style="${td}">${f3(s.win_logloss)}</td></tr>
+            <tr><td style="${td}">Win Brier</td><td style="${td}">${f3(s.win_brier)}</td></tr>
+            <tr><td style="${td}">Winner picked right</td><td style="${td}">${pc(s.win_acc)}</td></tr>
+            <tr><td style="${td}">Margin error (MAE, points)</td><td style="${td}">${f2(s.mae_margin)}</td></tr>
+            <tr><td style="${td}">Total error (MAE, points)</td><td style="${td}">${f2(s.mae_total)}</td></tr>
+          </table>`;
+        const rows = [];
+        if (live.market) rows.push(["Moneyline", live.market]);
+        Object.values(live.ladders || {}).forEach(l => rows.push([l.label, l]));
+        if (rows.length) {
+          h += `<h3 style="margin:14px 0 4px;">Model vs Kalshi (log loss, paired; negative difference = model better, trust it only beyond 2 se)</h3>
+            <table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}; text-align:left;">Market</th><th style="${th}">Games</th><th style="${th}">Model</th><th style="${th}">Kalshi</th><th style="${th}">Difference</th><th style="${th}">se</th></tr>
+            ${rows.map(([n, x]) => `<tr><td style="text-align:left; padding:3px 8px;">${n}</td><td style="${td}">${x.n}</td><td style="${td}">${f3(x.model_ll)}</td><td style="${td}">${f3(x.market_ll)}</td><td style="${td}">${f3(x.diff)}</td><td style="${td}">${f3(x.se)}</td></tr>`).join("")}</table>`;
+        }
+      }
+      if (retro && retro.shipped) {
+        const s = retro.shipped;
+        h += `<h3 style="margin:14px 0 4px;">Backtest (tuned on ${retro.tune}, tested on ${(retro.test || []).join(", ")}; model "${retro.ship}")</h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><td style="${td}">Win log loss</td><td style="${td}">${f3(s.win_logloss)}</td></tr>
+            <tr><td style="${td}">Winner picked right</td><td style="${td}">${pc(s.win_acc)}</td></tr>
+            <tr><td style="${td}">Margin error (MAE, points)</td><td style="${td}">${f2(s.mae_margin)}</td></tr>
+            <tr><td style="${td}">Total error (MAE, points)</td><td style="${td}">${f2(s.mae_total)}</td></tr>
+          </table>`;
+      }
+      const recent = (r.results || []).map(x => `<tr><td style="${td}">${x.date}</td><td style="text-align:left; padding:3px 8px;">${x.match}</td><td style="${td}">${pc(x.p_home)}</td><td style="${td}">${pc(x.market_home)}</td><td style="${td}">${x.proj}</td><td style="${td}">${x.score}</td></tr>`).join("");
+      if (recent) h += `<h3 style="margin:14px 0 4px;">Recent settled games</h3><table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Date</th><th style="${th}; text-align:left;">Game</th><th style="${th}">Model home</th><th style="${th}">Kalshi home</th><th style="${th}">Projected</th><th style="${th}">Final</th></tr>${recent}</table>`;
+      el.innerHTML = h;
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the scorecard.</div>`;
+    }
+  }
+
+  // re-read the slate every 60 s while the CBB tab is open (skipped while the viewer is typing)
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-cbb");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadCbbTab(true);
   }, 60000);
 
   function switchSoccerSub(sub) {
