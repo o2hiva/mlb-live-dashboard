@@ -12192,7 +12192,11 @@
       statusEl.textContent = `Refreshing ${label} for ${season} week ${week}... (${steps.findIndex(x => x[1] === path) + 1}/${steps.length})`;
       try {
         const res = await fetch(`${API_BASE}/api/admin/${path}?season=${season}&week=${week}`);
-        if (!res.ok) failed.push(`${label} (HTTP ${res.status})`);
+        if (!res.ok) {
+          let why = "";
+          try { const j = await res.json(); why = j && j.detail ? ": " + String(j.detail).slice(0, 160) : ""; } catch (e2) { /* not JSON */ }
+          failed.push(`${label} (HTTP ${res.status}${why})`);
+        }
       } catch (e) {
         failed.push(`${label} (no response)`);
       }

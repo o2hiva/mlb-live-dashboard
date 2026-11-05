@@ -1184,6 +1184,34 @@ def debug_game_lines_inputs(game_pk: int, db: Session = Depends(get_db)):
     }
 
 
+def _admin_try(fn, *args):
+    """Run a manual-refresh job; on failure answer HTTP 500 WITH the real reason (the dashboard shows it) instead of a bare 'Internal Server Error'."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        import logging
+        logging.getLogger("main").exception("manual refresh %s failed", getattr(fn, "__name__", fn))
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
+
+
+@app.get("/api/admin/nfl-source-check")
+def nfl_source_check(season: int, week: int):
+    """Diagnostic: hit the three api.nfldata.org endpoints the NFL refreshes depend on and report status code, time and the start of the body."""
+    import requests, time as _t
+    base = "https://api.nfldata.org/v1"
+    out = {}
+    for name, path, params in (("games", "/games", {"season": season, "week": week}),
+                               ("stats_team", "/stats/team", {"season": season}),
+                               ("stats_season", "/stats/season", {"season": season, "limit": 5, "offset": 0})):
+        t0 = _t.time()
+        try:
+            r = requests.get(base + path, params=params, timeout=30)
+            out[name] = {"status": r.status_code, "seconds": round(_t.time() - t0, 2), "body_start": (r.text or "")[:200]}
+        except Exception as e:
+            out[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}", "seconds": round(_t.time() - t0, 2)}
+    return out
+
+
 @app.get("/api/admin/refresh-nfl-stats")
 def manual_refresh_nfl_stats(season: int, week: int):
     """
@@ -1199,7 +1227,7 @@ def manual_refresh_nfl_stats(season: int, week: int):
     then refreshes NflGame with the given week's real matchups.
     """
     import nfl_passing_yards_sync
-    nfl_passing_yards_sync.refresh_nfl_stats(season, week)
+    _admin_try(nfl_passing_yards_sync.refresh_nfl_stats, season, week)
     return {"status": "refreshed", "season": season, "week": week}
 
 
@@ -1381,7 +1409,7 @@ def manual_refresh_nfl_rushing_stats(season: int, week: int):
     week's real matchups for display.
     """
     import nfl_rushing_yards_sync
-    summary = nfl_rushing_yards_sync.refresh_nfl_rushing_stats(season, week)
+    summary = _admin_try(nfl_rushing_yards_sync.refresh_nfl_rushing_stats, season, week)
     return {"status": "refreshed", "season": season, "week": week, **summary}
 
 
@@ -1439,7 +1467,7 @@ def manual_refresh_nfl_qb_defense_props_stats(season: int, week: int):
     docstring for the estimation approach this uses.
     """
     import nfl_qb_defense_props_sync
-    summary = nfl_qb_defense_props_sync.refresh_nfl_qb_defense_props_stats(season, week)
+    summary = _admin_try(nfl_qb_defense_props_sync.refresh_nfl_qb_defense_props_stats, season, week)
     return {"status": "refreshed", "season": season, "week": week, **summary}
 
 
@@ -1496,7 +1524,7 @@ def manual_refresh_nfl_rb_defense_props_stats(season: int, week: int):
     separate-league-averages estimation approach this uses.
     """
     import nfl_rb_defense_props_sync
-    summary = nfl_rb_defense_props_sync.refresh_nfl_rb_defense_props_stats(season, week)
+    summary = _admin_try(nfl_rb_defense_props_sync.refresh_nfl_rb_defense_props_stats, season, week)
     return {"status": "refreshed", "season": season, "week": week, **summary}
 
 
@@ -1724,7 +1752,7 @@ def manual_refresh_nfl_points_stats(season: int, week: int):
     1..week), then refreshes this week's real matchups.
     """
     import nfl_points_sync
-    summary = nfl_points_sync.refresh_nfl_points_stats(season, week)
+    summary = _admin_try(nfl_points_sync.refresh_nfl_points_stats, season, week)
     return {"status": "refreshed", "season": season, "week": week, **summary}
 
 
