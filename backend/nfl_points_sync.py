@@ -50,6 +50,8 @@ from datetime import datetime, timedelta
 
 import requests
 
+import nfldata_compat
+
 from database import SessionLocal
 from models_db import NflTeamPointsStat, NflPointsGame
 
@@ -180,7 +182,7 @@ def get_week_games(season: int, week: int) -> list[dict]:
     """Every game for one week, straight from api.nfldata.org/v1/games -
     real fields confirmed already working in nfl_passing_yards_sync.py:
     game_type, home_team, away_team, home_score, away_score."""
-    resp = requests.get(
+    resp = nfldata_compat.get(
         f"{API_BASE}/games",
         params={"season": season, "week": week},
         timeout=TIMEOUT,

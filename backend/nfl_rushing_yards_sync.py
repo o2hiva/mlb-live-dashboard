@@ -65,6 +65,8 @@ import time
 
 import requests
 
+import nfldata_compat
+
 from database import SessionLocal
 from models_db import NflRbStat, NflRbGame
 
@@ -98,7 +100,7 @@ def get_season_rbs(season: int, min_carries: int = LIVE_MIN_SEASON_CARRIES) -> l
     offset = 0
     limit = 50
     while True:
-        resp = requests.get(
+        resp = nfldata_compat.get(
             f"{API_BASE}/stats/season",
             params={"season": season, "limit": limit, "offset": offset},
             timeout=TIMEOUT,
@@ -130,7 +132,7 @@ def get_week_games(season: int, week: int) -> dict:
     """{team: opponent} for every team playing this week - same
     confirmed-working call every other NFL sync module in this
     dashboard has its own copy of."""
-    resp = requests.get(
+    resp = nfldata_compat.get(
         f"{API_BASE}/games",
         params={"season": season, "week": week},
         timeout=TIMEOUT,

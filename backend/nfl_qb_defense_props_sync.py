@@ -68,6 +68,8 @@ import time
 
 import requests
 
+import nfldata_compat
+
 from database import SessionLocal
 from models_db import NflQbDefensePropStat, NflDefenseAllowedPropStat, NflQbDefensePropGame
 
@@ -145,7 +147,7 @@ def get_season_qbs_raw(season: int) -> list:
     offset = 0
     limit = 50
     while True:
-        resp = requests.get(
+        resp = nfldata_compat.get(
             f"{API_BASE}/stats/season",
             params={"season": season, "limit": limit, "offset": offset},
             timeout=TIMEOUT,
@@ -215,7 +217,7 @@ def get_week_games(season: int, week: int) -> dict:
     """{team: opponent} for every team playing this week - same
     confirmed-working call every other NFL sync module has its own
     copy of."""
-    resp = requests.get(
+    resp = nfldata_compat.get(
         f"{API_BASE}/games",
         params={"season": season, "week": week},
         timeout=TIMEOUT,
@@ -242,7 +244,7 @@ def get_current_week_matchups_with_dates(season: int, week: int) -> dict:
     confirmed always null (checked against live 2026 week-4 data), so
     this can only sort by DAY, not time-of-day - correct for TNF-first/
     MNF-last, but can't sub-order same-day Sunday games (early/late/SNF)."""
-    resp = requests.get(
+    resp = nfldata_compat.get(
         f"{API_BASE}/games",
         params={"season": season, "week": week},
         timeout=TIMEOUT,

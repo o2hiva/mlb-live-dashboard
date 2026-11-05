@@ -73,6 +73,8 @@ from datetime import datetime, timedelta
 
 import requests
 
+import nfldata_compat
+
 from database import SessionLocal
 from models_db import NflQbStat, NflTeamAllowedStat, NflGame
 
@@ -122,7 +124,7 @@ def get_season_qbs(season: int, min_attempts: int = LIVE_MIN_SEASON_ATTEMPTS) ->
     offset = 0
     limit = 50
     while True:
-        resp = requests.get(f"{API_BASE}/stats/season", params={"season": season, "limit": limit, "offset": offset}, timeout=30)
+        resp = nfldata_compat.get(f"{API_BASE}/stats/season", params={"season": season, "limit": limit, "offset": offset}, timeout=30)
         resp.raise_for_status()
         payload = resp.json()
         rows = payload.get("data", [])
@@ -151,7 +153,7 @@ def get_all_team_season_stats(season: int) -> dict:
     OFFENSIVE passing output, from /v1/stats/team. Confirmed working
     against live data - one row per team, unlike /stats/season's
     per-player rows."""
-    resp = requests.get(f"{API_BASE}/stats/team", params={"season": season}, timeout=30)
+    resp = nfldata_compat.get(f"{API_BASE}/stats/team", params={"season": season}, timeout=30)
     resp.raise_for_status()
     rows = resp.json().get("data", [])
     return {canon_team(r["team"]): {"games": r.get("games", 0) or 0, "attempts": r.get("attempts", 0) or 0,
@@ -161,7 +163,7 @@ def get_all_team_season_stats(season: int) -> dict:
 def get_week_games(season: int, week: int) -> dict:
     """{team: opponent} for every team playing this week - confirmed
     working against live data."""
-    resp = requests.get(f"{API_BASE}/games", params={"season": season, "week": week}, timeout=30)
+    resp = nfldata_compat.get(f"{API_BASE}/games", params={"season": season, "week": week}, timeout=30)
     resp.raise_for_status()
     games = resp.json().get("data", [])
     matchups = {}

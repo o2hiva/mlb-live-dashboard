@@ -1196,19 +1196,24 @@ def _admin_try(fn, *args):
 
 @app.get("/api/admin/nfl-source-check")
 def nfl_source_check(season: int, week: int):
-    """Diagnostic: hit the three api.nfldata.org endpoints the NFL refreshes depend on and report status code, time and the start of the body."""
+    """Diagnostic: what the NFL refreshes now read (nflverse open data via nfldata_compat) and whether the old api.nfldata.org answers."""
     import requests, time as _t
-    base = "https://api.nfldata.org/v1"
+    import nfldata_compat
     out = {}
-    for name, path, params in (("games", "/games", {"season": season, "week": week}),
-                               ("stats_team", "/stats/team", {"season": season}),
-                               ("stats_season", "/stats/season", {"season": season, "limit": 5, "offset": 0})):
+    for name, fn in (("games", lambda: nfldata_compat.get("https://api.nfldata.org/v1/games", {"season": season, "week": week}).json()),
+                     ("stats_team", lambda: nfldata_compat.get("https://api.nfldata.org/v1/stats/team", {"season": season}).json()),
+                     ("stats_season", lambda: nfldata_compat.get("https://api.nfldata.org/v1/stats/season", {"season": season, "limit": 3, "offset": 0}).json())):
         t0 = _t.time()
         try:
-            r = requests.get(base + path, params=params, timeout=30)
-            out[name] = {"status": r.status_code, "seconds": round(_t.time() - t0, 2), "body_start": (r.text or "")[:200]}
+            j = fn()
+            out[name] = {"ok": True, "rows": len(j.get("data", [])), "total": j.get("total"), "seconds": round(_t.time() - t0, 2), "first": (j.get("data") or [None])[0]}
         except Exception as e:
-            out[name] = {"error": f"{type(e).__name__}: {str(e)[:200]}", "seconds": round(_t.time() - t0, 2)}
+            out[name] = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}", "seconds": round(_t.time() - t0, 2)}
+    try:
+        r = requests.get("https://api.nfldata.org/v1/games", params={"season": season, "week": week}, timeout=15)
+        out["old_api_nfldata"] = {"status": r.status_code, "body_start": (r.text or "")[:80]}
+    except Exception as e:
+        out["old_api_nfldata"] = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
     return out
 
 
