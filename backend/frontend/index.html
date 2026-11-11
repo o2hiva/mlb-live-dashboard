@@ -3645,7 +3645,7 @@
           <span>${b.batter_name}${(() => { const m = manualInfo(b); return m ? `<div class="settings-hint" id="mcat-${b.id}" style="margin:2px 0 0;">${m.sport} · ${m.type} · <span class="tracked-bet-remove" onclick="editManualCategory(${b.id}, '${m.sport.replace(/'/g, "")}')">change</span></div>` : ""; })()}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cbb_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null && b.bet_type.startsWith("nba_") && !(b.bet_type === "nba_spread" || b.bet_type === "nba_total" || b.bet_type === "nba_moneyline") && b.line % 1 !== 0 ? (Math.floor(b.line) + 1) + "+" : b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cbb_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -5980,7 +5980,7 @@
               `updateNbaBetField('${gid}','${pid}','${stat}','yn',this.value)`, `updateNbaBetField('${gid}','${pid}','${stat}','market',this.value)`,
               `updateNbaBetField('${gid}','${pid}','${stat}','useKelly',this.checked)`, `updateNbaBetField('${gid}','${pid}','${stat}','manualWager',this.value)`, "");
             cells.trackHtml = `<input type="checkbox" ${state.tracked ? "checked" : ""} onchange="toggleNbaTrack('${gid}','${pid}','${stat}',this.checked)" />`;
-            const ou = `<input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />`;
+            const ou = `<input type="number" min="1" step="1" value="${Math.floor(line) + 1}" title="Kalshi style: at least N. Yes = N or more, No = N-1 or fewer" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />`;
             add("NBA", NBA_STAT_LABELS[stat], { state, yesPct, noPct, sides: edgeSidesForState(state, yesPct, noPct),
               html: byBetsRowHtml("NBA " + NBA_STAT_LABELS[stat], p.player, (p.team || "—"), `${g.away_team} @ ${g.home_team}`, c.blk.projection != null ? c.blk.projection.toFixed(1) : "—", ou, yesPct, cells) });
           }
@@ -7388,7 +7388,7 @@
     const cols = "minmax(150px, 1.5fr) 40px 50px 34px 34px 46px 52px 30px 58px 54px 40px";
     const header = `
       <div class="hits-batter hits-batter-header" style="grid-template-columns: ${cols};">
-        <span>Player</span><span>Proj</span><span>O/U</span><span>Yes</span><span>No</span>
+        <span>Player</span><span>Proj</span><span title="At least N">N+</span><span>Yes</span><span>No</span>
         <span>Y/N</span><span>Market</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span>
       </div>`;
     const section = (label, players) => `
@@ -7417,7 +7417,7 @@
       <div class="hits-batter" style="grid-template-columns: ${cols};" title="${title.replace(/"/g, "&quot;")}">
         <span>${p.player}${tags}</span>
         <span class="hits-index">${blk.projection.toFixed(1)}</span>
-        <input type="number" min="0" step="0.5" value="${line}" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />
+        <input type="number" min="1" step="1" value="${Math.floor(line) + 1}" title="Kalshi style: at least N. Yes = N or more, No = N-1 or fewer" style="text-align:center;" onchange="updateNbaThreshold('${gid}','${pid}','${stat}',this.value)" />
         <span class="prob-yes">${yesPct != null ? Math.round(yesPct) + "%" : "N/A"}</span>
         <span class="prob-no">${noPct != null ? Math.round(noPct) + "%" : "N/A"}</span>
         <select onchange="updateNbaBetField('${gid}','${pid}','${stat}','yn',this.value)">
@@ -7436,7 +7436,7 @@
     const f = nbaFind(gameId, playerId);
     const state = getNbaBetState(gameId, playerId, stat, f ? f.player.props[stat].fair_line : 0.5);
     const v = parseFloat(value);
-    state.threshold = isNaN(v) ? state.threshold : v;
+    state.threshold = isNaN(v) ? state.threshold : Math.max(1, Math.round(v)) - 0.5;   // whole-number "N+" entry, stored as N-0.5 (over N-0.5 == at least N)
     state.userLine = true;   // a typed line is never replaced by the Kalshi default
     rerenderNba();
   }
