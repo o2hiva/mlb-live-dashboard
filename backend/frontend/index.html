@@ -7277,7 +7277,7 @@
     if (!nbaBetState[k]) {
       nbaBetState[k] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null, threshold: fairLine != null ? fairLine : 0.5 };
     }
-    return liveMarket(nbaBetState[k], s => {
+    const st = liveMarket(nbaBetState[k], s => {
       const kind = K_NBA_KIND[stat];
       const f = kind ? nbaFind(gameId, playerId) : null;
       if (!f) return null;
@@ -7287,6 +7287,26 @@
       const f = kind ? nbaFind(gameId, playerId) : null;
       return f ? { ns: kNs(kPlayerMkts("nba", kind, f.player.player, kEtDate(f.game.tip_off))), atLeast: t => Math.floor(t) + 1, toThr: n => n - 0.5 } : null;
     });
+    // Default line = the line Kalshi itself centres on (its "at least N" market priced closest to 50%), not the model's own fair line.
+    // Applied once, as soon as Kalshi has a market for this player; a line the user types is never overridden.
+    if (!st.userLine && !st.kalshiLineSet) {
+      const kind = K_NBA_KIND[stat];
+      const f = kind ? nbaFind(gameId, playerId) : null;
+      if (f) {
+        try {
+          const mk = kPlayerMkts("nba", kind, f.player.player, kEtDate(f.game.tip_off));
+          let bestN = null, bestGap = Infinity;
+          for (const n of kNs(mk)) {
+            const p = kPick(mk, n, "yes");
+            if (p == null) continue;
+            const gap = Math.abs(p - 50);
+            if (gap < bestGap) { bestGap = gap; bestN = n; }
+          }
+          if (bestN != null) { st.threshold = bestN - 0.5; st.kalshiLineSet = true; }
+        } catch (e) { /* keep the model line */ }
+      }
+    }
+    return st;
   }
 
   function nbaProbOver(sf, line) {
@@ -7417,6 +7437,7 @@
     const state = getNbaBetState(gameId, playerId, stat, f ? f.player.props[stat].fair_line : 0.5);
     const v = parseFloat(value);
     state.threshold = isNaN(v) ? state.threshold : v;
+    state.userLine = true;   // a typed line is never replaced by the Kalshi default
     rerenderNba();
   }
 
