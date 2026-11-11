@@ -8333,7 +8333,8 @@
 
   function cbbEventCardHtml(ev) {
     const warns = (ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("");
-    const head = `<div class="meta">${cbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
+    const liveTag = ev.live ? `<b style="color:#e53935">LIVE${ev.score && ev.score.home != null ? ` ${ev.away} ${ev.score.away} - ${ev.home} ${ev.score.home}` : ""}</b> · ` : "";
+    const head = `<div class="meta">${liveTag}${cbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
     if (ev.ph == null) {
       return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span></div>${warns}</div>`;
     }

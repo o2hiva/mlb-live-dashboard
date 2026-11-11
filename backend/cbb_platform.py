@@ -1045,7 +1045,7 @@ def fetch_upcoming(today, get=None, days=LOOKAHEAD_DAYS):
     for i in range(days + 1):
         d = today + dt.timedelta(days=i)
         for g in fetch_day(d, get):
-            if g["state"] == "pre" and not g["final"]:
+            if (g["state"] in ("pre", "in")) and not g["final"]:      # in-progress games stay on the slate until they are final
                 out.append(g)
     return out
 
@@ -1102,6 +1102,8 @@ def log_views(d, views, now):
                     pass
     lines = []
     for v in views:
+        if v.get("live"):                       # never log a prediction made after tip-off
+            continue
         mkh = round((v.get("market") or {}).get("home", -1), 3)
         if "ph" in v and seen.get(v["id"]) != (round(v["ph"], 2), round(v["pa"], 2), mkh):
             lines.append(json.dumps({"id": v["id"], "kickoff": v["kickoff"], "logged_at": now.isoformat(), "home": v["home"], "away": v["away"], "neutral": v["neutral"],
@@ -1439,7 +1441,13 @@ class Platform:
             if kalshi:
                 pull_kalshi(argparse.Namespace(dir=self.d), self.kget, msgs.append)
             mk, miss = kalshi_markets(self.d, up)
-            views = [make_view(g, m, known, p, mk) for g in sorted(up, key=lambda g: g.get("date") or "")]
+            views = []
+            for g in sorted(up, key=lambda g: g.get("date") or ""):
+                v = make_view(g, m, known, p, mk)
+                if g.get("state") == "in":
+                    v["live"] = True
+                    v["score"] = {"home": g["home"].get("score"), "away": g["away"].get("score")}
+                views.append(v)
             n = log_views(self.d, views, dt.datetime.now(dt.timezone.utc))
             with self.lock:
                 self._slate, self._slate_at, self._slate_err = views, dt.datetime.now(dt.timezone.utc), None
@@ -1648,7 +1656,7 @@ function lad(v){
  if(bits.length)h+='<div class="meta">Where Kalshi crosses 50%: '+bits.join(' · ')+'</div>';
  return h}
 function card(v){
- let h='<div class="card"><div class="hd"><div class="nm">'+esc(v.home)+' vs '+esc(v.away)+'</div><div class="meta">'+(v.kickoff?new Date(v.kickoff).toLocaleString():'')+' · '+(v.neutral?'neutral site':'home court')+'</div></div>';
+ let h='<div class="card"><div class="hd"><div class="nm">'+esc(v.home)+' vs '+esc(v.away)+'</div><div class="meta">'+(v.live?'LIVE '+(v.score?v.score.away+'-'+v.score.home+' · ':''):'')+(v.kickoff?new Date(v.kickoff).toLocaleString():'')+' · '+(v.neutral?'neutral site':'home court')+'</div></div>';
  (v.warnings||[]).forEach(w=>h+='<div class="w">⚠ '+esc(w)+'</div>');
  if(v.ph==null)return h+'</div>';
  h+='<div class="meta">Projected score '+esc(v.home)+' '+n1(v.ph)+' – '+n1(v.pa)+' '+esc(v.away)+' · total '+n1(v.total)+' · margin '+(v.margin>=0?'+':'')+n1(v.margin)+'</div>';
