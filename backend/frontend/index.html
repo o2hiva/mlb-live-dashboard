@@ -6218,7 +6218,7 @@
         if (ev.ph == null) continue;
         for (const b of cbbBetList(ev)) {
           const key = cbbKey(ev, b);
-          cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt };
+          cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt, flip: !!b.flip, disp: b.disp };
           const c = cbbCalc(key);
           const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
           const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
@@ -6229,7 +6229,7 @@
           cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleCbbTrack(${k},this.checked)" />`;
           const group = b.group === "Moneyline" ? "Moneyline" : b.group === "Spread" ? "Spread" : b.group === "Total" ? "Total Points" : "Team Points";
           add("CBB", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
-            html: byBetsRowHtml("CBB " + group, cbbBetName(cbbRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.line}</span>` : `<span>—</span>`, yesPct, cells) });
+            html: byBetsRowHtml("CBB " + group, cbbBetName(cbbRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.disp != null ? b.disp : b.line}</span>` : `<span>—</span>`, yesPct, cells) });
         }
       }
     }
@@ -8188,8 +8188,14 @@
     ((ev.market_rows || {}).spread || []).forEach(r => spreadXs.add(r[0]));
     const cs = cbbCustomLine[ev.id + "|spread"];
     if (cs != null) spreadXs.add(cs);
-    add("spread", "Spread", x => `${ev.home} ${x > 0 ? "+" : ""}${x}`, [...spreadXs].sort((a, b) => a - b),
-        x => cbbPover(ev.ph - ev.pa, sp.sd_margin, -x), x => cbbLadderMarket(ev, "spread", x));
+    // shown from the FAVOURITE's side ("Bradley -10.5"): Yes = the favourite covers.  line stays the home handicap (keys, tracking, grading).
+    for (const x of [...spreadXs].sort((a, b) => a - b)) {
+      const pHome = cbbPover(ev.ph - ev.pa, sp.sd_margin, -x), mHome = cbbLadderMarket(ev, "spread", x);
+      const flip = x > 0;                                    // home is the underdog, so the away team is the favourite
+      const favName = flip ? ev.away : ev.home, mag = Math.abs(x);
+      out.push({ kind: "spread", line: String(x), disp: x === 0 ? "0" : "-" + mag, flip, label: `${favName} ${x === 0 ? "0" : "-" + mag}`, group: "Spread",
+                 p: pHome == null ? null : (flip ? 1 - pHome : pHome), mkt: mHome == null ? null : (flip ? 1 - mHome : mHome) });
+    }
     const totalXs = new Set((lines.total || []).map(r => r[0]));
     ((ev.market_rows || {}).total || []).forEach(r => totalXs.add(r[0]));
     const ct = cbbCustomLine[ev.id + "|total"];
@@ -8235,7 +8241,7 @@
     const ev = row.ev, ln = parseFloat(row.line);
     if (row.kind === "mlh") return `${ev.home} to win`;
     if (row.kind === "mla") return `${ev.away} to win`;
-    if (row.kind === "spread") return `${ev.home} ${ln > 0 ? "+" : ""}${row.line} (home covers)`;
+    if (row.kind === "spread") return `${ln > 0 ? ev.away : ev.home} ${ln === 0 ? "0" : "-" + Math.abs(ln)}`;
     if (row.kind === "total") return `Total points Over ${row.line}`;
     return `${row.kind === "th" ? ev.home : ev.away} points Over ${row.line}`;
   }
@@ -8269,7 +8275,7 @@
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             game_pk: null, bet_type: cbbBetType(row.kind), external_player_id: String(row.ev.id), batter_name: cbbBetName(row),
-            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: st.yn,
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: row.flip ? (st.yn === "yes" ? "no" : "yes") : st.yn,   // stored as "home covers" for grading
             model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
           }),
         });
@@ -8293,7 +8299,7 @@
 
   function cbbRowHtml(ev, b) {
     const key = cbbKey(ev, b);
-    cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt };
+    cbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt, flip: !!b.flip, disp: b.disp };
     const c = cbbCalc(key);
     const { st, modelProb, market, wager, profit } = c;
     const k = JSON.stringify(key).replace(/"/g, "&quot;");
@@ -8305,7 +8311,7 @@
     return `
       <div class="hits-batter" style="grid-template-columns: ${CBB_COLS};">
         <span style="font-size:0.8rem;">${b.label}</span>
-        <span style="text-align:center;">${isLine ? b.line : "—"}</span>
+        <span style="text-align:center;">${isLine ? (b.disp != null ? b.disp : b.line) : "—"}</span>
         <span class="prob-yes">${Math.round(yesPct)}%</span>
         <span class="prob-no">${Math.round(noPct)}%</span>
         <select onchange="updateCbbField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
@@ -8351,7 +8357,7 @@
     const klines = [ml.spread != null ? `spread ${Number(ml.spread).toFixed(1)}` : "", ml.total != null ? `total ${Number(ml.total).toFixed(1)}` : ""].filter(Boolean).join(" · ");
     const cs = cbbCustomLine[ev.id + "|spread"], ct = cbbCustomLine[ev.id + "|total"];
     const inp = "width:70px; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:2px 6px;";
-    const customHtml = `<div class="settings-hint" style="margin:8px 0 2px;">Add a line: spread (${ev.home} handicap, e.g. -4.5) <input type="number" step="0.5" style="${inp}" value="${cs != null ? cs : ""}" onchange="setCbbCustomLine('${ev.id}','spread',this.value)" /> &nbsp; total <input type="number" step="0.5" style="${inp}" value="${ct != null ? ct : ""}" onchange="setCbbCustomLine('${ev.id}','total',this.value)" /></div>`;
+    const customHtml = `<div class="settings-hint" style="margin:8px 0 2px;">Add a line: spread (${ev.home} handicap, e.g. -4.5; use + if ${ev.home} is the underdog) <input type="number" step="0.5" style="${inp}" value="${cs != null ? cs : ""}" onchange="setCbbCustomLine('${ev.id}','spread',this.value)" /> &nbsp; total <input type="number" step="0.5" style="${inp}" value="${ct != null ? ct : ""}" onchange="setCbbCustomLine('${ev.id}','total',this.value)" /></div>`;
     const sect = (title, rows) => rows.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">${title}</div>${rows.map(b => cbbRowHtml(ev, b)).join("")}` : "";
     return `
       <div class="card">
