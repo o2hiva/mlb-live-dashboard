@@ -1039,13 +1039,17 @@ def make_view(g, m, known, p, mk=None):
             "lines": lines_for(ph, pa, p), "market": mkt, "market_rows": rows, "market_lines": mlines, "warnings": warns}
 
 
-def fetch_upcoming(today, get=None, days=LOOKAHEAD_DAYS):
-    """Scheduled games from today through today + days (days=0 -> today only)."""
+def fetch_upcoming(today, get=None, days=LOOKAHEAD_DAYS, keep_final=False):
+    """Scheduled games from today through today + days (days=0 -> today only).  In-progress games stay until final.
+    keep_final=True also keeps finished games from yesterday and today so the page can show their final score."""
     out = []
-    for i in range(days + 1):
+    for i in range(-1 if keep_final else 0, days + 1):
         d = today + dt.timedelta(days=i)
         for g in fetch_day(d, get):
-            if (g["state"] in ("pre", "in")) and not g["final"]:      # in-progress games stay on the slate until they are final
+            if g["final"]:
+                if keep_final:
+                    out.append(g)
+            elif g["state"] in ("pre", "in") and i >= 0:
                 out.append(g)
     return out
 
@@ -1102,7 +1106,7 @@ def log_views(d, views, now):
                     pass
     lines = []
     for v in views:
-        if v.get("live"):                       # never log a prediction made after tip-off
+        if v.get("live") or v.get("final"):     # never log a prediction made after tip-off
             continue
         mkh = round((v.get("market") or {}).get("home", -1), 3)
         if "ph" in v and seen.get(v["id"]) != (round(v["ph"], 2), round(v["pa"], 2), mkh):
@@ -1436,7 +1440,7 @@ class Platform:
         try:
             m, known, p, games = self._load()
             today = self.today()
-            up = fetch_upcoming(today, self.get, LOOKAHEAD_DAYS)
+            up = fetch_upcoming(today, self.get, LOOKAHEAD_DAYS, keep_final=True)
             msgs = []
             if kalshi:
                 pull_kalshi(argparse.Namespace(dir=self.d), self.kget, msgs.append)
@@ -1444,7 +1448,10 @@ class Platform:
             views = []
             for g in sorted(up, key=lambda g: g.get("date") or ""):
                 v = make_view(g, m, known, p, mk)
-                if g.get("state") == "in":
+                if g.get("final"):
+                    v["final"] = True
+                    v["score"] = {"home": g["home"].get("score"), "away": g["away"].get("score")}
+                elif g.get("state") == "in":
                     v["live"] = True
                     v["score"] = {"home": g["home"].get("score"), "away": g["away"].get("score")}
                 views.append(v)

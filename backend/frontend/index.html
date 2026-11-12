@@ -8334,8 +8334,13 @@
 
   function cbbEventCardHtml(ev) {
     const warns = (ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("");
-    const liveTag = ev.live ? `<b style="color:#e53935">LIVE${ev.score && ev.score.home != null ? ` ${ev.away} ${ev.score.away} - ${ev.home} ${ev.score.home}` : ""}</b> · ` : "";
-    const head = `<div class="meta">${liveTag}${cbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
+    const hasScore = (ev.live || ev.final) && ev.score && ev.score.home != null && ev.score.away != null;
+    const actualScore = hasScore ? `${ev.score.home} - ${ev.score.away}` : "";
+    const liveTag = ev.live ? `<b style="color:#e53935">LIVE</b> · ` : "";
+    const head = `<div class="meta">${liveTag}${ev.final ? "Final · " : ""}${cbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
+    if (ev.final) {
+      return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span>${actualScore ? `<span class="score">${actualScore}</span>` : ""}</div><div class="settings-hint">Game finished.</div></div>`;
+    }
     if (ev.ph == null) {
       return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span></div>${warns}</div>`;
     }
@@ -8352,7 +8357,7 @@
     return `
       <div class="card">
         ${head}
-        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${Math.round(ev.ph)} - ${Math.round(ev.pa)}</span></div>
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${actualScore || (Math.round(ev.ph) + " - " + Math.round(ev.pa))}</span></div>${actualScore ? `<div class="meta">Model projection ${Math.round(ev.ph)} - ${Math.round(ev.pa)}</div>` : ""}
         <div class="meta">projected ${ev.ph.toFixed(1)} - ${ev.pa.toFixed(1)} · total ${ev.total.toFixed(1)} · ${ev.margin >= 0 ? ev.home : ev.away} by ${Math.abs(ev.margin).toFixed(1)}</div>
         <div class="meta">${[kl, klines ? "Kalshi 50% lines: " + klines : ""].filter(Boolean).join(" · ")}</div>
         ${warns}
