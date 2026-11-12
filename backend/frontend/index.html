@@ -8240,8 +8240,7 @@
     return `${row.kind === "th" ? ev.home : ev.away} points Over ${row.line}`;
   }
   function cbbYnLabels(kind) {
-    if (kind === "mlh" || kind === "mla") return ["Yes", "No"];
-    if (kind === "spread") return ["Home covers", "Away covers"];
+    if (kind === "mlh" || kind === "mla" || kind === "spread") return ["Yes", "No"];
     return ["Over", "Under"];
   }
 
