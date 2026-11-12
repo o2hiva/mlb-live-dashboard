@@ -292,6 +292,7 @@ class NBAProps(npf.NBAPlatform):
                 "away_team": g["away_name"], "home_team": g["home_name"],
                 "away_team_id": g["away_id"], "home_team_id": g["home_id"],
                 "completed": g["completed"], "started": bool(tip and now >= tip),
+                "home_score": g.get("home_score"), "away_score": g.get("away_score"),
                 "lineup_confirmed": False, "lineup_basis": None, "players": [],
                 "_tip": tip,
             }

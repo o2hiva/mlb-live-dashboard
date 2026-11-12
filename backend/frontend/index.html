@@ -7365,14 +7365,15 @@
   function nbaGameCardHtml(g) {
     const tip = g.tip_off ? formatKickoffPacific(g.tip_off) : "Time TBD";
     let status;
-    if (g.completed) status = "Final";
-    else if (g.started) status = "In progress";
+    const scoreTxt = (g.home_score != null && g.away_score != null) ? `${g.away_team} ${g.away_score} - ${g.home_team} ${g.home_score}` : "";
+    if (g.completed) status = scoreTxt ? `Final: ${scoreTxt}` : "Final";
+    else if (g.started) status = scoreTxt ? `In progress: ${scoreTxt}` : "In progress";
     else status = tip;
     const head = `
       <div class="teams"><span>${g.away_team} @ ${g.home_team}</span></div>
       <div class="meta">${status}</div>`;
     if (g.completed) {
-      return `<div class="card">${head}<div class="settings-hint">Game finished.</div></div>`;
+      return `<div class="card">${head}<div class="settings-hint">Game finished${scoreTxt ? " - final score " + scoreTxt : ""}.</div></div>`;
     }
     if (g.data_ready === false) {
       const tg = g.team_games || {};
