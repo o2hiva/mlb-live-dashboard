@@ -186,6 +186,7 @@
     <span id="tab-btn-nhl" class="tab-btn" onclick="switchTab('nhl')">NHL</span>
     <span id="tab-btn-nba" class="tab-btn" onclick="switchTab('nba')">NBA</span>
     <span id="tab-btn-cbb" class="tab-btn" onclick="switchTab('cbb')">CBB</span>
+    <span id="tab-btn-wcbb" class="tab-btn" onclick="switchTab('wcbb')">WCBB</span>
     <span id="tab-btn-tennis" class="tab-btn" onclick="switchTab('tennis')">Tennis</span>
     <span id="tab-btn-soccer" class="tab-btn" onclick="switchTab('soccer')">Soccer</span>
     <span id="tab-btn-edges" class="tab-btn" onclick="switchTab('edges')">Edges</span>
@@ -530,6 +531,30 @@
       <div class="sub">College basketball scorecard - every pre-game prediction is saved automatically and graded against the real final (overtime included). No bets are placed from it; it shows whether the model can be trusted, and how it compares with the Kalshi price.</div>
       <button class="tab-btn" onclick="loadCbbScorecard()" style="margin-bottom:10px;">Refresh</button>
       <div id="cbb-scorecard"><div class="settings-hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
+  <div id="tab-content-wcbb" style="display:none;">
+    <div class="tabs">
+      <span id="wcbb-view-btn-games" class="tab-btn active" onclick="switchWcbbView('games')">Games</span>
+      <span id="wcbb-view-btn-scorecard" class="tab-btn" onclick="switchWcbbView('scorecard')">Scorecard</span>
+    </div>
+    <div id="wcbb-games-wrap">
+      <div class="sub">College basketball (women's Division I) - projected score = home points-scored index x away points-allowed index x league average (mirror for the away team), with moneyline, spread, total and team-total probabilities. Home / away Market boxes fill from the stored Kalshi price (refreshed every 15 minutes) and so do spread / total / team-total lines Kalshi has a real book on; type any other price in the Market box (percent, or American odds like -150 / +130). Judge the model on the Scorecard.</div>
+      <div style="display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div>
+          <label for="wcbb-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+          <select id="wcbb-date-select" onchange="setWcbbDate(this.value)" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; min-width:200px;"></select>
+        </div>
+        <span class="hits-toggle" onclick="loadWcbbTab()" style="padding:6px 14px;">Refresh</span>
+      </div>
+      <div id="wcbb-status" class="settings-hint"></div>
+      <div id="wcbb-content">Loading...</div>
+    </div>
+    <div id="wcbb-scorecard-wrap" style="display:none;">
+      <div class="sub">College basketball scorecard - every pre-game prediction is saved automatically and graded against the real final (overtime included). No bets are placed from it; it shows whether the model can be trusted, and how it compares with the Kalshi price.</div>
+      <button class="tab-btn" onclick="loadWcbbScorecard()" style="margin-bottom:10px;">Refresh</button>
+      <div id="wcbb-scorecard"><div class="settings-hint">Open this tab to load.</div></div>
     </div>
   </div>
 
@@ -2978,6 +3003,7 @@
     document.getElementById("tab-content-nhl").style.display = tab === "nhl" ? "block" : "none";
     document.getElementById("tab-content-nba").style.display = tab === "nba" ? "block" : "none";
     document.getElementById("tab-content-cbb").style.display = tab === "cbb" ? "block" : "none";
+    document.getElementById("tab-content-wcbb").style.display = tab === "wcbb" ? "block" : "none";
     document.getElementById("tab-content-tennis").style.display = tab === "tennis" ? "block" : "none";
     document.getElementById("tab-content-bettracker").style.display = tab === "bettracker" ? "block" : "none";
     document.getElementById("tab-content-edges").style.display = tab === "edges" ? "block" : "none";
@@ -2990,6 +3016,7 @@
     document.getElementById("tab-btn-nhl").classList.toggle("active", tab === "nhl");
     document.getElementById("tab-btn-nba").classList.toggle("active", tab === "nba");
     document.getElementById("tab-btn-cbb").classList.toggle("active", tab === "cbb");
+    document.getElementById("tab-btn-wcbb").classList.toggle("active", tab === "wcbb");
     document.getElementById("tab-btn-tennis").classList.toggle("active", tab === "tennis");
     document.getElementById("tab-btn-bettracker").classList.toggle("active", tab === "bettracker");
     document.getElementById("tab-btn-edges").classList.toggle("active", tab === "edges");
@@ -3016,6 +3043,8 @@
       loadNbaTab();
     } else if (tab === "cbb") {
       loadCbbTab();
+    } else if (tab === "wcbb") {
+      loadWcbbTab();
     } else if (tab === "tennis") {
       loadTennisTab();
     }
@@ -3343,6 +3372,10 @@
     { label: "CBB Spread", filter: b => b.bet_type === "cbb_spread" },
     { label: "CBB Total Points", filter: b => b.bet_type === "cbb_total" },
     { label: "CBB Team Points", filter: b => b.bet_type === "cbb_th" || b.bet_type === "cbb_ta" },
+    { label: "WCBB Moneyline", filter: b => b.bet_type === "wcbb_ml_h" || b.bet_type === "wcbb_ml_a" },
+    { label: "WCBB Spread", filter: b => b.bet_type === "wcbb_spread" },
+    { label: "WCBB Total Points", filter: b => b.bet_type === "wcbb_total" },
+    { label: "WCBB Team Points", filter: b => b.bet_type === "wcbb_th" || b.bet_type === "wcbb_ta" },
     { label: "Champions LG Result (1X2)", filter: b => ["cl_h", "cl_d", "cl_a"].includes(b.bet_type) },
     { label: "Champions LG BTTS", filter: b => b.bet_type === "cl_btts" },
     { label: "Champions LG Total Goals", filter: b => b.bet_type === "cl_total" },
@@ -3409,6 +3442,7 @@
     { label: "NBA", filter: b => b.bet_type.startsWith("nba_") },
     { label: "NPB", filter: b => b.bet_type === "npb_yrfi" },
     { label: "CBB", filter: b => b.bet_type.startsWith("cbb_") },
+    { label: "WCBB", filter: b => b.bet_type.startsWith("wcbb_") },
     { label: "Tennis", filter: b => b.bet_type.startsWith("tennis_") },
     { label: "Soccer", filter: b => b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("cl_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") },
   ];
@@ -3645,7 +3679,7 @@
           <span>${b.batter_name}${(() => { const m = manualInfo(b); return m ? `<div class="settings-hint" id="mcat-${b.id}" style="margin:2px 0 0;">${m.sport} · ${m.type} · <span class="tracked-bet-remove" onclick="editManualCategory(${b.id}, '${m.sport.replace(/'/g, "")}')">change</span></div>` : ""; })()}</span>
           <span>${b.matchup}</span>
           <span>${b.yn}</span>
-          <span>${b.line != null && b.bet_type.startsWith("nba_") && !(b.bet_type === "nba_spread" || b.bet_type === "nba_total" || b.bet_type === "nba_moneyline") && b.line % 1 !== 0 ? (Math.floor(b.line) + 1) + "+" : b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cbb_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
+          <span>${b.line != null && b.bet_type.startsWith("nba_") && !(b.bet_type === "nba_spread" || b.bet_type === "nba_total" || b.bet_type === "nba_moneyline") && b.line % 1 !== 0 ? (Math.floor(b.line) + 1) + "+" : b.line != null ? ((b.bet_type === "hrr" || b.bet_type.startsWith("manual") || b.bet_type.startsWith("nba_") || b.bet_type.startsWith("tennis_") || b.bet_type.startsWith("bl_") || b.bet_type.startsWith("efl_") || b.bet_type.startsWith("j1_") || b.bet_type.startsWith("sa_") || b.bet_type.startsWith("epl_") || b.bet_type.startsWith("laliga_") || b.bet_type.startsWith("aleague_") || b.bet_type.startsWith("cbb_") || b.bet_type.startsWith("wcbb_") || b.bet_type.startsWith("cl_") || (b.bet_type.startsWith("nhl_") && b.bet_type !== "nhl_goalie_saves")) ? b.line : b.line + "+") : "—"}</span>
           <span>${b.market_probability != null ? b.market_probability + "%" : "—"}</span>
           <span>${b.wager != null ? "$" + b.wager.toFixed(2) : "—"}</span>
           ${resultCell}
@@ -3670,6 +3704,7 @@
     "NBA": ["NBA Points", "NBA Rebounds", "NBA Assists", "NBA PRA", "NBA Spread", "NBA Total", "NBA Moneyline"],
     "NPB": ["NPB YRFI", "NPB NRFI"],
     "CBB": ["CBB Moneyline", "CBB Spread", "CBB Total", "CBB Team Total"],
+    "WCBB": ["WCBB Moneyline", "WCBB Spread", "WCBB Total", "WCBB Team Total"],
     "Tennis": ["Tennis Moneyline", "Tennis Total Games", "Tennis Total Sets"],
     "Soccer": ["Bundesliga Result (1X2)", "Bundesliga BTTS", "Bundesliga Total Goals", "Bundesliga Team Goals",
                "Championship Result (1X2)", "Championship BTTS", "Championship Total Goals", "Championship Team Goals",
@@ -5881,6 +5916,7 @@
       if (vis("tab-content-soccer") && typeof renderLaLiga === "function") renderLaLiga();
       if (vis("tab-content-soccer") && typeof renderALeague === "function") renderALeague();
       if (vis("tab-content-cbb") && typeof renderCbb === "function") renderCbb();
+      if (vis("tab-content-wcbb") && typeof renderWcbb === "function") renderWcbb();
       if (vis("tab-content-soccer") && typeof renderCl === "function") renderCl();
     } catch (e) { /* a re-render problem must never break the page */ }
   }
@@ -6234,6 +6270,28 @@
       }
     }
 
+    // ---- WCBB: women's college basketball (judge these on the WCBB Scorecard) ----
+    if (wcbbData && wcbbData.events) {
+      for (const ev of wcbbData.events) {
+        if (ev.ph == null) continue;
+        for (const b of wcbbBetList(ev)) {
+          const key = wcbbKey(ev, b);
+          wcbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt, flip: !!b.flip, disp: b.disp };
+          const c = wcbbCalc(key);
+          const st = c.st, k = JSON.stringify(key).replace(/"/g, "&quot;");
+          const yesPct = b.p * 100, noPct = 100 - yesPct, isLine = b.line !== "";
+          const cells = byBetsGenericCells(st, yesPct, noPct, `updateWcbbField(${k},'yn',this.value)`, `updateWcbbField(${k},'market',this.value)`,
+            `updateWcbbField(${k},'useKelly',this.checked)`, `updateWcbbField(${k},'manualWager',this.value)`, "");
+          const [yl, nl] = wcbbYnLabels(b.kind);
+          cells.ynHtml = `<select onchange="updateWcbbField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yl}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${nl}</option></select>`;
+          cells.trackHtml = `<input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleWcbbTrack(${k},this.checked)" />`;
+          const group = b.group === "Moneyline" ? "Moneyline" : b.group === "Spread" ? "Spread" : b.group === "Total" ? "Total Points" : "Team Points";
+          add("WCBB", group, { state: st, yesPct, noPct, sides: edgeSidesForState(st, yesPct, noPct),
+            html: byBetsRowHtml("WCBB " + group, wcbbBetName(wcbbRows[key]), "—", `${ev.home} vs ${ev.away}`, "—", isLine ? `<span>${b.disp != null ? b.disp : b.line}</span>` : `<span>—</span>`, yesPct, cells) });
+        }
+      }
+    }
+
     // ---- Soccer: Champions League (the model's own backtest says it does not beat the closing market - judge these on the Scorecard) ----
     if (clData && clData.events) {
       for (const ev of clData.events) {
@@ -6506,7 +6564,7 @@
       <div class="settings-row" style="gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
         <label class="settings-hint" style="margin:0;">Min edge (pts) <input type="number" step="0.5" value="${edgesMinEdge}" style="width:70px;" onchange="edgesSetMin(this.value)" /></label>
         <label class="settings-hint" style="margin:0;">Sport
-          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","CBB","Tennis","Soccer"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+          <select onchange="edgesSetSport(this.value)"><option value="all">All</option>${["MLB","NBA","NHL","NFL","CFB","CBB","WCBB","Tennis","Soccer"].map(s => `<option value="${s}" ${edgesSportFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>
         <span class="settings-hint" style="margin:0;">${shown.length} edge${shown.length === 1 ? "" : "s"} of ${priced.length} priced bets (${items.length} bets scanned${edgesLoading ? " - still loading..." : ""})</span>
       </div>`;
     if (!shown.length) {
@@ -6527,7 +6585,7 @@
     renderEdges();
     const jobs = [];
     if (!byBetsCache || Date.now() - edgesMlbLoadedAt > 300000) { edgesMlbLoadedAt = Date.now(); jobs.push(loadByBetsTab()); }
-    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), loadLaLigaTab(true), loadALeagueTab(true), loadCbbTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
+    jobs.push(loadNbaTab(true), loadNhlGamesTab(true), loadNflPointsTab(), loadTennisTab(true), loadCfbTab(), loadBlTab(true), loadEflTab(true), loadJ1Tab(true), loadClTab(true), loadSaTab(true), loadEplTab(true), loadLaLigaTab(true), loadALeagueTab(true), loadCbbTab(true), loadWcbbTab(true), ensurePlayoffInfo(datePicker.value || todayIso()));
     // draw as soon as each sport arrives, not only when the slowest finishes
     jobs.forEach(j => j.then(renderEdges, renderEdges));
     await Promise.allSettled(jobs);
@@ -8491,6 +8549,358 @@
     const a = document.activeElement;
     if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
     loadCbbTab(true);
+  }, 60000);
+
+  // ======================================================================================================================
+  // WCBB: women's college basketball (wcbb_platform.py). Per upcoming game: moneyline (home / away), spread, total points, each team's points -
+  // all with Market (the stored Kalshi price where one exists), Edge, Kelly, Wager, Profit and Track. Tracked bets are graded on the final
+  // score, overtime included (bet types wcbb_ml_h / wcbb_ml_a / wcbb_spread / wcbb_total / wcbb_th / wcbb_ta). Spread bets store the HOME handicap
+  // as the line (negative = home favoured) and "Yes" = the home team covers.
+  // ======================================================================================================================
+  let wcbbData = null;
+  let wcbbRows = {};
+  let wcbbDateChoice = null;
+  const wcbbState = {};
+  const wcbbCustomLine = {};     // `${id}|total` / `${id}|spread` -> typed line
+  const WCBB_COLS = "minmax(140px, 1.5fr) 62px 38px 38px 64px 64px 52px 46px 30px 58px 54px 40px";
+
+  function wcbbNcdf(x) {   // standard normal CDF (Abramowitz-Stegun erf approximation)
+    const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x / 2);
+    return x >= 0 ? 0.5 * (1 + y) : 0.5 * (1 - y);
+  }
+  function wcbbPover(mu, sd, line) { return 1 - wcbbNcdf((line - mu) / sd); }
+  function wcbbRound5(x) { return Math.floor(x) + 0.5; }
+
+  // market price (a fraction) for a ladder line, from the server's market_rows: {kind: [[line, market p, model p]]}
+  function wcbbLadderMarket(ev, kind, line) {
+    const r = ((ev.market_rows || {})[kind] || []).find(x => Math.abs(x[0] - line) < 1e-6);
+    return r ? r[1] : null;
+  }
+
+  function wcbbBetList(ev) {
+    if (ev.ph == null) return [];
+    const sp = (wcbbData && wcbbData.spreads) || { sd_margin: 11.9, sd_total: 16.9, sd_team: 10.4 };
+    const out = [];
+    out.push({ kind: "mlh", line: "", label: `${ev.home} to win`, p: ev.home_win, group: "Moneyline", mkt: ev.market ? ev.market.home : null });
+    out.push({ kind: "mla", line: "", label: `${ev.away} to win`, p: 1 - ev.home_win, group: "Moneyline", mkt: ev.market ? ev.market.away : null });
+    const lines = ev.lines || {};
+    const add = (kind, group, labelFn, xs, pFn, mFn) => {
+      const seen = new Set();
+      for (const x of xs) {
+        if (seen.has(x)) continue;
+        seen.add(x);
+        out.push({ kind, line: String(x), label: labelFn(x), p: pFn(x), group, mkt: mFn(x) });
+      }
+    };
+    // spread: line = HOME handicap (negative = home favoured), Yes = home covers
+    const spreadXs = new Set((lines.spread || []).map(r => r[0]));
+    ((ev.market_rows || {}).spread || []).forEach(r => spreadXs.add(r[0]));
+    const cs = wcbbCustomLine[ev.id + "|spread"];
+    if (cs != null) spreadXs.add(cs);
+    // shown from the FAVOURITE's side ("Bradley -10.5"): Yes = the favourite covers.  line stays the home handicap (keys, tracking, grading).
+    for (const x of [...spreadXs].sort((a, b) => a - b)) {
+      const pHome = wcbbPover(ev.ph - ev.pa, sp.sd_margin, -x), mHome = wcbbLadderMarket(ev, "spread", x);
+      const flip = x > 0;                                    // home is the underdog, so the away team is the favourite
+      const favName = flip ? ev.away : ev.home, mag = Math.abs(x);
+      out.push({ kind: "spread", line: String(x), disp: x === 0 ? "0" : "-" + mag, flip, label: `${favName} ${x === 0 ? "0" : "-" + mag}`, group: "Spread",
+                 p: pHome == null ? null : (flip ? 1 - pHome : pHome), mkt: mHome == null ? null : (flip ? 1 - mHome : mHome) });
+    }
+    const totalXs = new Set((lines.total || []).map(r => r[0]));
+    ((ev.market_rows || {}).total || []).forEach(r => totalXs.add(r[0]));
+    const ct = wcbbCustomLine[ev.id + "|total"];
+    if (ct != null) totalXs.add(ct);
+    add("total", "Total", x => "Total points", [...totalXs].sort((a, b) => a - b),
+        x => wcbbPover(ev.ph + ev.pa, sp.sd_total, x), x => wcbbLadderMarket(ev, "total", x));
+    for (const side of ["home", "away"]) {
+      const xs = new Set((lines[side] || []).map(r => r[0]));
+      ((ev.market_rows || {})[side] || []).forEach(r => xs.add(r[0]));
+      const mu = side === "home" ? ev.ph : ev.pa;
+      add(side === "home" ? "th" : "ta", "Team", x => `${side === "home" ? ev.home : ev.away} points`, [...xs].sort((a, b) => a - b),
+          x => wcbbPover(mu, sp.sd_team, x), x => wcbbLadderMarket(ev, side, x));
+    }
+    return out.filter(b => b.p != null);
+  }
+
+  function wcbbKey(ev, b) { return `${ev.id}|${b.kind}|${b.line}`; }
+
+  function wcbbServerPct(row, yn) {
+    const p = row.mkt;
+    if (marketBook !== "kalshi" || p == null || p <= 0 || p >= 1) return null;
+    return Math.round((yn === "no" ? 1 - p : p) * 1000) / 10;
+  }
+
+  function getWcbbState(key) {
+    if (!wcbbState[key]) wcbbState[key] = { yn: "yes", market: null, useKelly: true, manualWager: 0, tracked: false, trackedId: null };
+    return liveMarket(wcbbState[key], s => { const row = wcbbRows[key]; return row ? wcbbServerPct(row, s.yn) : null; });
+  }
+
+  function wcbbCalc(key) {
+    const row = wcbbRows[key];
+    if (!row) return null;
+    const st = getWcbbState(key);
+    const modelProb = st.yn === "yes" ? row.p : 1 - row.p;
+    const market = st.market;
+    const wager = st.useKelly ? kellyWagerAmount(modelProb, market) : st.manualWager;
+    const profit = profitIfWon(wager, market);
+    return { row, st, modelProb, market, wager, profit };
+  }
+
+  function wcbbBetType(kind) { return { mlh: "wcbb_ml_h", mla: "wcbb_ml_a", spread: "wcbb_spread", total: "wcbb_total", th: "wcbb_th", ta: "wcbb_ta" }[kind]; }
+  function wcbbBetName(row) {
+    const ev = row.ev, ln = parseFloat(row.line);
+    if (row.kind === "mlh") return `${ev.home} to win`;
+    if (row.kind === "mla") return `${ev.away} to win`;
+    if (row.kind === "spread") return `${ln > 0 ? ev.away : ev.home} ${ln === 0 ? "0" : "-" + Math.abs(ln)}`;
+    if (row.kind === "total") return `Total points Over ${row.line}`;
+    return `${row.kind === "th" ? ev.home : ev.away} points Over ${row.line}`;
+  }
+  function wcbbYnLabels(kind) {
+    if (kind === "mlh" || kind === "mla" || kind === "spread") return ["Yes", "No"];
+    return ["Over", "Under"];
+  }
+
+  function updateWcbbField(key, field, value) {
+    const st = getWcbbState(key);
+    if (field === "market") st.market = (value === "" || isNaN(parseFloat(value))) ? null : parseFloat(value);
+    else if (field === "manualWager") st.manualWager = parseFloat(value) || 0;
+    else st[field] = value;
+    renderWcbb();
+  }
+
+  function setWcbbCustomLine(id, which, v) {
+    let x = parseFloat(v);
+    if (isNaN(x)) { delete wcbbCustomLine[id + "|" + which]; renderWcbb(); return; }
+    wcbbCustomLine[id + "|" + which] = x;   // typed as-is (a whole number can push; the grader handles it)
+    renderWcbb();
+  }
+
+  async function toggleWcbbTrack(key, checked) {
+    const c = wcbbCalc(key);
+    if (!c) return;
+    const { row, st, modelProb, market, wager, profit } = c;
+    if (checked) {
+      try {
+        const res = await fetch(`${API_BASE}/api/bet-tracker/track`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_pk: null, bet_type: wcbbBetType(row.kind), external_player_id: String(row.ev.id), batter_name: wcbbBetName(row),
+            team_side: `${row.ev.home} vs ${row.ev.away}`, line: row.line === "" ? null : parseFloat(row.line), yn: row.flip ? (st.yn === "yes" ? "no" : "yes") : st.yn,   // stored as "home covers" for grading
+            model_probability: modelProb, market_probability: market, wager: wager, potential_profit: profit,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data && data.id != null) { st.tracked = true; st.trackedId = data.id; } else { st.tracked = false; st.trackedId = null; }
+      } catch (e) { st.tracked = false; st.trackedId = null; }
+    } else {
+      if (st.trackedId != null) {
+        try { await fetch(`${API_BASE}/api/bet-tracker/track/${st.trackedId}`, { method: "DELETE" }); } catch (e) { /* the Bet Tracker's Remove can clean up */ }
+      }
+      st.tracked = false; st.trackedId = null;
+    }
+    renderWcbb();
+  }
+
+  function wcbbQuoteCell(row, st) {
+    const sp = wcbbServerPct(row, st.yn);
+    if (sp != null) return `<span class="hits-index" title="Kalshi midpoint (server snapshot)">${sp.toFixed(1)}%</span>`;
+    return `<span class="hits-index" title="No Kalshi price stored for this bet">–</span>`;
+  }
+
+  function wcbbRowHtml(ev, b) {
+    const key = wcbbKey(ev, b);
+    wcbbRows[key] = { ev, kind: b.kind, line: b.line, p: b.p, label: b.label, mkt: b.mkt, flip: !!b.flip, disp: b.disp };
+    const c = wcbbCalc(key);
+    const { st, modelProb, market, wager, profit } = c;
+    const k = JSON.stringify(key).replace(/"/g, "&quot;");
+    const isLine = b.line !== "";
+    const yesPct = b.p * 100, noPct = 100 - yesPct;
+    const live = !st.isManual && market != null;
+    const wagerCell = st.useKelly ? `<span>$${wager.toFixed(2)}</span>` : `<input type="number" step="0.01" min="0" value="${st.manualWager}" onchange="updateWcbbField(${k},'manualWager',this.value)" />`;
+    const [yes, no] = wcbbYnLabels(b.kind);
+    return `
+      <div class="hits-batter" style="grid-template-columns: ${WCBB_COLS};">
+        <span style="font-size:0.8rem;">${b.label}</span>
+        <span style="text-align:center;">${isLine ? (b.disp != null ? b.disp : b.line) : "—"}</span>
+        <span class="prob-yes">${Math.round(yesPct)}%</span>
+        <span class="prob-no">${Math.round(noPct)}%</span>
+        <select onchange="updateWcbbField(${k},'yn',this.value)"><option value="yes" ${st.yn === "yes" ? "selected" : ""}>${yes}</option><option value="no" ${st.yn === "no" ? "selected" : ""}>${no}</option></select>
+        ${wcbbQuoteCell(wcbbRows[key], st)}
+        <input type="number" step="0.1" min="0" max="100" value="${market != null ? market : ""}" placeholder="%" style="${live ? "border-color:rgba(61,220,151,0.5);" : ""}" title="${live ? "Stored Kalshi price - type to override, clear to go back to it" : "No Kalshi price stored - type your market price"}" onchange="updateWcbbField(${k},'market',this.value)" />
+        ${tennisEdgeCell(modelProb, market)}
+        <input type="checkbox" ${st.useKelly ? "checked" : ""} onchange="updateWcbbField(${k},'useKelly',this.checked)" />
+        ${wagerCell}
+        <span>${profit != null ? "$" + profit.toFixed(2) : "—"}</span>
+        <input type="checkbox" ${st.tracked ? "checked" : ""} onchange="toggleWcbbTrack(${k},this.checked)" />
+      </div>`;
+  }
+
+  function wcbbHeaderHtml() {
+    return `<div class="hits-batter hits-batter-header" style="grid-template-columns: ${WCBB_COLS};"><span>Bet</span><span>Line</span><span>Yes</span><span>No</span><span>Y/N</span><span>Quote</span><span>Market</span><span>Edge</span><span>Kelly</span><span>Wager</span><span>Profit</span><span>Track</span></div>`;
+  }
+
+  function wcbbFmtKickoff(ev) {
+    if (!ev.kickoff) return "Tip-off TBD";
+    const dt = new Date(ev.kickoff);
+    if (isNaN(dt.getTime())) return "Tip-off TBD";
+    return dt.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }) + " " +
+      dt.toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }) + " PT";
+  }
+
+  function wcbbEventCardHtml(ev) {
+    const warns = (ev.warnings || []).map(w => `<div class="settings-hint">⚠ ${w}</div>`).join("");
+    const hasScore = (ev.live || ev.final) && ev.score && ev.score.home != null && ev.score.away != null;
+    const actualScore = hasScore ? `${ev.score.home} - ${ev.score.away}` : "";
+    const liveTag = ev.live ? `<b style="color:#e53935">LIVE</b> · ` : "";
+    const head = `<div class="meta">${liveTag}${ev.final ? "Final · " : ""}${wcbbFmtKickoff(ev)}${ev.neutral ? " · neutral site" : ""}</div>`;
+    if (ev.final) {
+      return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span>${actualScore ? `<span class="score">${actualScore}</span>` : ""}</div><div class="settings-hint">Game finished.</div></div>`;
+    }
+    if (ev.ph == null) {
+      return `<div class="card">${head}<div class="teams"><span>${ev.home} vs ${ev.away}</span></div>${warns}</div>`;
+    }
+    const bets = wcbbBetList(ev);
+    const mlg = bets.filter(b => b.group === "Moneyline"), spr = bets.filter(b => b.group === "Spread"), tot = bets.filter(b => b.group === "Total"), team = bets.filter(b => b.group === "Team");
+    const mk = ev.market, pc = x => x == null ? "–" : (x * 100).toFixed(0) + "%";
+    const kl = mk ? `Kalshi: ${ev.home} ${pc(mk.home)} · ${ev.away} ${pc(mk.away)}${mk.soft ? " (thin book)" : ""}` : "";
+    const ml = ev.market_lines || {};
+    const klines = [ml.spread != null ? `spread ${Number(ml.spread).toFixed(1)}` : "", ml.total != null ? `total ${Number(ml.total).toFixed(1)}` : ""].filter(Boolean).join(" · ");
+    const cs = wcbbCustomLine[ev.id + "|spread"], ct = wcbbCustomLine[ev.id + "|total"];
+    const inp = "width:70px; background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:2px 6px;";
+    const customHtml = `<div class="settings-hint" style="margin:8px 0 2px;">Add a line: spread (${ev.home} handicap, e.g. -4.5; use + if ${ev.home} is the underdog) <input type="number" step="0.5" style="${inp}" value="${cs != null ? cs : ""}" onchange="setWcbbCustomLine('${ev.id}','spread',this.value)" /> &nbsp; total <input type="number" step="0.5" style="${inp}" value="${ct != null ? ct : ""}" onchange="setWcbbCustomLine('${ev.id}','total',this.value)" /></div>`;
+    const sect = (title, rows) => rows.length ? `<div class="settings-hint" style="margin:10px 0 4px; font-weight:600;">${title}</div>${rows.map(b => wcbbRowHtml(ev, b)).join("")}` : "";
+    return `
+      <div class="card">
+        ${head}
+        <div class="teams"><span>${ev.home} vs ${ev.away}</span><span class="score">${actualScore || (Math.round(ev.ph) + " - " + Math.round(ev.pa))}</span></div>${actualScore ? `<div class="meta">Model projection ${Math.round(ev.ph)} - ${Math.round(ev.pa)}</div>` : ""}
+        <div class="meta">projected ${ev.ph.toFixed(1)} - ${ev.pa.toFixed(1)} · total ${ev.total.toFixed(1)} · ${ev.margin >= 0 ? ev.home : ev.away} by ${Math.abs(ev.margin).toFixed(1)}</div>
+        <div class="meta">${[kl, klines ? "Kalshi 50% lines: " + klines : ""].filter(Boolean).join(" · ")}</div>
+        ${warns}
+        ${wcbbHeaderHtml()}
+        ${mlg.map(b => wcbbRowHtml(ev, b)).join("")}
+        ${sect("Spread (line = " + ev.home + " handicap; Yes = " + ev.home + " covers)", spr)}
+        ${sect("Total points", tot)}
+        ${sect("Team points", team)}
+        ${customHtml}
+      </div>`;
+  }
+
+  function setWcbbDate(v) { wcbbDateChoice = v; renderWcbb(); }
+
+  function renderWcbb() {
+    if (deferIfTabHidden("tab-content-wcbb", renderWcbb)) return;
+    const container = document.getElementById("wcbb-content");
+    if (!container || !wcbbData) return;
+    const statusEl = document.getElementById("wcbb-status");
+    const d = wcbbData;
+    if (d.status === "error") {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || ["College basketball data unavailable right now."]).join(" ")}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const all = d.events || [];
+    if (!all.length) {
+      container.innerHTML = `<div class="settings-hint">${(d.warnings || []).join(" ") || "No upcoming college basketball games right now."}${d.needs_bootstrap ? " The first start downloads about six seasons of ESPN data and runs the backtest (roughly 15-30 minutes) - this page fills in by itself." : ""}</div>`;
+      if (statusEl) statusEl.textContent = "";
+      return;
+    }
+    const dateKey = ev => (ev.kickoff ? kEtDate(ev.kickoff) : "") || "";
+    const dates = [...new Set(all.map(dateKey).filter(Boolean))].sort();
+    if (wcbbDateChoice === null) wcbbDateChoice = "";
+    const sel = document.getElementById("wcbb-date-select");
+    if (sel) {
+      sel.innerHTML = `<option value="">All upcoming games (${all.length})</option>` + dates.map(x => `<option value="${x}" ${x === wcbbDateChoice ? "selected" : ""}>${x} (${all.filter(e => dateKey(e) === x).length})</option>`).join("");
+      sel.value = wcbbDateChoice;
+    }
+    const shown = wcbbDateChoice ? all.filter(e => dateKey(e) === wcbbDateChoice) : all;
+    wcbbRows = {};
+    if (statusEl) {
+      const age = d.fixtures_age_minutes != null ? `slate ${Math.round(d.fixtures_age_minutes)} min old` : "";
+      const through = d.data_through ? `results through ${d.data_through}` : "";
+      const priced = d.n_with_market != null ? `${d.n_with_market} of ${d.n_events} games priced on Kalshi` : "";
+      statusEl.textContent = [age, through, priced, ...(d.warnings || [])].filter(Boolean).join(" · ");
+    }
+    container.innerHTML = `<div class="grid">${shown.map(wcbbEventCardHtml).join("")}</div>`;
+  }
+
+  async function loadWcbbTab(silent) {
+    const container = document.getElementById("wcbb-content");
+    if (!silent && !wcbbData && container) container.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const res = await fetch(`${API_BASE}/api/wcbb/slate`);
+      wcbbData = await res.json();
+      renderWcbb();
+    } catch (e) {
+      if (!silent && container) container.innerHTML = `<div class="settings-hint">Couldn't load the college basketball games.</div>`;
+    }
+  }
+
+  function switchWcbbView(view) {
+    document.getElementById("wcbb-games-wrap").style.display = view === "games" ? "block" : "none";
+    document.getElementById("wcbb-scorecard-wrap").style.display = view === "scorecard" ? "block" : "none";
+    document.getElementById("wcbb-view-btn-games").classList.toggle("active", view === "games");
+    document.getElementById("wcbb-view-btn-scorecard").classList.toggle("active", view === "scorecard");
+    if (view === "scorecard") loadWcbbScorecard();
+  }
+
+  async function loadWcbbScorecard() {
+    const el = document.getElementById("wcbb-scorecard");
+    if (!el) return;
+    el.innerHTML = `<div class="settings-hint">Loading...</div>`;
+    try {
+      const [sr, rr] = await Promise.all([fetch(`${API_BASE}/api/wcbb/scorecard`), fetch(`${API_BASE}/api/wcbb/results?n=30`)]);
+      const d = await sr.json(), r = await rr.json();
+      if (d.status !== "ok") { el.innerHTML = `<div class="settings-hint">Scorecard unavailable: ${(d.warnings || ["error"])[0]}</div>`; return; }
+      const f3 = x => x == null ? "–" : Number(x).toFixed(3), f2 = x => x == null ? "–" : Number(x).toFixed(2), pc = x => x == null ? "–" : (x * 100).toFixed(1) + "%";
+      const th = "text-align:right; padding:3px 8px; color:var(--muted); font-weight:500;", td = "text-align:right; padding:3px 8px;";
+      const live = d.live, retro = d.retrospective;
+      let h = `<div class="settings-hint">${(d.warnings || []).join(" ")}</div><div class="settings-hint">${d.logged_predictions || 0} pre-game predictions logged.</div>`;
+      if (!live) {
+        h += `<h3 style="margin:14px 0 4px;">Live record</h3><div class="settings-hint">No settled games yet - predictions are logged before tip-off and settle once the final is in.</div>`;
+      } else {
+        const s = live.score || {};
+        h += `<h3 style="margin:14px 0 4px;">Live record <span class="settings-hint">(${s.n != null ? s.n : ""} settled games)</span></h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><td style="${td}">Win log loss (lower is better)</td><td style="${td}">${f3(s.win_logloss)}</td></tr>
+            <tr><td style="${td}">Win Brier</td><td style="${td}">${f3(s.win_brier)}</td></tr>
+            <tr><td style="${td}">Winner picked right</td><td style="${td}">${pc(s.win_acc)}</td></tr>
+            <tr><td style="${td}">Margin error (MAE, points)</td><td style="${td}">${f2(s.mae_margin)}</td></tr>
+            <tr><td style="${td}">Total error (MAE, points)</td><td style="${td}">${f2(s.mae_total)}</td></tr>
+          </table>`;
+        const rows = [];
+        if (live.market) rows.push(["Moneyline", live.market]);
+        Object.values(live.ladders || {}).forEach(l => rows.push([l.label, l]));
+        if (rows.length) {
+          h += `<h3 style="margin:14px 0 4px;">Model vs Kalshi (log loss, paired; negative difference = model better, trust it only beyond 2 se)</h3>
+            <table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}; text-align:left;">Market</th><th style="${th}">Games</th><th style="${th}">Model</th><th style="${th}">Kalshi</th><th style="${th}">Difference</th><th style="${th}">se</th></tr>
+            ${rows.map(([n, x]) => `<tr><td style="text-align:left; padding:3px 8px;">${n}</td><td style="${td}">${x.n}</td><td style="${td}">${f3(x.model_ll)}</td><td style="${td}">${f3(x.market_ll)}</td><td style="${td}">${f3(x.diff)}</td><td style="${td}">${f3(x.se)}</td></tr>`).join("")}</table>`;
+        }
+      }
+      if (retro && retro.shipped) {
+        const s = retro.shipped;
+        h += `<h3 style="margin:14px 0 4px;">Backtest (tuned on ${retro.tune}, tested on ${(retro.test || []).join(", ")}; model "${retro.ship}")</h3>
+          <table style="border-collapse:collapse; font-size:0.85rem;">
+            <tr><td style="${td}">Win log loss</td><td style="${td}">${f3(s.win_logloss)}</td></tr>
+            <tr><td style="${td}">Winner picked right</td><td style="${td}">${pc(s.win_acc)}</td></tr>
+            <tr><td style="${td}">Margin error (MAE, points)</td><td style="${td}">${f2(s.mae_margin)}</td></tr>
+            <tr><td style="${td}">Total error (MAE, points)</td><td style="${td}">${f2(s.mae_total)}</td></tr>
+          </table>`;
+      }
+      const recent = (r.results || []).map(x => `<tr><td style="${td}">${x.date}</td><td style="text-align:left; padding:3px 8px;">${x.match}</td><td style="${td}">${pc(x.p_home)}</td><td style="${td}">${pc(x.market_home)}</td><td style="${td}">${x.proj}</td><td style="${td}">${x.score}</td></tr>`).join("");
+      if (recent) h += `<h3 style="margin:14px 0 4px;">Recent settled games</h3><table style="border-collapse:collapse; font-size:0.85rem;"><tr><th style="${th}">Date</th><th style="${th}; text-align:left;">Game</th><th style="${th}">Model home</th><th style="${th}">Kalshi home</th><th style="${th}">Projected</th><th style="${th}">Final</th></tr>${recent}</table>`;
+      el.innerHTML = h;
+    } catch (e) {
+      el.innerHTML = `<div class="settings-hint">Couldn't load the scorecard.</div>`;
+    }
+  }
+
+  // re-read the slate every 60 s while the WCBB tab is open (skipped while the viewer is typing)
+  setInterval(() => {
+    const tab = document.getElementById("tab-content-wcbb");
+    if (!tab || tab.style.display === "none") return;
+    const a = document.activeElement;
+    if (a && tab.contains(a) && (a.tagName === "INPUT" || a.tagName === "SELECT")) return;
+    loadWcbbTab(true);
   }, 60000);
 
   function switchSoccerSub(sub) {

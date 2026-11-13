@@ -195,6 +195,13 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger("main").exception("CBB service failed to start")
     try:
+        import wcbb_service
+        wcbb_service.start_background()
+    except Exception:
+        # college basketball is optional: never stop the whole app from booting over it
+        import logging
+        logging.getLogger("main").exception("WCBB service failed to start")
+    try:
         import cl_service
         cl_service.start_background()
     except Exception:
@@ -2740,6 +2747,60 @@ def refresh_cbb(what: str = "slate"):
     return svc.refresh_slate(kalshi=True)
 
 
+@app.get("/api/wcbb/slate")
+def wcbb_slate():
+    """Upcoming Division I women's basketball games: projected score, moneyline, spread / total / team-total ladders, Kalshi prices.
+    See wcbb_service.py / wcbb_platform.py."""
+    import wcbb_service
+    return wcbb_service.get_service().slate()
+
+
+@app.get("/api/wcbb/health")
+def wcbb_health():
+    import wcbb_service
+    return wcbb_service.get_service().health()
+
+
+@app.get("/api/wcbb/scorecard")
+def wcbb_scorecard():
+    """Live record of the logged pre-game predictions (vs Kalshi where priced) + the saved backtest summary."""
+    import wcbb_service
+    return wcbb_service.get_service().get_scorecard()
+
+
+@app.get("/api/wcbb/results")
+def wcbb_results(n: int = 60):
+    import wcbb_service
+    return wcbb_service.get_service().get_results(n)
+
+
+@app.get("/api/wcbb/teams")
+def wcbb_teams():
+    import wcbb_service
+    return {"status": "ok", "warnings": [], "teams": wcbb_service.get_service().teams()}
+
+
+@app.get("/api/wcbb/predict")
+def wcbb_predict(home: str, away: str, neutral: bool = False, conference: bool = False, spread: float | None = None,
+                total_line: float | None = None, home_line: float | None = None, away_line: float | None = None):
+    import wcbb_service
+    return wcbb_service.get_service().predict(home, away, neutral, conference, spread, total_line, home_line, away_line)
+
+
+@app.get("/api/admin/refresh-wcbb")
+def refresh_wcbb(what: str = "slate"):
+    """Manual trigger: what = data | slate | kalshi | results | bootstrap."""
+    import wcbb_service
+    svc = wcbb_service.get_service()
+    if what == "data":
+        return svc.refresh_data()
+    if what == "bootstrap":
+        return svc.bootstrap()
+    if what == "results":
+        return svc.refresh_results()
+    return svc.refresh_slate(kalshi=True)
+
+
 @app.get("/api/cl/slate")
 def cl_slate():
     """Upcoming Champions League matches: expected goals, 1X2, BTTS, total and team goals, lineup used, Kalshi / DraftKings prices. See
@@ -3109,7 +3170,7 @@ def list_tracked_bets(db: Session = Depends(get_db)):
             "batter_name": r.batter_name,
             "team_side": r.team_side,
             "external_player_id": r.external_player_id,
-            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("aleague_") or (r.bet_type or "").startswith("cbb_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
+            "matchup": f"{game.away_team} @ {game.home_team}" if game else (r.team_side if ((r.bet_type or "").startswith("nba_") or (r.bet_type or "").startswith("nhl_") or (r.bet_type or "").startswith("tennis_") or (r.bet_type or "").startswith("bl_") or (r.bet_type or "").startswith("efl_") or (r.bet_type or "").startswith("j1_") or (r.bet_type or "").startswith("sa_") or (r.bet_type or "").startswith("epl_") or (r.bet_type or "").startswith("laliga_") or (r.bet_type or "").startswith("aleague_") or (r.bet_type or "").startswith("cbb_") or (r.bet_type or "").startswith("wcbb_") or (r.bet_type or "").startswith("cl_") or (r.bet_type or "").startswith("manual")) and r.team_side else "Unknown matchup"),
             "game_date": game.game_date if game else None,
             "hits_threshold": r.hits_threshold,
             "line": r.line if r.line is not None else r.hits_threshold,

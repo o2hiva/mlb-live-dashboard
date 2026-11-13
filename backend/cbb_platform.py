@@ -944,6 +944,17 @@ def refresh_kalshi(d, get=None, now=None):
     return events
 
 
+def split_misses(miss, today, lookahead=None):
+    """Kalshi games with no matching upcoming fixture -> (real misses, probably already started, beyond the fixture window).
+    ESPN only lists not-yet-started games, and only `lookahead` days ahead, so most 'unmatched' games are one of the other two."""
+    la = LOOKAHEAD_DAYS if lookahead is None else lookahead
+    real, started, later = [], [], []
+    for e in miss:
+        d = dt.date.fromisoformat(e["date"])
+        (started if d <= today else later if d > today + dt.timedelta(days=la) else real).append(e)
+    return real, started, later
+
+
 def kalshi_markets(d, fixtures, now=None):
     """-> ({fixture id: {home, away, overround, soft}}, unmatched Kalshi games) from the stored Kalshi file (ignored if older than KALSHI_MAX_AGE_H)."""
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -1147,7 +1158,8 @@ def cmd_slate(a, get=None, today=None, out=print, kget=None):
         for v in views:
             print_view(v)
     if not getattr(a, "quiet", False) and (mk or miss):
-        out(f"\nKalshi market on {len(mk)} of {len(views)} games; {len(miss)} Kalshi game(s) in this window not matched to a fixture (run `kalshi` for the list)")
+        real, started, later = split_misses(miss, today)
+        out(f"\nKalshi market on {len(mk)} of {len(views)} games; {len(real)} Kalshi game(s) in the window not matched to a fixture (run `kalshi` for the list); {len(started)} already started, {len(later)} beyond the window")
     n = log_views(a.dir, views, dt.datetime.now(dt.timezone.utc))
     if n:
         out(f"\nlogged {n} prediction(s)")
@@ -1165,11 +1177,13 @@ def cmd_kalshi(a, get=None, kget=None, today=None, out=print):
         return None
     mk, miss = kalshi_markets(a.dir, up)
     names = {g["id"]: g for g in up}
-    out(f"\n{len(mk)} of {len(up)} upcoming games have a Kalshi price; {len(miss)} Kalshi game(s) near these dates were not matched")
+    real, started, later = split_misses(miss, today)
+    out(f"\n{len(mk)} of {len(up)} upcoming games have a Kalshi price; {len(real)} Kalshi game(s) could not be matched; "
+        f"{len(started)} more are today's games that have probably already started and {len(later)} are beyond the {LOOKAHEAD_DAYS}-day fixture window (both normal)")
     for gid, q in sorted(mk.items(), key=lambda kv: names[kv[0]].get("date") or ""):
         g = names[gid]
         out(f"   {(g.get('date') or '')[:10]}  {g['home']['name']} {q['home'] * 100:.1f}%  vs  {g['away']['name']} {q['away'] * 100:.1f}%   (book total {q['overround']:.3f})" + ("  [thin book]" if q["soft"] else ""))
-    for e in miss:
+    for e in real:
         out(f"   UNMATCHED {e['date']}  " + " vs ".join(f"{sd['name']} ({sd['abbr']})" for sd in e["sides"]) + "   -> add an alias if this is a Division I game")
     return mk, miss
 
@@ -1459,7 +1473,7 @@ class Platform:
             with self.lock:
                 self._slate, self._slate_at, self._slate_err = views, dt.datetime.now(dt.timezone.utc), None
             self.last["slate"] = self._slate_at.isoformat()
-            return {"status": "ok", "warnings": msgs, "games": len(views), "with_market": len(mk), "unmatched_kalshi": len(miss), "logged": n}
+            return {"status": "ok", "warnings": msgs, "games": len(views), "with_market": len(mk), "unmatched_kalshi": len(split_misses(miss, today)[0]), "logged": n}
         except Exception as e:                                   # noqa: BLE001
             self._slate_err = f"{type(e).__name__}: {str(e)[:150]}"
             return {"status": "error", "warnings": [self._slate_err]}
