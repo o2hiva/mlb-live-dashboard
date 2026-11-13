@@ -1194,6 +1194,102 @@ def _admin_try(fn, *args):
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
 
 
+def _proc_mem_mb():
+    """Process + container memory straight from the kernel (no psutil needed)."""
+    out = {}
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith(("VmRSS", "VmHWM", "VmSwap")):
+                    k, v = line.split(":", 1)
+                    out[k.strip()] = round(int(v.split()[0]) / 1024.0, 1)
+    except OSError:
+        pass
+    for p in ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+        try:
+            with open(p) as f:
+                out["container_mb"] = round(int(f.read().strip()) / 1048576.0, 1)
+            break
+        except (OSError, ValueError):
+            continue
+    for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(p) as f:
+                v = f.read().strip()
+            if v.isdigit() and int(v) < 1 << 50:
+                out["container_limit_mb"] = round(int(v) / 1048576.0, 1)
+            break
+        except OSError:
+            continue
+    return out
+
+
+def _deep_size(root, seen, budget_s=4.0):
+    """Approximate bytes held by `root` (containers walked, objects de-duplicated across calls via `seen`)."""
+    import sys as _s, time as _t, types
+    t0, total, stack = _t.time(), 0, [root]
+    while stack:
+        if _t.time() - t0 > budget_s:
+            return total, True
+        o = stack.pop()
+        i = id(o)
+        if i in seen or isinstance(o, (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)):
+            continue
+        seen.add(i)
+        try:
+            total += _s.getsizeof(o)
+        except Exception:                                        # noqa: BLE001
+            continue
+        if isinstance(o, dict):
+            stack.extend(o.keys()); stack.extend(o.values())
+        elif isinstance(o, (list, tuple, set, frozenset)):
+            stack.extend(o)
+        elif hasattr(o, "__dict__") and not isinstance(o, (str, bytes, int, float)):
+            stack.append(o.__dict__)
+            sl = getattr(type(o), "__slots__", None)
+            if sl:
+                stack.extend(getattr(o, a, None) for a in ([sl] if isinstance(sl, str) else sl))
+    return total, False
+
+
+@app.get("/api/admin/memory")
+def admin_memory(deep: bool = True):
+    """Where the memory goes: process/container RSS, heavy libraries loaded, and (deep=true) the approximate size of the data each of our modules holds.
+    Read the 'modules' list top-down; sizes are estimates (shared objects are counted once, under the first module that references them)."""
+    import sys, gc, threading, types
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = {"process": _proc_mem_mb(), "threads": threading.active_count(), "python": sys.version.split()[0],
+           "workers_env": os.environ.get("WEB_CONCURRENCY"),
+           "heavy_libs_loaded": [m for m in ("pandas", "numpy", "scipy", "sklearn", "openpyxl", "matplotlib", "torch", "xgboost", "lightgbm") if m in sys.modules]}
+    if deep:
+        seen, rows = set(), []
+        mods = [(n, m) for n, m in list(sys.modules.items()) if getattr(m, "__file__", None) and os.path.abspath(m.__file__).startswith(here)]
+        for name, mod in mods:
+            tot, cut = 0, False
+            parts = []
+            for k, v in list(vars(mod).items()):
+                if k.startswith("__") or isinstance(v, (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)):
+                    continue
+                b, c = _deep_size(v, seen)
+                cut = cut or c
+                if b > 50_000:
+                    parts.append((k, b))
+                tot += b
+            parts.sort(key=lambda x: -x[1])
+            rows.append({"module": name, "mb": round(tot / 1048576.0, 2), "partial": cut, "top": [{"name": k, "mb": round(b / 1048576.0, 2)} for k, b in parts[:4]]})
+        rows.sort(key=lambda r: -r["mb"])
+        out["modules"] = rows[:25]
+        out["python_objects_total_mb_est"] = round(sum(r["mb"] for r in rows), 1)
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)               # hand freed memory back to the OS so RSS reflects what is really in use
+        out["process_after_trim"] = _proc_mem_mb()
+    except Exception:                                            # noqa: BLE001
+        pass
+    gc.collect()
+    return out
+
+
 @app.get("/api/admin/nfl-source-check")
 def nfl_source_check(season: int, week: int):
     """Diagnostic: what the NFL refreshes now read (nflverse open data via nfldata_compat) and whether the old api.nfldata.org answers."""
