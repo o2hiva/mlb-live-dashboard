@@ -422,8 +422,9 @@
           <input id="cfb-season-input" type="number" step="1" value="2026" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:90px;" />
         </div>
         <div>
-          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Week</label>
-          <input id="cfb-week-input" type="number" step="1" min="1" max="15" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; width:70px;" />
+          <label for="cfb-date-select" style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:4px;">Day</label>
+          <select id="cfb-date-select" onchange="setCfbDate(this.value)" style="background:var(--card); color:var(--text); border:1px solid rgba(255,255,255,0.15); border-radius:6px; padding:4px 8px; min-width:200px;"></select>
+          <input id="cfb-week-input" type="hidden" />
         </div>
         <span class="hits-toggle" onclick="refreshCfbStats()" style="padding:6px 14px;">Refresh Stats</span>
         <label class="settings-hint" style="margin:0;"><input type="checkbox" onchange="setCfbKalshiFee(this.checked)" /> Include Kalshi taker fee in Market</label>
@@ -6612,6 +6613,7 @@
   });
 
   let cfbDataCache = null;
+  let cfbSelectedDate = null;          // YYYY-MM-DD, "all", or null = default to today
 
   // ---- Kalshi live prices for the CFB markets (server: cfb_kalshi.py, /api/cfb/kalshi). Every Market box that is left empty is
   // filled with Kalshi's ask for the side being bet (Yes = YES ask, No = NO ask); type your own % to override it, clear the box to
@@ -6720,6 +6722,8 @@
       loadCfbKalshi();
       if (cfbDataCache.season != null) document.getElementById("cfb-season-input").value = cfbDataCache.season;
       if (cfbDataCache.week != null) document.getElementById("cfb-week-input").value = cfbDataCache.week;
+      { const wi = document.getElementById("cfb-week-input");               // only ask for a week when none is loaded yet (first ever refresh)
+        wi.type = cfbDataCache.week != null ? "hidden" : "number"; wi.placeholder = "Week"; wi.style.cssText = "width:70px; margin-left:8px;"; }
       renderCfbFromCache();
     } catch (e) {
       container.innerHTML = `<div class="settings-hint">Couldn't load CFB data.</div>`;
@@ -6728,9 +6732,14 @@
 
   async function refreshCfbStats() {
     const season = document.getElementById("cfb-season-input").value;
-    const week = document.getElementById("cfb-week-input").value;
+    let week = document.getElementById("cfb-week-input").value;
+    // No week box any more: refresh the loaded week, or the NEXT week once every game of the loaded week is in the past.
+    if (week && cfbDataCache && cfbDataCache.games && cfbDataCache.games.length) {
+      const last = Math.max(...cfbDataCache.games.map(g => g.start_date_utc ? new Date(g.start_date_utc).getTime() : 0));
+      if (last && last < Date.now() - 6 * 3600 * 1000 && String(cfbDataCache.week) === String(week)) week = String(parseInt(week, 10) + 1);
+    }
     if (!season || !week) {
-      document.getElementById("cfb-refresh-status").textContent = "Enter both a season and a week first.";
+      document.getElementById("cfb-refresh-status").textContent = "Enter a season first (no week is loaded yet, so the week can't be worked out).";
       return;
     }
     const statusEl = document.getElementById("cfb-refresh-status");
@@ -7289,7 +7298,7 @@
     if (!cfbDataCache) return;
     const games = cfbDataCache.games || [];
     if (!games.length) {
-      container.innerHTML = `<div class="settings-hint">No CFB data yet - enter a season/week above and click Refresh Stats.</div>`;
+      container.innerHTML = `<div class="settings-hint">No CFB data yet - click Refresh Stats above.</div>`;
       return;
     }
 
@@ -7311,12 +7320,35 @@
       return ta < tb ? -1 : ta > tb ? 1 : 0;
     });
 
-    const cards = orderedPairs
+    // ---- by day (local time), defaulting to today ----
+    const dayOf = pair => {
+      const iso = (pair.home && pair.home.start_date_utc) || (pair.away && pair.away.start_date_utc);
+      const d = iso ? new Date(iso) : null;
+      return d && !isNaN(d) ? d.toLocaleDateString("en-CA") : "tbd";       // YYYY-MM-DD in the viewer's timezone
+    };
+    const counts = new Map();
+    for (const [, pair] of orderedPairs) { const k = dayOf(pair); counts.set(k, (counts.get(k) || 0) + 1); }
+    const days = Array.from(counts.keys()).sort();
+    const todayKey = new Date().toLocaleDateString("en-CA");
+    let sel = cfbSelectedDate;
+    if (sel !== "all" && !counts.has(sel)) {                                // nothing chosen yet (or it left the data): today, else next game day, else the last
+      sel = counts.has(todayKey) ? todayKey : (days.find(d => d >= todayKey) || days[days.length - 1]);
+    }
+    const dayLabel = k => k === "tbd" ? "Date TBD" : new Date(k + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const dsel = document.getElementById("cfb-date-select");
+    if (dsel) {
+      dsel.innerHTML = days.map(k => `<option value="${k}" ${k === sel ? "selected" : ""}>${dayLabel(k)}${k === todayKey ? " (today)" : ""} - ${counts.get(k)} game${counts.get(k) === 1 ? "" : "s"}</option>`).join("")
+        + `<option value="all" ${sel === "all" ? "selected" : ""}>All days - ${orderedPairs.length} games</option>`;
+    }
+    const shown = sel === "all" ? orderedPairs : orderedPairs.filter(([, pair]) => dayOf(pair) === sel);
+    const cards = shown
       .map(([gameId, pair]) => cfbCardHtml(gameId, pair, cfbDataCache.season, cfbDataCache.week))
       .join("");
 
     container.innerHTML = `<div class="grid">${cards}</div>`;
   }
+
+  function setCfbDate(v) { cfbSelectedDate = v; renderCfbFromCache(); }
 
   // ---- NBA player props (Points / Rebounds / Assists / PRA) - model from nba_platform.py, served by
   // /api/nba/props (see nba_props_service.py). Each (player, stat) arrives with a survival curve
