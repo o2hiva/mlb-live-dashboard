@@ -44,6 +44,7 @@ def _ensure_column(table: str, column: str, sql_type: str):
         log.exception("Failed to ensure column %s.%s exists", table, column)
 
 
+_ensure_column("bet_tracker_settings", "min_bet", "FLOAT DEFAULT 5")
 _ensure_column("games", "game_datetime_utc", "VARCHAR")
 _ensure_column("games", "home_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
 _ensure_column("games", "away_lineup_confirmed", "BOOLEAN DEFAULT FALSE")
@@ -2946,6 +2947,7 @@ def get_bet_tracker_settings(db: Session = Depends(get_db)):
     return {
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
+        "min_bet": _min_bet_of(settings),
         "kalshi_balance": settings.kalshi_balance,
         "westgate_balance": getattr(settings, "westgate_balance", 0.0) or 0.0,
         "market_book": getattr(settings, "market_book", None) or "kalshi",
@@ -2956,8 +2958,14 @@ def get_bet_tracker_settings(db: Session = Depends(get_db)):
     }
 
 
+def _min_bet_of(settings):
+    v = getattr(settings, "min_bet", None)
+    return 5.0 if v is None else v
+
+
 class BetTrackerSettingsUpdate(BaseModel):
     kelly_percent: float | None = None
+    min_bet: float | None = None
     kalshi_balance: float | None = None
     westgate_balance: float | None = None
     market_book: str | None = None
@@ -2983,6 +2991,8 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
 
     if update.kelly_percent is not None:
         settings.kelly_percent = update.kelly_percent
+    if update.min_bet is not None and hasattr(settings, "min_bet"):
+        settings.min_bet = max(0.0, update.min_bet)
     if update.kalshi_balance is not None:
         settings.kalshi_balance = update.kalshi_balance
     if update.westgate_balance is not None:
@@ -3009,6 +3019,7 @@ def update_bet_tracker_settings(update: BetTrackerSettingsUpdate, db: Session = 
     return {
         "bankroll": settings.bankroll,
         "kelly_percent": settings.kelly_percent,
+        "min_bet": _min_bet_of(settings),
         "kalshi_balance": settings.kalshi_balance,
         "westgate_balance": getattr(settings, "westgate_balance", 0.0) or 0.0,
         "market_book": getattr(settings, "market_book", None) or "kalshi",

@@ -800,8 +800,8 @@
     <div style="display:flex; align-items:flex-end; gap:28px; flex-wrap:wrap;">
       <div class="bankroll-total" id="bankroll-total">$0.00</div>
       <div class="settings-field">
-        <label for="kelly-input">Kelly Criterion (%)</label>
-        <input id="kelly-input" type="number" step="1" min="0" max="100" onchange="saveBetTrackerSettings()" />
+        <label for="kelly-input">Kelly Criterion - minimum bet ($)</label>
+        <input id="kelly-input" type="number" step="0.5" min="0" onchange="saveBetTrackerSettings()" />
       </div>
     </div>
     <div class="platform-grid">
@@ -831,7 +831,7 @@
       </div>
     </div>
     <div class="settings-hint" id="market-book-hint"></div>
-    <div class="settings-hint">e.g. 25% runs quarter-Kelly - sizes each bet at 25% of what full Kelly would suggest, a common way to reduce swings from model error.</div>
+    <div class="settings-hint">Minimum bet = the wager for a 1-point edge at a 50% market price (full-Kelly fraction 0.02). Bigger edges scale up in proportion to the Kelly fraction (p - m) / (1 - m), so a 5-point edge at 50% bets 5x the minimum. Any positive edge bets at least the minimum; no edge bets $0.</div>
 
     <h2 style="margin-top:32px;">Hit Rates</h2>
     <div class="platform-grid" id="hit-rate-boxes">Loading...</div>
@@ -1145,14 +1145,14 @@
   // saved on the Bet Tracker tab, so the Hits section can size wagers
   // without an extra round-trip on every row.
   let currentBankroll = 0;
-  let currentKellyPercent = 25;
+  let currentMinBet = 5;
 
   async function refreshGlobalBankrollSettings() {
     try {
       const res = await fetch(`${API_BASE}/api/bet-tracker/settings`);
       const data = await res.json();
       currentBankroll = data.bankroll || 0;
-      currentKellyPercent = data.kelly_percent || 0;
+      currentMinBet = data.min_bet != null ? data.min_bet : 5;
     } catch (e) {
       // Keep whatever we had before - Hits wagers just won't reflect
       // a change made on another device until this succeeds.
@@ -1206,8 +1206,11 @@
     const m = marketPct / 100;
     if (m <= 0 || m >= 1) return 0;
     const edge = (modelProb - m) / (1 - m);
-    const fraction = Math.max(0, edge) * (currentKellyPercent / 100);
-    return fraction * currentBankroll;
+    if (!(edge > 0)) return 0;
+    // Minimum-bet sizing: the Kelly fraction of a 1-point edge at a 50% market (0.01 / 0.5 = 0.02) bets exactly currentMinBet;
+    // everything else scales in proportion to its own Kelly fraction, never below the minimum.
+    const KELLY_REF = 0.02;
+    return Math.round(Math.max(1, edge / KELLY_REF) * currentMinBet * 100) / 100;
   }
 
   function profitIfWon(wager, marketPct, feeIncluded) {
@@ -3850,7 +3853,7 @@
       PLATFORM_FIELDS.forEach(name => {
         document.getElementById(`${name}-input`).value = data[`${name}_balance`] ?? 0;
       });
-      document.getElementById("kelly-input").value = data.kelly_percent;
+      document.getElementById("kelly-input").value = data.min_bet != null ? data.min_bet : 5;
       if (data.market_book && BOOK_NAMES[data.market_book]) { marketBook = data.market_book; try { localStorage.setItem("marketBook", marketBook); } catch (e) {} }
       renderBookPicks();
       document.getElementById("bankroll-total").textContent =
@@ -3863,7 +3866,7 @@
 
   async function saveBetTrackerSettings() {
     updateBankrollTotalDisplay(); // instant feedback before the round-trip completes
-    const payload = { kelly_percent: parseFloat(document.getElementById("kelly-input").value) || 0 };
+    const payload = { min_bet: Math.max(0, parseFloat(document.getElementById("kelly-input").value) || 0) };
     PLATFORM_FIELDS.forEach(name => {
       payload[`${name}_balance`] = parseFloat(document.getElementById(`${name}-input`).value) || 0;
     });
@@ -3880,7 +3883,7 @@
         "$" + data.bankroll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       // Keep the Hits tab's wager sizing in sync with whatever was just saved.
       currentBankroll = data.bankroll || 0;
-      currentKellyPercent = data.kelly_percent || 0;
+      currentMinBet = data.min_bet != null ? data.min_bet : currentMinBet;
       Object.keys(hitsDataCache).forEach(gamePk => rerenderHits(Number(gamePk)));
     } catch (e) {
       // Best-effort - next load will just show the last saved values.

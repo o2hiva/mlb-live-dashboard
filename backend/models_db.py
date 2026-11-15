@@ -188,7 +188,8 @@ class BetTrackerSettings(Base):
 
     id = Column(Integer, primary_key=True)
     bankroll = Column(Float, default=0.0)
-    kelly_percent = Column(Float, default=25.0)  # quarter-Kelly is a common conservative default
+    kelly_percent = Column(Float, default=25.0)  # legacy (no longer used for sizing; kept so old rows/clients keep working)
+    min_bet = Column(Float, default=5.0)         # smallest wager, in dollars; Kelly scales bets up from here (see index.html kellyWagerAmount)
     kalshi_balance = Column(Float, default=0.0)
     westgate_balance = Column(Float, default=0.0)
     market_book = Column(String, default="kalshi")
