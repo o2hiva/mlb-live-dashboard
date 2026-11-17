@@ -846,6 +846,10 @@
     <div id="weekly-hit-rate-table">Loading...</div>
 
     <h2 style="margin-top:32px;">Tracked Bets</h2>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <span class="hits-toggle" id="grade-bets-btn" onclick="gradeBetsNow()" style="padding:6px 14px;">Grade Bets</span>
+      <span id="grade-bets-status" class="settings-hint" style="margin:0;"></span>
+    </div>
     <details id="manual-bet-box" style="margin-bottom:14px;">
       <summary style="cursor:pointer;font-weight:600;">+ Add a bet manually</summary>
       <div class="platform-grid" style="margin-top:10px;">
@@ -3629,6 +3633,36 @@
     }).join("");
 
     container.innerHTML = header + rows;
+  }
+
+  // Pushes the grader now instead of waiting for the scheduled run: every pending bet whose game is final gets its W/L;
+  // bets whose game is still on (or whose final stats aren't published yet) stay pending. Hand-entered bets are graded with their own W/L buttons.
+  let gradingBets = false;
+  async function gradeBetsNow() {
+    if (gradingBets) return;
+    gradingBets = true;
+    const btn = document.getElementById("grade-bets-btn"), st = document.getElementById("grade-bets-status");
+    if (btn) btn.style.opacity = "0.5";
+    if (st) st.textContent = "Grading pending bets...";
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/grade-bets`);
+      let d = {};
+      try { d = await res.json(); } catch (e) {}
+      if (!res.ok || d.error) {
+        if (st) st.textContent = `Grading failed (${res.ok ? "see server logs" : "HTTP " + res.status}). ${d.error || d.detail || ""}`;
+      } else {
+        const g = d.graded || 0;
+        if (st) st.textContent = g
+          ? `Graded ${g} bet${g === 1 ? "" : "s"}: ${d.wins || 0} won, ${d.losses || 0} lost. ${d.still_pending || 0} still pending (game not final or stats not out yet).`
+          : `Nothing new to grade. ${d.still_pending || 0} bet${d.still_pending === 1 ? "" : "s"} still pending (game not final or stats not out yet).`;
+        await loadTrackedBets();
+      }
+    } catch (e) {
+      if (st) st.textContent = "Couldn't reach the server to grade bets - try again.";
+    } finally {
+      gradingBets = false;
+      if (btn) btn.style.opacity = "";
+    }
   }
 
   async function loadTrackedBets() {
